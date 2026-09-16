@@ -32,12 +32,16 @@ Versioning while it approaches a stable 0.1.0 release.
 - Remote Java catalogs use a platform-scoped TTL cache, HTTP ETag revalidation,
   stale-cache fallback, explicit `--refresh`, and structured `--format json`
   output for scripts and editor integrations.
+- GitHub Actions now validates portable release gates, builds and attests the
+  Linux x86-64 CLI archive and Linux x64 VSIX from version-matched tags, creates
+  checksum and manifest assets, publishes GitHub Releases, and supports guarded
+  OIDC-based Visual Studio Marketplace publication.
 
 ### Known limitations
 
 - Maven plugins and arbitrary lifecycle behavior are not imported or executed.
-- Coverage collection, publishing, watch mode, and native OCI images are not
-  included in this release candidate.
+- Coverage collection, watch mode, and native OCI images are not included in
+  this release candidate.
 - Fresh GraalVM Native Image builds are checksummed but not byte-identical;
   reproducible-archive claims remain limited to JMAN's Java JAR outputs.
 - Maven compatibility claims are limited to the metadata contract in

@@ -55,17 +55,20 @@ Repeat the smoke test with another Java language server enabled long enough to
 confirm that the documented conflict guidance is accurate, then disable the
 other server for the remainder of acceptance testing.
 
-## Marketplace upload
+## Marketplace publication
 
-1. Open the `zonnedev` Visual Studio Marketplace publisher management page.
-2. Upload `jman-java-0.1.7-linux-x64.vsix` manually.
-3. Confirm the listing is a pre-release for Linux x64, not a universal stable
-   release.
-4. Review the rendered README, icon, links, license, pricing, support details,
-   and installation controls before making the listing public.
+1. Confirm the GitHub Release checksum and provenance, then complete every
+   clean-profile check above using its VSIX.
+2. Open **Actions → Publish VS Code Marketplace → Run workflow** and enter the
+   GitHub Release tag that contains the reviewed package.
+3. Approve the protected `vscode-marketplace` environment deployment.
+4. Confirm the listing is a pre-release for Linux x64, not a universal stable
+   release, and review its rendered README, icon, links, license, pricing,
+   support details, and installation controls.
 5. Install the Marketplace copy into the clean profile and repeat the startup,
    status, completion, and test-discovery smoke checks.
 
-Do not pass Marketplace credentials or access tokens to build scripts. The
-repository's packaging workflow creates local artifacts only and never commits,
-tags, or publishes.
+The workflow uses Visual Studio Marketplace trusted publishing through GitHub
+OIDC; it requires no PAT or stored publishing secret. It verifies and publishes
+the VSIX already attached to the GitHub Release rather than rebuilding it. See
+the [release guide](releasing.md) for the one-time policy configuration.

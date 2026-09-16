@@ -4,6 +4,9 @@
 
 # JMAN
 
+[![CI](https://github.com/zonnedev/jman/actions/workflows/ci.yml/badge.svg)](https://github.com/zonnedev/jman/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/zonnedev/jman?include_prereleases)](https://github.com/zonnedev/jman/releases)
+
 JMAN (`jman`) is a native Rust build tool and Java language server for deterministic,
 locked Java workspaces. It resolves Maven repositories itself; normal build,
 test, run, and editor operations do not invoke Maven or Gradle.
@@ -54,7 +57,9 @@ The precise supported metadata boundary and release gates are defined in
 
 Use `make gates` for the complete local acceptance suite, `cargo test
 --workspace` for Rust tests, and `make test-java` for the repository's Java
-components. `cargo run -p jman-cli -- --help` shows the command surface.
+components. `make ci` runs the portable suite used by GitHub Actions. `cargo
+run -p jman-cli -- --help` shows the command surface. Release automation and
+maintainer setup are documented in [the release guide](docs/releasing.md).
 
 ## Supported Maven metadata
 

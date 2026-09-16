@@ -1,0 +1,80 @@
+name: Publish VS Code Marketplace
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: GitHub Release tag containing the reviewed VSIX
+        required: true
+        type: string
+
+concurrency:
+  group: vscode-marketplace
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish reviewed VSIX
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: vscode-marketplace
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install pinned publisher CLI
+        run: npm ci --prefix editors/vscode
+
+      - name: Download reviewed VSIX
+        run: |
+          mkdir -p marketplace-assets
+          gh release download "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "jman-java-*-linux-x64.vsix" \
+            --pattern SHA256SUMS \
+            --dir marketplace-assets
+
+      - name: Verify VSIX identity and checksum
+        run: |
+          mapfile -t packages < <(find marketplace-assets -maxdepth 1 -name 'jman-java-*-linux-x64.vsix' -type f)
+          test "${#packages[@]}" -eq 1
+          package="${packages[0]}"
+          package_name="$(basename "${package}")"
+          (
+            cd marketplace-assets
+            grep "  ${package_name}$" SHA256SUMS | sha256sum --check -
+          )
+          unzip -p "${package}" extension/package.json | node -e '
+            let data="";
+            process.stdin.on("data", chunk => data += chunk);
+            process.stdin.on("end", () => {
+              const manifest=JSON.parse(data);
+              if (manifest.publisher !== "zonnedev" || manifest.name !== "jman-java") process.exit(1);
+            });
+          '
+          printf 'VSIX_PATH=%s\n' "${package}" >> "${GITHUB_ENV}"
+
+      - name: Publish pre-release to Visual Studio Marketplace
+        working-directory: editors/vscode
+        run: >-
+          npx vsce publish
+          --packagePath "${GITHUB_WORKSPACE}/${VSIX_PATH}"
+          --pre-release
+          --oidc
+          --skip-duplicate

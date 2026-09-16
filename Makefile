@@ -7,9 +7,11 @@ NATIVE_FRONTEND_INPUTS := \
 	scripts/build-native.sh \
 	scripts/use-sdkman-java.sh
 
-.PHONY: gates test test-rust test-java test-jman-runner test-processor-worker test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-micronaut-correctness test-vscode-extension test-neovim-plugin package-vscode release native test-native clean clear
+.PHONY: gates ci test test-rust test-java test-jman-runner test-processor-worker test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-micronaut-correctness test-vscode-extension test-neovim-plugin test-release-automation package-vscode release stage-release native test-native clean clear
 
 gates: test test-native test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-real-semantics test-lsp test-vscode-extension test-neovim-plugin
+
+ci: test test-native test-vscode-extension test-release-automation
 
 test: test-rust test-java test-jman-runner
 
@@ -79,7 +81,8 @@ test-lsp: native test-maven-import test-gradle-annotation-processing test-proces
 		"$(CURDIR)/target/debug/jman-java-lsp" \
 		"$(CURDIR)/target/integration-fixtures/spring-petclinic-maven" \
 		maven
-	JAVA_HOME="/home/jfsanchez/.sdkman/candidates/java/25.0.4-graal" \
+	. "$(CURDIR)/scripts/use-sdkman-java.sh"; \
+	JAVA_HOME="$$JAVA_HOME" \
 	JAVA_LSP_PROCESSOR_WORKER_CLASSPATH="$(CURDIR)/target/processor-worker.jar" \
 	LD_LIBRARY_PATH="$(CURDIR)/target/native" \
 	cargo run --quiet -p jman-java-lsp --example processor_lsp_probe -- \
@@ -91,6 +94,9 @@ test-vscode-extension:
 
 test-neovim-plugin:
 	nvim --headless -u NONE -i NONE -l editors/neovim/tests/minimal.lua
+
+test-release-automation:
+	./scripts/test-release-automation.sh
 
 test-micronaut-correctness: native test-java test-processor-worker
 	./scripts/test-micronaut-correctness.sh
@@ -106,6 +112,10 @@ package-vscode:
 
 release:
 	./scripts/package-release.sh
+
+stage-release:
+	@test -n "$(TAG)" || { echo "usage: make stage-release TAG=v<version>" >&2; exit 2; }
+	./scripts/stage-release-artifacts.sh "$(TAG)"
 
 clean:
 	cargo clean

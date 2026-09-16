@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify Linux x64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Lint GitHub Actions workflows
+        run: |
+          actionlint_dir="$(mktemp -d)"
+          trap 'rm -rf "${actionlint_dir}"' EXIT
+          curl --fail --location --silent --show-error \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            --output "${actionlint_dir}/actionlint.tar.gz"
+          printf '%s  %s\n' \
+            8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 \
+            "${actionlint_dir}/actionlint.tar.gz" | sha256sum --check -
+          tar -xzf "${actionlint_dir}/actionlint.tar.gz" -C "${actionlint_dir}"
+          "${actionlint_dir}/actionlint"
+
+      - name: Set up GraalVM
+        uses: graalvm/setup-graalvm@5298d94fb55a4f185c602eeac5de1b553882abe2 # v1.6.4
+        with:
+          java-version: "25.0.4"
+          distribution: graalvm
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.85.0
+
+      - name: Install extension dependencies
+        run: npm ci --prefix editors/vscode
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run portable test suite
+        run: make ci
+
+      - name: Lint Rust workspace
+        env:
+          JAVAC_FRONTEND_LIB_DIR: target/native
+          LD_LIBRARY_PATH: target/native
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Audit extension dependencies
+        run: npm audit --prefix editors/vscode --audit-level=high

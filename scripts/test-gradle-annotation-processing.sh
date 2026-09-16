@@ -2,6 +2,8 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=use-sdkman-java.sh
+source "${project_dir}/scripts/use-sdkman-java.sh"
 fixture="${project_dir}/tests/fixtures/gradle-annotation-processing"
 fixture_copy="${project_dir}/target/integration-fixtures/gradle-annotation-processing"
 gradle_user_home="${project_dir}/target/gradle-user-home"
@@ -88,7 +90,7 @@ cargo run \
   -p jman-java-lsp \
   --example processor_worker_probe \
   -- \
-  "/home/jfsanchez/.sdkman/candidates/java/25.0.4-graal/bin/java" \
+  "${JAVA_HOME}/bin/java" \
   "${project_dir}/target/java-test-classes" \
   "${fixture_copy}/app/src/main/java/io/github/zonnedev/jman/tests/fixture/Application.java" \
   "${fixture_copy}/processor/build/libs/processor.jar" \
