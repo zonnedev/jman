@@ -237,6 +237,10 @@ Milestone 1.5 acceptance:
 - [x] Implement verified, atomic Temurin JDK downloads and safe archive
       extraction for supported operating systems and architectures.
 - [x] Add `jman java install`, `list`, `use`, and `which`.
+- [x] List installed and remotely available Temurin releases with major/LTS
+      filtering and stable human/JSON output.
+- [x] Cache the platform catalog with TTL freshness, per-resource HTTP ETags,
+      explicit refresh, atomic replacement, and stale-network fallback.
 - [x] Make `jman doctor` and all compilation use the shared toolchain selector.
 - [x] Add offline behavior, concurrent-install locking, corruption recovery, and
       actionable incompatibility diagnostics.

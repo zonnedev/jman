@@ -283,6 +283,12 @@ struct JavaList {
     /// List only long-term-support releases.
     #[arg(long)]
     lts: bool,
+    /// Revalidate the remote catalog even when the cache is still fresh.
+    #[arg(long, conflicts_with = "local")]
+    refresh: bool,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = ReportFormat::Human)]
+    format: ReportFormat,
 }
 
 #[derive(Debug, Args)]
@@ -366,6 +372,11 @@ async fn main() {
         }) | Command::Test(TestCommand {
             report: ReportFormat::Json,
             ..
+        }) | Command::Java(Java {
+            command: JavaCommand::List(JavaList {
+                format: ReportFormat::Json,
+                ..
+            }),
         })
     );
     let ui = Ui::new(cli.quiet, cli.verbose, cli.no_progress, structured);
@@ -900,7 +911,7 @@ async fn java_command(arguments: Java, ui: &Ui) -> Result<()> {
                 jdk.home.display()
             ));
         }
-        JavaCommand::List(arguments) => list_java(&manager, arguments).await?,
+        JavaCommand::List(arguments) => list_java(&manager, arguments, ui).await?,
         JavaCommand::Remove(arguments) => remove_java(&manager, arguments, ui).await?,
         JavaCommand::Use(arguments) => {
             let target = absolute_path(&arguments.path)?;
@@ -951,6 +962,7 @@ async fn java_command(arguments: Java, ui: &Ui) -> Result<()> {
 async fn list_java(
     manager: &jman_build::toolchain::ToolchainManager,
     arguments: JavaList,
+    ui: &Ui,
 ) -> Result<()> {
     let installed = manager
         .list()
@@ -961,6 +973,10 @@ async fn list_java(
         .collect::<Vec<_>>();
 
     if arguments.local {
+        if arguments.format == ReportFormat::Json {
+            print_java_list_json(&installed, &[], None)?;
+            return Ok(());
+        }
         if installed.is_empty() {
             println!("No matching JMAN-managed JDKs installed.");
         } else {
@@ -976,6 +992,28 @@ async fn list_java(
             }
         }
         return Ok(());
+    }
+
+    let installed_versions = installed
+        .iter()
+        .map(|jdk| (jdk.vendor.as_str(), jdk.version.as_str()))
+        .collect::<std::collections::HashSet<_>>();
+    let catalog = manager
+        .available(arguments.major, arguments.lts, arguments.refresh)
+        .await
+        .context("could not load remote JDK catalog; use `jman java list --local` to list installed JDKs only")?;
+    let available = catalog
+        .jdks
+        .into_iter()
+        .filter(|jdk| !installed_versions.contains(&(jdk.vendor.as_str(), jdk.version.as_str())))
+        .collect::<Vec<_>>();
+
+    if arguments.format == ReportFormat::Json {
+        print_java_list_json(&installed, &available, Some(&catalog.status))?;
+        return Ok(());
+    }
+    if let Some(warning) = &catalog.status.warning {
+        ui.warning(warning);
     }
 
     println!("Installed:");
@@ -999,19 +1037,6 @@ async fn list_java(
             );
         }
     }
-
-    let installed_versions = installed
-        .iter()
-        .map(|jdk| (jdk.vendor.as_str(), jdk.version.as_str()))
-        .collect::<std::collections::HashSet<_>>();
-    let available = manager
-        .available(arguments.major, arguments.lts)
-        .await
-        .context("could not load remote JDK catalog; use `jman java list --local` to list installed JDKs only")?
-        .into_iter()
-        .filter(|jdk| !installed_versions.contains(&(jdk.vendor.as_str(), jdk.version.as_str())))
-        .collect::<Vec<_>>();
-
     println!("Available:");
     if available.is_empty() {
         println!("  none");
@@ -1025,6 +1050,59 @@ async fn list_java(
         }
     }
     Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InstalledJava<'a> {
+    vendor: &'a str,
+    version: &'a str,
+    major: u16,
+    lts: bool,
+    os: &'a str,
+    architecture: &'a str,
+    home: &'a Path,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JavaListReport<'a> {
+    catalog: Option<&'a jman_build::toolchain::CatalogStatus>,
+    installed: Vec<InstalledJava<'a>>,
+    available: &'a [jman_build::toolchain::AvailableJdk],
+}
+
+fn print_java_list_json(
+    installed: &[jman_build::toolchain::ManagedJdk],
+    available: &[jman_build::toolchain::AvailableJdk],
+    catalog: Option<&jman_build::toolchain::CatalogStatus>,
+) -> Result<()> {
+    println!("{}", java_list_json(installed, available, catalog)?);
+    Ok(())
+}
+
+fn java_list_json(
+    installed: &[jman_build::toolchain::ManagedJdk],
+    available: &[jman_build::toolchain::AvailableJdk],
+    catalog: Option<&jman_build::toolchain::CatalogStatus>,
+) -> Result<String> {
+    let report = JavaListReport {
+        catalog,
+        installed: installed
+            .iter()
+            .map(|jdk| InstalledJava {
+                vendor: &jdk.vendor,
+                version: &jdk.version,
+                major: jdk.major,
+                lts: jman_build::toolchain::is_lts_major(jdk.major),
+                os: &jdk.os,
+                architecture: &jdk.architecture,
+                home: &jdk.home,
+            })
+            .collect(),
+        available,
+    };
+    Ok(serde_json::to_string_pretty(&report)?)
 }
 
 async fn remove_java(
@@ -2647,10 +2725,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn java_list_accepts_local_major_and_lts_filters() {
-        let cli =
-            Cli::try_parse_from(["jman", "java", "list", "--local", "--major", "21", "--lts"])
-                .expect("java list arguments");
+    fn java_list_accepts_catalog_filters_refresh_and_json() {
+        let cli = Cli::try_parse_from([
+            "jman",
+            "java",
+            "list",
+            "--major",
+            "21",
+            "--lts",
+            "--refresh",
+            "--format",
+            "json",
+        ])
+        .expect("java list arguments");
 
         let Command::Java(Java {
             command: JavaCommand::List(arguments),
@@ -2658,9 +2745,47 @@ mod tests {
         else {
             panic!("expected java list command");
         };
-        assert!(arguments.local);
+        assert!(!arguments.local);
         assert_eq!(arguments.major, Some(21));
         assert!(arguments.lts);
+        assert!(arguments.refresh);
+        assert_eq!(arguments.format, ReportFormat::Json);
+
+        assert!(Cli::try_parse_from(["jman", "java", "list", "--local", "--refresh"]).is_err());
+    }
+
+    #[test]
+    fn java_list_json_has_stable_sections_and_catalog_status() {
+        let installed = jman_build::toolchain::ManagedJdk {
+            vendor: "temurin".to_owned(),
+            version: "21.0.2+13".to_owned(),
+            major: 21,
+            os: "linux".to_owned(),
+            architecture: "x64".to_owned(),
+            checksum: "sha256:test".to_owned(),
+            home: PathBuf::from("/cache/jdks/21"),
+        };
+        let available = jman_build::toolchain::AvailableJdk {
+            vendor: "temurin".to_owned(),
+            version: "25.0.1+8".to_owned(),
+            major: 25,
+            lts: true,
+            os: "linux".to_owned(),
+            architecture: "x64".to_owned(),
+        };
+        let status = jman_build::toolchain::CatalogStatus {
+            source: jman_build::toolchain::CatalogSource::StaleCache,
+            fetched_at: 123,
+            warning: Some("offline".to_owned()),
+        };
+
+        let json = java_list_json(&[installed], &[available], Some(&status)).expect("JSON");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+
+        assert_eq!(value["catalog"]["source"], "stale-cache");
+        assert_eq!(value["catalog"]["fetchedAt"], 123);
+        assert_eq!(value["installed"][0]["home"], "/cache/jdks/21");
+        assert_eq!(value["available"][0]["version"], "25.0.1+8");
     }
 
     #[test]

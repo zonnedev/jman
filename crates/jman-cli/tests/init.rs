@@ -34,6 +34,28 @@ fn test_command_exposes_native_module_and_test_selectors() {
 }
 
 #[test]
+fn local_java_list_json_is_machine_readable_without_network() {
+    let cache = tempfile::tempdir().expect("temporary cache");
+    let output = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .args(["java", "list", "--local", "--format", "json"])
+        .output()
+        .expect("list local JDKs as JSON");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
+    assert!(report["catalog"].is_null());
+    assert_eq!(report["installed"], serde_json::json!([]));
+    assert_eq!(report["available"], serde_json::json!([]));
+    assert!(!cache.path().join("catalog").exists());
+}
+
+#[test]
 fn lsp_command_runs_the_embedded_server_to_clean_eof() {
     let output = Command::new(env!("CARGO_BIN_EXE_jman"))
         .arg("lsp")

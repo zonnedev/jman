@@ -29,9 +29,18 @@ jman java list                   # installed first, then remotely available JDKs
 jman java list --local           # installed JDKs only; no network access
 jman java list --major 21        # filter one Java feature release
 jman java list --lts             # show only LTS release lines
+jman java list --refresh         # revalidate the cached remote catalog
+jman java list --format json     # stable structured output for integrations
 jman java install 21             # install the latest matching Temurin JDK
 jman java use 21                 # pin the current project to Java 21
 ```
+
+The platform-specific Temurin catalog is cached under
+`$JMAN_CACHE_DIR/catalog/` (normally `~/.cache/jman/catalog/`) for 15 minutes.
+Expired entries are revalidated with HTTP ETags. If Adoptium is temporarily
+unreachable, JMAN reports the problem and falls back to the last valid cached
+catalog. `--refresh` bypasses the freshness window while retaining conditional
+ETag requests; `--local` never contacts the network.
 
 The precise supported metadata boundary and release gates are defined in
 [the product contract](docs/product-contract.md). Changes are recorded in the

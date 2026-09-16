@@ -29,6 +29,9 @@ Versioning while it approaches a stable 0.1.0 release.
   release artifacts to the JMAN namespace.
 - `jman java list` now prints installed JDKs first and the remote Temurin catalog
   afterward; `--local`, `--major`, and `--lts` control catalog selection.
+- Remote Java catalogs use a platform-scoped TTL cache, HTTP ETag revalidation,
+  stale-cache fallback, explicit `--refresh`, and structured `--format json`
+  output for scripts and editor integrations.
 
 ### Known limitations
 

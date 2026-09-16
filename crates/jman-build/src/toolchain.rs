@@ -3,6 +3,7 @@ use std::{
     fs::File,
     io,
     path::{Component, Path, PathBuf},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use flate2::read::GzDecoder;
@@ -18,6 +19,8 @@ use crate::{io_error, probe_javac, BuildError, Toolchain};
 const API_ROOT: &str = "https://api.adoptium.net/v3";
 const METADATA: &str = ".jman-toolchain.json";
 const REMOTE_PAGE_SIZE: usize = 20;
+const CATALOG_CACHE_SCHEMA: u32 = 1;
+const CATALOG_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const KNOWN_LTS_MAJORS: &[u16] = &[8, 11, 17, 21, 25];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -67,7 +70,7 @@ pub struct ManagedJdk {
     pub home: PathBuf,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AvailableJdk {
     pub vendor: String,
     pub version: String,
@@ -75,6 +78,29 @@ pub struct AvailableJdk {
     pub lts: bool,
     pub os: String,
     pub architecture: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CatalogSource {
+    Network,
+    Cache,
+    Revalidated,
+    StaleCache,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogStatus {
+    pub source: CatalogSource,
+    pub fetched_at: u64,
+    pub warning: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AvailableCatalog {
+    pub jdks: Vec<AvailableJdk>,
+    pub status: CatalogStatus,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -90,6 +116,26 @@ struct AvailableReleases {
 
 #[derive(Debug, Deserialize)]
 struct ReleaseNames {
+    releases: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogCache {
+    schema: u32,
+    fetched_at: u64,
+    vendor: String,
+    os: String,
+    architecture: String,
+    lts_etag: Option<String>,
+    lts_majors: Vec<u16>,
+    pages: Vec<CatalogPage>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct CatalogPage {
+    index: usize,
+    etag: Option<String>,
     releases: Vec<String>,
 }
 
@@ -133,6 +179,7 @@ struct ResolvedAsset {
 
 pub struct ToolchainManager {
     root: PathBuf,
+    catalog_root: PathBuf,
     client: reqwest::Client,
     api_root: Url,
 }
@@ -159,6 +206,7 @@ impl ToolchainManager {
             .map_err(|error| BuildError::Invalid(format!("invalid JDK API URL: {error}")))?;
         Ok(Self {
             root: cache_dir.join("jdks"),
+            catalog_root: cache_dir.join("catalog"),
             client,
             api_root,
         })
@@ -219,97 +267,237 @@ impl ToolchainManager {
         &self,
         major: Option<u16>,
         lts_only: bool,
-    ) -> Result<Vec<AvailableJdk>, BuildError> {
+        refresh: bool,
+    ) -> Result<AvailableCatalog, BuildError> {
+        self.available_at(major, lts_only, refresh, unix_time())
+            .await
+    }
+
+    async fn available_at(
+        &self,
+        major: Option<u16>,
+        lts_only: bool,
+        refresh: bool,
+        now: u64,
+    ) -> Result<AvailableCatalog, BuildError> {
+        let cached = self.read_catalog_cache().await?;
+        if !refresh
+            && cached
+                .as_ref()
+                .is_some_and(|cache| catalog_is_fresh(cache, now))
+        {
+            return Ok(catalog_result(
+                cached.as_ref().expect("fresh cache was checked"),
+                major,
+                lts_only,
+                CatalogSource::Cache,
+                None,
+            ));
+        }
+
+        match self.fetch_catalog(cached.as_ref(), now).await {
+            Ok(cache) => {
+                let source = if cached.is_some() {
+                    CatalogSource::Revalidated
+                } else {
+                    CatalogSource::Network
+                };
+                let warning = self
+                    .write_catalog_cache(&cache)
+                    .await
+                    .err()
+                    .map(|error| format!("could not update JDK catalog cache: {error}"));
+                Ok(catalog_result(&cache, major, lts_only, source, warning))
+            }
+            Err(error) => {
+                let Some(cache) = cached else {
+                    return Err(error);
+                };
+                Ok(catalog_result(
+                    &cache,
+                    major,
+                    lts_only,
+                    CatalogSource::StaleCache,
+                    Some(format!(
+                        "remote JDK catalog unavailable; using cached data: {error}"
+                    )),
+                ))
+            }
+        }
+    }
+
+    async fn fetch_catalog(
+        &self,
+        cached: Option<&CatalogCache>,
+        now: u64,
+    ) -> Result<CatalogCache, BuildError> {
         let mut info_url = self.api_root.clone();
         info_url
             .path_segments_mut()
             .map_err(|()| BuildError::Invalid("invalid JDK API root".to_owned()))?
             .extend(["info", "available_releases"]);
-        let info = self
-            .client
-            .get(info_url)
-            .send()
-            .await
-            .map_err(metadata_request_error)?
-            .error_for_status()
-            .map_err(metadata_request_error)?
-            .json::<AvailableReleases>()
-            .await
-            .map_err(|error| BuildError::Invalid(format!("invalid JDK metadata: {error}")))?;
-        let lts_majors = info
-            .available_lts_releases
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-
-        let mut releases = Vec::new();
-        for page in 0_usize.. {
-            let names = self.release_names_page(page).await?;
-            if names.is_empty() {
-                break;
-            }
-            releases.extend(names);
+        let mut info_request = self.client.get(info_url);
+        if let Some(etag) = cached.and_then(|cache| cache.lts_etag.as_deref()) {
+            info_request = info_request.header(reqwest::header::IF_NONE_MATCH, etag);
         }
-        let mut seen = BTreeSet::new();
-        let mut jdks = releases
-            .into_iter()
-            .filter_map(|release| normalize_release_name(&release))
-            .filter(|(_, release_major)| major.is_none_or(|major| *release_major == major))
-            .filter(|(_, release_major)| !lts_only || lts_majors.contains(release_major))
-            .filter(|(version, release_major)| seen.insert((*release_major, version.clone())))
-            .map(|(version, release_major)| AvailableJdk {
-                vendor: "temurin".to_owned(),
-                version,
-                major: release_major,
-                lts: lts_majors.contains(&release_major),
-                os: platform_os().to_owned(),
-                architecture: platform_arch().to_owned(),
-            })
-            .collect::<Vec<_>>();
-        jdks.sort_by(|left, right| {
-            (right.major, version_key(&right.version))
-                .cmp(&(left.major, version_key(&left.version)))
-        });
-        Ok(jdks)
+        let info_response = info_request.send().await.map_err(metadata_request_error)?;
+        let (lts_etag, lts_majors) = if info_response.status() == reqwest::StatusCode::NOT_MODIFIED
+        {
+            let cache = cached.ok_or_else(|| {
+                BuildError::Invalid("JDK catalog returned 304 without cached metadata".to_owned())
+            })?;
+            (cache.lts_etag.clone(), cache.lts_majors.clone())
+        } else {
+            let info_response = info_response
+                .error_for_status()
+                .map_err(metadata_request_error)?;
+            let etag = response_etag(&info_response);
+            let info = info_response
+                .json::<AvailableReleases>()
+                .await
+                .map_err(|error| BuildError::Invalid(format!("invalid JDK metadata: {error}")))?;
+            (etag, info.available_lts_releases)
+        };
+
+        let mut pages = Vec::new();
+        for page in 0_usize.. {
+            let cached_page = cached.and_then(|cache| {
+                cache
+                    .pages
+                    .iter()
+                    .find(|cached_page| cached_page.index == page)
+            });
+            let Some(page) = self.release_names_page(page, cached_page).await? else {
+                break;
+            };
+            pages.push(page);
+        }
+        Ok(CatalogCache {
+            schema: CATALOG_CACHE_SCHEMA,
+            fetched_at: now,
+            vendor: "temurin".to_owned(),
+            os: platform_os().to_owned(),
+            architecture: platform_arch().to_owned(),
+            lts_etag,
+            lts_majors,
+            pages,
+        })
     }
 
-    async fn release_names_page(&self, page: usize) -> Result<Vec<String>, BuildError> {
+    async fn release_names_page(
+        &self,
+        page: usize,
+        cached: Option<&CatalogPage>,
+    ) -> Result<Option<CatalogPage>, BuildError> {
         let mut url = self.api_root.clone();
         url.path_segments_mut()
             .map_err(|()| BuildError::Invalid("invalid JDK API root".to_owned()))?
             .extend(["info", "release_names"]);
-        let page = page.to_string();
+        let page_string = page.to_string();
         let page_size = REMOTE_PAGE_SIZE.to_string();
-        let response = self
-            .client
-            .get(url)
-            .query(&[
-                ("architecture", platform_arch()),
-                ("heap_size", "normal"),
-                ("image_type", "jdk"),
-                ("jvm_impl", "hotspot"),
-                ("os", platform_os()),
-                ("page", page.as_str()),
-                ("page_size", page_size.as_str()),
-                ("project", "jdk"),
-                ("release_type", "ga"),
-                ("sort_method", "DATE"),
-                ("sort_order", "DESC"),
-                ("vendor", "eclipse"),
-            ])
-            .send()
-            .await
-            .map_err(metadata_request_error)?;
+        let mut request = self.client.get(url).query(&[
+            ("architecture", platform_arch()),
+            ("heap_size", "normal"),
+            ("image_type", "jdk"),
+            ("jvm_impl", "hotspot"),
+            ("os", platform_os()),
+            ("page", page_string.as_str()),
+            ("page_size", page_size.as_str()),
+            ("project", "jdk"),
+            ("release_type", "ga"),
+            ("sort_method", "DATE"),
+            ("sort_order", "DESC"),
+            ("vendor", "eclipse"),
+        ]);
+        if let Some(etag) = cached.and_then(|page| page.etag.as_deref()) {
+            request = request.header(reqwest::header::IF_NONE_MATCH, etag);
+        }
+        let response = request.send().await.map_err(metadata_request_error)?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(Vec::new());
+            return Ok(None);
+        }
+        if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+            return cached.cloned().map(Some).ok_or_else(|| {
+                BuildError::Invalid(format!(
+                    "JDK catalog page {page} returned 304 without cached data"
+                ))
+            });
         }
         let response = response
             .error_for_status()
             .map_err(metadata_request_error)?;
-        response
+        let etag = response_etag(&response);
+        let releases = response
             .json::<ReleaseNames>()
             .await
             .map(|response| response.releases)
-            .map_err(|error| BuildError::Invalid(format!("invalid JDK metadata: {error}")))
+            .map_err(|error| BuildError::Invalid(format!("invalid JDK metadata: {error}")))?;
+        if releases.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(CatalogPage {
+                index: page,
+                etag,
+                releases,
+            }))
+        }
+    }
+
+    async fn read_catalog_cache(&self) -> Result<Option<CatalogCache>, BuildError> {
+        let path = self.catalog_cache_path();
+        let bytes = match fs::read(&path).await {
+            Ok(bytes) => bytes,
+            Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => return Err(io_error(&path, source)),
+        };
+        let Ok(cache) = serde_json::from_slice::<CatalogCache>(&bytes) else {
+            return Ok(None);
+        };
+        if cache.schema != CATALOG_CACHE_SCHEMA
+            || cache.vendor != "temurin"
+            || cache.os != platform_os()
+            || cache.architecture != platform_arch()
+        {
+            return Ok(None);
+        }
+        Ok(Some(cache))
+    }
+
+    async fn write_catalog_cache(&self, cache: &CatalogCache) -> Result<(), BuildError> {
+        fs::create_dir_all(&self.catalog_root)
+            .await
+            .map_err(|source| io_error(&self.catalog_root, source))?;
+        let path = self.catalog_cache_path();
+        let temporary = self
+            .catalog_root
+            .join(format!(".catalog-{}.tmp", std::process::id()));
+        let bytes = serde_json::to_vec_pretty(cache).map_err(|error| {
+            BuildError::Invalid(format!("could not encode JDK catalog: {error}"))
+        })?;
+        fs::write(&temporary, bytes)
+            .await
+            .map_err(|source| io_error(&temporary, source))?;
+        if let Err(source) = fs::rename(&temporary, &path).await {
+            if path.exists() {
+                fs::remove_file(&path)
+                    .await
+                    .map_err(|remove| io_error(&path, remove))?;
+                fs::rename(&temporary, &path)
+                    .await
+                    .map_err(|rename| io_error(&path, rename))?;
+            } else {
+                return Err(io_error(&path, source));
+            }
+        }
+        Ok(())
+    }
+
+    fn catalog_cache_path(&self) -> PathBuf {
+        self.catalog_root.join(format!(
+            "temurin-{}-{}.json",
+            platform_os(),
+            platform_arch()
+        ))
     }
 
     /// Find an installed JDK satisfying a request.
@@ -837,6 +1025,64 @@ fn normalize_release_name(release: &str) -> Option<(String, u16)> {
     Some((version.to_owned(), major))
 }
 
+fn catalog_result(
+    cache: &CatalogCache,
+    major: Option<u16>,
+    lts_only: bool,
+    source: CatalogSource,
+    warning: Option<String>,
+) -> AvailableCatalog {
+    let lts_majors = cache.lts_majors.iter().copied().collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    let mut jdks = cache
+        .pages
+        .iter()
+        .flat_map(|page| &page.releases)
+        .filter_map(|release| normalize_release_name(release))
+        .filter(|(_, release_major)| major.is_none_or(|major| *release_major == major))
+        .filter(|(_, release_major)| !lts_only || lts_majors.contains(release_major))
+        .filter(|(version, release_major)| seen.insert((*release_major, version.clone())))
+        .map(|(version, release_major)| AvailableJdk {
+            vendor: "temurin".to_owned(),
+            version,
+            major: release_major,
+            lts: lts_majors.contains(&release_major),
+            os: platform_os().to_owned(),
+            architecture: platform_arch().to_owned(),
+        })
+        .collect::<Vec<_>>();
+    jdks.sort_by(|left, right| {
+        (right.major, version_key(&right.version)).cmp(&(left.major, version_key(&left.version)))
+    });
+    AvailableCatalog {
+        jdks,
+        status: CatalogStatus {
+            source,
+            fetched_at: cache.fetched_at,
+            warning,
+        },
+    }
+}
+
+fn catalog_is_fresh(cache: &CatalogCache, now: u64) -> bool {
+    now.saturating_sub(cache.fetched_at) <= CATALOG_CACHE_TTL.as_secs()
+}
+
+fn response_etag(response: &reqwest::Response) -> Option<String> {
+    response
+        .headers()
+        .get(reqwest::header::ETAG)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+}
+
+fn unix_time() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 fn normalize_managed_version(version: &str, major: u16) -> String {
     if major == 8 {
         let numbers = version_key(version);
@@ -998,42 +1244,162 @@ mod tests {
     #[tokio::test]
     async fn lists_remote_lts_catalog_and_stops_on_missing_page() {
         let (api_root, server) = catalog_server(vec![
-            (
-                "/v3/info/available_releases",
-                200,
-                r#"{"available_lts_releases":[8,21]}"#,
-            ),
-            (
-                "/v3/info/release_names?",
-                200,
-                r#"{"releases":["jdk-22.0.1+8","jdk-21.0.2+13","jdk8u402-b06"]}"#,
-            ),
-            ("/v3/info/release_names?", 404, r#"{"error":"page"}"#),
+            MockHttpResponse {
+                expected_path: "/v3/info/available_releases",
+                expected_if_none_match: None,
+                status: 200,
+                etag: Some("\"lts-v1\""),
+                body: r#"{"available_lts_releases":[8,21]}"#,
+            },
+            MockHttpResponse {
+                expected_path: "/v3/info/release_names?",
+                expected_if_none_match: None,
+                status: 200,
+                etag: Some("\"page-v1\""),
+                body: r#"{"releases":["jdk-22.0.1+8","jdk-21.0.2+13","jdk8u402-b06"]}"#,
+            },
+            mock_response("/v3/info/release_names?", 404, r#"{"error":"page"}"#),
         ]);
         let cache = tempfile::tempdir().expect("cache");
         let manager = ToolchainManager::with_api_root(cache.path(), &api_root).expect("manager");
 
-        let available = manager.available(None, true).await.expect("catalog");
+        let available = manager.available(None, true, false).await.expect("catalog");
 
         assert_eq!(
             available
+                .jdks
                 .iter()
                 .map(|jdk| (jdk.version.as_str(), jdk.major, jdk.lts))
                 .collect::<Vec<_>>(),
             [("21.0.2+13", 21, true), ("8u402-b06", 8, true)]
         );
+        assert_eq!(available.status.source, CatalogSource::Network);
+        server.join().expect("catalog server");
+        assert!(manager.catalog_cache_path().is_file());
+        let stored = manager
+            .read_catalog_cache()
+            .await
+            .expect("read cache")
+            .expect("stored cache");
+        assert_eq!(stored.lts_etag.as_deref(), Some("\"lts-v1\""));
+        assert_eq!(stored.pages[0].etag.as_deref(), Some("\"page-v1\""));
+
+        let cached = manager
+            .available_at(None, true, false, available.status.fetched_at + 1)
+            .await
+            .expect("fresh cached catalog");
+        assert_eq!(cached.status.source, CatalogSource::Cache);
+    }
+
+    #[tokio::test]
+    async fn refresh_revalidates_each_cached_resource_with_etags() {
+        let (api_root, server) = catalog_server(vec![
+            MockHttpResponse {
+                expected_path: "/v3/info/available_releases",
+                expected_if_none_match: Some("\"lts-v1\""),
+                status: 304,
+                etag: None,
+                body: "",
+            },
+            MockHttpResponse {
+                expected_path: "/v3/info/release_names?",
+                expected_if_none_match: Some("\"page-v1\""),
+                status: 304,
+                etag: None,
+                body: "",
+            },
+            mock_response("/v3/info/release_names?", 404, ""),
+        ]);
+        let cache_directory = tempfile::tempdir().expect("cache");
+        let manager =
+            ToolchainManager::with_api_root(cache_directory.path(), &api_root).expect("manager");
+        manager
+            .write_catalog_cache(&cached_catalog(100))
+            .await
+            .expect("seed cache");
+
+        let available = manager
+            .available_at(Some(21), false, true, 101)
+            .await
+            .expect("revalidated catalog");
+
+        assert_eq!(available.status.source, CatalogSource::Revalidated);
+        assert_eq!(available.status.fetched_at, 101);
+        assert_eq!(available.jdks[0].version, "21.0.2+13");
+        server.join().expect("catalog server");
+    }
+
+    #[tokio::test]
+    async fn network_failure_falls_back_to_stale_catalog() {
+        let cache_directory = tempfile::tempdir().expect("cache");
+        let listener = TcpListener::bind("127.0.0.1:0").expect("unused listener");
+        let address = listener.local_addr().expect("unused address");
+        drop(listener);
+        let manager = ToolchainManager::with_api_root(
+            cache_directory.path(),
+            &format!("http://{address}/v3"),
+        )
+        .expect("manager");
+        manager
+            .write_catalog_cache(&cached_catalog(100))
+            .await
+            .expect("seed cache");
+
+        let available = manager
+            .available_at(None, false, false, 100 + CATALOG_CACHE_TTL.as_secs() + 1)
+            .await
+            .expect("stale fallback");
+
+        assert_eq!(available.status.source, CatalogSource::StaleCache);
+        assert!(available.status.warning.is_some());
+        assert_eq!(available.jdks.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn corrupt_cache_is_ignored_and_replaced_from_network() {
+        let (api_root, server) = catalog_server(vec![
+            mock_response(
+                "/v3/info/available_releases",
+                200,
+                r#"{"available_lts_releases":[21]}"#,
+            ),
+            mock_response(
+                "/v3/info/release_names?",
+                200,
+                r#"{"releases":["jdk-21.0.2+13"]}"#,
+            ),
+            mock_response("/v3/info/release_names?", 404, ""),
+        ]);
+        let cache_directory = tempfile::tempdir().expect("cache");
+        let manager =
+            ToolchainManager::with_api_root(cache_directory.path(), &api_root).expect("manager");
+        fs::create_dir_all(&manager.catalog_root)
+            .await
+            .expect("catalog directory");
+        fs::write(manager.catalog_cache_path(), b"not json")
+            .await
+            .expect("corrupt cache");
+
+        let available = manager
+            .available_at(None, false, false, 500)
+            .await
+            .expect("network catalog");
+
+        assert_eq!(available.status.source, CatalogSource::Network);
+        assert_eq!(available.jdks.len(), 1);
+        assert!(manager.read_catalog_cache().await.expect("cache").is_some());
         server.join().expect("catalog server");
     }
 
     #[tokio::test]
     async fn resolves_latest_and_exact_adoptium_response_shapes() {
         let (api_root, server) = catalog_server(vec![
-            (
+            mock_response(
                 "/v3/assets/latest/21/hotspot?",
                 200,
                 r#"[{"binary":{"package":{"checksum":"latest","link":"https://example.test/latest.tar.gz","name":"latest.tar.gz"}},"release_name":"jdk-21.0.12.1+1","version":{"major":21}}]"#,
             ),
-            (
+            mock_response(
                 "/v3/assets/version/8u504-b01?",
                 200,
                 r#"[{"binaries":[{"package":{"checksum":"exact","link":"https://example.test/exact.tar.gz","name":"exact.tar.gz"}}],"release_name":"jdk8u504-b01","version_data":{"major":8}}]"#,
@@ -1111,27 +1477,82 @@ mod tests {
         home
     }
 
-    fn catalog_server(
-        responses: Vec<(&'static str, u16, &'static str)>,
-    ) -> (String, thread::JoinHandle<()>) {
+    struct MockHttpResponse {
+        expected_path: &'static str,
+        expected_if_none_match: Option<&'static str>,
+        status: u16,
+        etag: Option<&'static str>,
+        body: &'static str,
+    }
+
+    fn mock_response(
+        expected_path: &'static str,
+        status: u16,
+        body: &'static str,
+    ) -> MockHttpResponse {
+        MockHttpResponse {
+            expected_path,
+            expected_if_none_match: None,
+            status,
+            etag: None,
+            body,
+        }
+    }
+
+    fn cached_catalog(fetched_at: u64) -> CatalogCache {
+        CatalogCache {
+            schema: CATALOG_CACHE_SCHEMA,
+            fetched_at,
+            vendor: "temurin".to_owned(),
+            os: platform_os().to_owned(),
+            architecture: platform_arch().to_owned(),
+            lts_etag: Some("\"lts-v1\"".to_owned()),
+            lts_majors: vec![21],
+            pages: vec![CatalogPage {
+                index: 0,
+                etag: Some("\"page-v1\"".to_owned()),
+                releases: vec!["jdk-22.0.1+8".to_owned(), "jdk-21.0.2+13".to_owned()],
+            }],
+        }
+    }
+
+    fn catalog_server(responses: Vec<MockHttpResponse>) -> (String, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("catalog listener");
         let address = listener.local_addr().expect("catalog address");
         let server = thread::spawn(move || {
-            for (expected_path, status, body) in responses {
+            for response in responses {
                 let (mut connection, _) = listener.accept().expect("catalog connection");
                 let mut request = [0_u8; 4096];
                 let read = connection.read(&mut request).expect("catalog request");
                 let request = String::from_utf8_lossy(&request[..read]);
                 assert!(request.starts_with("GET "));
                 assert!(
-                    request.contains(expected_path),
+                    request.contains(response.expected_path),
                     "unexpected request: {request}"
                 );
-                let reason = if status == 200 { "OK" } else { "Not Found" };
+                if let Some(etag) = response.expected_if_none_match {
+                    assert!(
+                        request.to_ascii_lowercase().contains(&format!(
+                            "\r\nif-none-match: {}\r\n",
+                            etag.to_ascii_lowercase()
+                        )),
+                        "missing If-None-Match header: {request}"
+                    );
+                }
+                let reason = match response.status {
+                    200 => "OK",
+                    304 => "Not Modified",
+                    _ => "Not Found",
+                };
+                let etag = response
+                    .etag
+                    .map_or_else(String::new, |etag| format!("ETag: {etag}\r\n"));
                 write!(
                     connection,
-                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
+                    "HTTP/1.1 {} {reason}\r\n{etag}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response.status,
+                    response.body.len(),
+                    response.body,
                 )
                 .expect("catalog response");
             }
