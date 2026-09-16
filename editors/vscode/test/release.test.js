@@ -1,0 +1,65 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const childProcess = require("node:child_process");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const extensionRoot = path.resolve(__dirname, "..");
+const projectRoot = path.resolve(extensionRoot, "..", "..");
+
+function releasePath(relative) {
+  const resolved = path.join(extensionRoot, relative);
+  assert.ok(fs.statSync(resolved).size > 0, `missing or empty release file: ${relative}`);
+  return resolved;
+}
+
+function assertElfX64(relative, executable) {
+  const resolved = releasePath(relative);
+  const header = Buffer.alloc(20);
+  const descriptor = fs.openSync(resolved, "r");
+  try {
+    assert.equal(fs.readSync(descriptor, header, 0, header.length, 0), header.length);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  assert.deepEqual([...header.subarray(0, 4)], [0x7f, 0x45, 0x4c, 0x46]);
+  assert.equal(header[4], 2, `${relative} must be a 64-bit ELF file`);
+  assert.equal(header[5], 1, `${relative} must use little-endian ELF encoding`);
+  assert.equal(header.readUInt16LE(18), 0x3e, `${relative} must target x86-64`);
+  if (executable) {
+    assert.notEqual(fs.statSync(resolved).mode & 0o111, 0, `${relative} must be executable`);
+  }
+}
+
+assertElfX64("server/jman", true);
+assertElfX64("server/libjman_javac_frontend.so", false);
+
+const nativeBuild = fs.readFileSync(path.join(projectRoot, "scripts/build-native.sh"), "utf8");
+assert.ok(nativeBuild.includes("-march=compatibility"));
+
+for (const relative of [
+  "dist/extension.js",
+  "server/maven-importer.jar",
+  "server/processor-worker.jar",
+  "server/vineflower.jar",
+  "server/tools/gradle-importer/javac-frontend-model.init.gradle",
+]) {
+  releasePath(relative);
+}
+
+for (const relative of [
+  "server/maven-importer.jar",
+  "server/processor-worker.jar",
+  "server/vineflower.jar",
+]) {
+  const signature = fs.readFileSync(path.join(extensionRoot, relative)).subarray(0, 4);
+  assert.equal(signature[0], 0x50, `${relative} is not a ZIP/JAR archive`);
+  assert.equal(signature[1], 0x4b, `${relative} is not a ZIP/JAR archive`);
+}
+
+const version = childProcess.spawnSync(path.join(extensionRoot, "server/jman"), ["--version"], {
+  encoding: "utf8",
+});
+assert.equal(version.status, 0, version.stderr);
+assert.match(version.stdout, /^jman \d+\.\d+\.\d+/);

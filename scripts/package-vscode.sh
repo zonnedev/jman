@@ -7,6 +7,13 @@ server_dir="${extension_dir}/server"
 output_dir="${project_dir}/target/vscode"
 native_dir="${project_dir}/target/native"
 extension_version="$(node -p 'require(process.argv[1]).version' "${extension_dir}/package.json")"
+target_platform="linux-x64"
+
+if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
+  printf 'JMAN Java %s must be built on Linux x86-64, got %s %s\n' \
+    "${target_platform}" "$(uname -s)" "$(uname -m)" >&2
+  exit 1
+fi
 
 "${project_dir}/scripts/build-native.sh"
 "${project_dir}/scripts/build-processor-worker.sh"
@@ -21,6 +28,7 @@ JAVAC_FRONTEND_LIB_DIR="${native_dir}" \
 rm -rf "${server_dir}" "${output_dir}"
 mkdir -p "${server_dir}" "${output_dir}"
 cp "${project_dir}/target/release/jman" "${server_dir}/jman"
+strip --strip-unneeded "${server_dir}/jman"
 cp "${native_dir}/libjman_javac_frontend.so" "${server_dir}/libjman_javac_frontend.so"
 cp "${project_dir}/target/processor-worker.jar" "${server_dir}/processor-worker.jar"
 cp "${project_dir}/target/vineflower-1.12.0.jar" "${server_dir}/vineflower.jar"
@@ -34,12 +42,23 @@ jar --create \
 
 (
   cd "${extension_dir}"
-  if [[ ! -d node_modules ]]; then
-    npm ci
-  fi
-  npm run check
-  npm run bundle
+  npm ci
   npx vsce package \
+    --target "${target_platform}" \
+    --pre-release \
     --no-dependencies \
-    --out "${output_dir}/jman-java-${extension_version}.vsix"
+    --out "${output_dir}/jman-java-${extension_version}-${target_platform}.vsix"
 )
+
+package="${output_dir}/jman-java-${extension_version}-${target_platform}.vsix"
+checksum="${package}.sha256"
+
+unzip -tq "${package}"
+(
+  cd "${output_dir}"
+  sha256sum "$(basename "${package}")" > "$(basename "${checksum}")"
+  sha256sum --check "$(basename "${checksum}")"
+)
+
+printf 'VS Code pre-release package: %s\n' "${package}"
+printf 'SHA-256 checksum: %s\n' "${checksum}"

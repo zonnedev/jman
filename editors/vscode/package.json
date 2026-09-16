@@ -1,9 +1,12 @@
 {
   "name": "jman-java",
   "displayName": "JMAN Java",
-  "description": "JMAN's Rust and GraalVM Java language server",
-  "version": "0.1.6",
+  "description": "Native Java language support for JMAN, Maven, and Gradle projects",
+  "version": "0.1.7",
   "publisher": "zonnedev",
+  "author": "ZonneDev",
+  "preview": true,
+  "pricing": "Free",
   "icon": "images/jman.png",
   "galleryBanner": {
     "color": "#613583",
@@ -14,12 +17,40 @@
     "type": "git",
     "url": "https://github.com/zonnedev/jman.git"
   },
+  "homepage": "https://github.com/zonnedev/jman#readme",
+  "bugs": {
+    "url": "https://github.com/zonnedev/jman/issues"
+  },
+  "qna": "marketplace",
   "engines": {
     "vscode": "^1.95.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Testing"
   ],
+  "keywords": [
+    "java",
+    "jman",
+    "language server",
+    "lsp",
+    "maven",
+    "gradle",
+    "testing",
+    "build tools"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "JMAN analyzes source code and can run project builds and tests. Trust the workspace before enabling the extension."
+    },
+    "virtualWorkspaces": {
+      "supported": false
+    }
+  },
   "activationEvents": [
     "onLanguage:java",
     "onCommand:jmanJava.showStatus",
@@ -120,16 +151,18 @@
     }
   },
   "scripts": {
-    "check": "node --check extension.js && node test/extension.test.js",
+    "check": "node --check extension.js && node test/extension.test.js && node test/manifest.test.js",
+    "check:release": "node test/release.test.js",
     "bundle": "esbuild extension.js --bundle --platform=node --external:vscode --outfile=dist/extension.js",
-    "package": "npm run bundle && vsce package"
+    "vscode:prepublish": "npm run check && npm run bundle && npm run check:release",
+    "package": "vsce package --target linux-x64 --pre-release --no-dependencies"
   },
   "dependencies": {
-    "vscode-languageclient": "^10.1.0",
+    "vscode-languageclient": "^10.1.1",
     "xml2js": "^0.6.2"
   },
   "devDependencies": {
-    "@vscode/vsce": "^3.9.2",
-    "esbuild": "^0.28.1"
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.28.2"
   }
 }
