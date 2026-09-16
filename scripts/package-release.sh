@@ -27,11 +27,12 @@ stage="${stage_root}/${name}"
 archive="${dist_dir}/${name}.tar.gz"
 
 rm -rf "${stage_root}" "${dist_dir}"
-mkdir -p "${stage}/tools" "${dist_dir}"
+mkdir -p "${stage}/resources/icons" "${stage}/tools" "${dist_dir}"
 cp "${project_dir}/target/release/jman" "${stage}/jman"
 cp "${native_dir}/libjman_javac_frontend.so" "${stage}/libjman_javac_frontend.so"
 cp "${project_dir}/target/processor-worker.jar" "${stage}/processor-worker.jar"
 cp "${project_dir}/target/vineflower-1.12.0.jar" "${stage}/vineflower.jar"
+cp "${project_dir}/resources/icons/jman.svg" "${stage}/resources/icons/jman.svg"
 cp -R "${project_dir}/tools/gradle-importer" "${stage}/tools/gradle-importer"
 jar --create \
   --date=1980-01-01T00:00:02Z \

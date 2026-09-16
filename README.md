@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="resources/icons/jman.svg" alt="JMAN logo" width="180">
+</p>
+
 # JMAN
 
 JMAN (`jman`) is a native Rust build tool and Java language server for deterministic,

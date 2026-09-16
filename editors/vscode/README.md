@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="images/jman.png" alt="JMAN logo" width="160">
+</p>
+
 # JMAN Java
 
 Development extension for the Rust/GraalVM Java language server.

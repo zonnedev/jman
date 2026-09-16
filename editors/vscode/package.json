@@ -4,6 +4,11 @@
   "description": "JMAN's Rust and GraalVM Java language server",
   "version": "0.1.6",
   "publisher": "zonnedev",
+  "icon": "images/jman.png",
+  "galleryBanner": {
+    "color": "#613583",
+    "theme": "dark"
+  },
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
