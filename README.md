@@ -22,6 +22,17 @@ Import an existing Maven project with `jman init --import .`. Use `jman sync`
 after dependency changes, `jman build --all` for all reproducible archives, and
 `jman doctor` to inspect the selected JDK and optional container runtime.
 
+Manage Java toolchains directly through JMAN:
+
+```bash
+jman java list                   # installed first, then remotely available JDKs
+jman java list --local           # installed JDKs only; no network access
+jman java list --major 21        # filter one Java feature release
+jman java list --lts             # show only LTS release lines
+jman java install 21             # install the latest matching Temurin JDK
+jman java use 21                 # pin the current project to Java 21
+```
+
 The precise supported metadata boundary and release gates are defined in
 [the product contract](docs/product-contract.md). Changes are recorded in the
 [changelog](CHANGELOG.md).

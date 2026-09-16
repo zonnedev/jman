@@ -27,6 +27,8 @@ Versioning while it approaches a stable 0.1.0 release.
 - Migrated crate and package names, Java namespaces, project files, caches,
   environment variables, editor integrations, protocol identifiers, tests, and
   release artifacts to the JMAN namespace.
+- `jman java list` now prints installed JDKs first and the remote Temurin catalog
+  afterward; `--local`, `--major`, and `--lts` control catalog selection.
 
 ### Known limitations
 

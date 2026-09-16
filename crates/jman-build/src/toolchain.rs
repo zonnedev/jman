@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fs::File,
     io,
     path::{Component, Path, PathBuf},
@@ -16,6 +17,8 @@ use crate::{io_error, probe_javac, BuildError, Toolchain};
 
 const API_ROOT: &str = "https://api.adoptium.net/v3";
 const METADATA: &str = ".jman-toolchain.json";
+const REMOTE_PAGE_SIZE: usize = 20;
+const KNOWN_LTS_MAJORS: &[u16] = &[8, 11, 17, 21, 25];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ToolchainRequest {
@@ -31,15 +34,26 @@ impl ToolchainRequest {
     /// Returns an error when the version has no numeric major.
     pub fn major(&self) -> Result<u16, BuildError> {
         self.version
-            .split('.')
-            .next()
-            .and_then(|value| value.parse().ok())
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect::<String>()
+            .parse()
+            .ok()
             .ok_or_else(|| BuildError::Invalid(format!("invalid JDK version `{}`", self.version)))
     }
 
     fn exact(&self) -> bool {
-        self.version.contains('.') || self.version.contains('+')
+        !self
+            .version
+            .chars()
+            .all(|character| character.is_ascii_digit())
     }
+}
+
+#[must_use]
+/// Return whether a Java feature release is a currently known LTS line.
+pub fn is_lts_major(major: u16) -> bool {
+    KNOWN_LTS_MAJORS.contains(&major)
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -54,15 +68,43 @@ pub struct ManagedJdk {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AvailableJdk {
+    pub vendor: String,
+    pub version: String,
+    pub major: u16,
+    pub lts: bool,
+    pub os: String,
+    pub architecture: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemovalResult {
     pub removed: Vec<ManagedJdk>,
     pub reclaimed_bytes: u64,
 }
 
 #[derive(Debug, Deserialize)]
-struct Asset {
+struct AvailableReleases {
+    available_lts_releases: Vec<u16>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReleaseNames {
+    releases: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LatestAsset {
     binary: Binary,
+    release_name: String,
     version: Version,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReleaseAsset {
+    binaries: Vec<Binary>,
+    release_name: String,
+    version_data: Version,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,12 +122,19 @@ struct Package {
 #[derive(Debug, Deserialize)]
 struct Version {
     major: u16,
-    semver: String,
+}
+
+#[derive(Debug)]
+struct ResolvedAsset {
+    package: Package,
+    version: String,
+    major: u16,
 }
 
 pub struct ToolchainManager {
     root: PathBuf,
     client: reqwest::Client,
+    api_root: Url,
 }
 
 impl ToolchainManager {
@@ -95,6 +144,10 @@ impl ToolchainManager {
     ///
     /// Returns an error when the HTTP client cannot be initialized.
     pub fn new(cache_dir: &Path) -> Result<Self, BuildError> {
+        Self::with_api_root(cache_dir, API_ROOT)
+    }
+
+    fn with_api_root(cache_dir: &Path, api_root: &str) -> Result<Self, BuildError> {
         let client = reqwest::Client::builder()
             .user_agent(concat!("jman/", env!("CARGO_PKG_VERSION")))
             .redirect(reqwest::redirect::Policy::limited(10))
@@ -102,9 +155,12 @@ impl ToolchainManager {
             .map_err(|error| {
                 BuildError::Invalid(format!("could not create JDK client: {error}"))
             })?;
+        let api_root = Url::parse(api_root)
+            .map_err(|error| BuildError::Invalid(format!("invalid JDK API URL: {error}")))?;
         Ok(Self {
             root: cache_dir.join("jdks"),
             client,
+            api_root,
         })
     }
 
@@ -133,7 +189,8 @@ impl ToolchainManager {
             let bytes = fs::read(&metadata)
                 .await
                 .map_err(|source| io_error(&metadata, source))?;
-            if let Ok(jdk) = serde_json::from_slice::<ManagedJdk>(&bytes) {
+            if let Ok(mut jdk) = serde_json::from_slice::<ManagedJdk>(&bytes) {
+                jdk.version = normalize_managed_version(&jdk.version, jdk.major);
                 if jdk.home == entry.path() && javac_path(&jdk.home).is_file() {
                     jdks.push(jdk);
                 }
@@ -147,6 +204,112 @@ impl ToolchainManager {
             ))
         });
         Ok(jdks)
+    }
+
+    /// List remotely installable Temurin JDK releases for this platform.
+    ///
+    /// Results are newest-first. A major filter limits the catalog to one Java
+    /// feature release, while `lts_only` limits it to Adoptium's advertised LTS
+    /// feature releases.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the Adoptium catalog cannot be queried or decoded.
+    pub async fn available(
+        &self,
+        major: Option<u16>,
+        lts_only: bool,
+    ) -> Result<Vec<AvailableJdk>, BuildError> {
+        let mut info_url = self.api_root.clone();
+        info_url
+            .path_segments_mut()
+            .map_err(|()| BuildError::Invalid("invalid JDK API root".to_owned()))?
+            .extend(["info", "available_releases"]);
+        let info = self
+            .client
+            .get(info_url)
+            .send()
+            .await
+            .map_err(metadata_request_error)?
+            .error_for_status()
+            .map_err(metadata_request_error)?
+            .json::<AvailableReleases>()
+            .await
+            .map_err(|error| BuildError::Invalid(format!("invalid JDK metadata: {error}")))?;
+        let lts_majors = info
+            .available_lts_releases
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+
+        let mut releases = Vec::new();
+        for page in 0_usize.. {
+            let names = self.release_names_page(page).await?;
+            if names.is_empty() {
+                break;
+            }
+            releases.extend(names);
+        }
+        let mut seen = BTreeSet::new();
+        let mut jdks = releases
+            .into_iter()
+            .filter_map(|release| normalize_release_name(&release))
+            .filter(|(_, release_major)| major.is_none_or(|major| *release_major == major))
+            .filter(|(_, release_major)| !lts_only || lts_majors.contains(release_major))
+            .filter(|(version, release_major)| seen.insert((*release_major, version.clone())))
+            .map(|(version, release_major)| AvailableJdk {
+                vendor: "temurin".to_owned(),
+                version,
+                major: release_major,
+                lts: lts_majors.contains(&release_major),
+                os: platform_os().to_owned(),
+                architecture: platform_arch().to_owned(),
+            })
+            .collect::<Vec<_>>();
+        jdks.sort_by(|left, right| {
+            (right.major, version_key(&right.version))
+                .cmp(&(left.major, version_key(&left.version)))
+        });
+        Ok(jdks)
+    }
+
+    async fn release_names_page(&self, page: usize) -> Result<Vec<String>, BuildError> {
+        let mut url = self.api_root.clone();
+        url.path_segments_mut()
+            .map_err(|()| BuildError::Invalid("invalid JDK API root".to_owned()))?
+            .extend(["info", "release_names"]);
+        let page = page.to_string();
+        let page_size = REMOTE_PAGE_SIZE.to_string();
+        let response = self
+            .client
+            .get(url)
+            .query(&[
+                ("architecture", platform_arch()),
+                ("heap_size", "normal"),
+                ("image_type", "jdk"),
+                ("jvm_impl", "hotspot"),
+                ("os", platform_os()),
+                ("page", page.as_str()),
+                ("page_size", page_size.as_str()),
+                ("project", "jdk"),
+                ("release_type", "ga"),
+                ("sort_method", "DATE"),
+                ("sort_order", "DESC"),
+                ("vendor", "eclipse"),
+            ])
+            .send()
+            .await
+            .map_err(metadata_request_error)?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
+        let response = response
+            .error_for_status()
+            .map_err(metadata_request_error)?;
+        response
+            .json::<ReleaseNames>()
+            .await
+            .map(|response| response.releases)
+            .map_err(|error| BuildError::Invalid(format!("invalid JDK metadata: {error}")))
     }
 
     /// Find an installed JDK satisfying a request.
@@ -311,21 +474,17 @@ impl ToolchainManager {
         let install_name = format!(
             "{}-{}-{}-{}",
             request.vendor,
-            sanitize(&asset.version.semver),
+            sanitize(&asset.version),
             platform_os(),
             platform_arch()
         );
         let destination = self.root.join(install_name);
-        let archive = self
-            .root
-            .join(format!(".download-{}", asset.binary.package.name));
-        self.download_verified(&asset.binary.package, &archive, progress)
+        let archive = self.root.join(format!(".download-{}", asset.package.name));
+        self.download_verified(&asset.package, &archive, progress)
             .await?;
-        let extraction = self.root.join(format!(
-            ".extract-{}-{}",
-            std::process::id(),
-            asset.version.major
-        ));
+        let extraction = self
+            .root
+            .join(format!(".extract-{}-{}", std::process::id(), asset.major));
         if extraction.exists() {
             fs::remove_dir_all(&extraction)
                 .await
@@ -357,11 +516,11 @@ impl ToolchainManager {
         let _ = fs::remove_file(&archive).await;
         let jdk = ManagedJdk {
             vendor: request.vendor.clone(),
-            version: asset.version.semver,
-            major: asset.version.major,
+            version: asset.version,
+            major: asset.major,
             os: platform_os().to_owned(),
             architecture: platform_arch().to_owned(),
-            checksum: format!("sha256:{}", asset.binary.package.checksum),
+            checksum: format!("sha256:{}", asset.package.checksum),
             home: destination,
         };
         let metadata = serde_json::to_vec_pretty(&jdk)
@@ -381,21 +540,20 @@ impl ToolchainManager {
         )))
     }
 
-    async fn resolve_asset(&self, request: &ToolchainRequest) -> Result<Asset, BuildError> {
-        let endpoint = if request.exact() {
-            let mut url = Url::parse(API_ROOT)
-                .map_err(|error| BuildError::Invalid(format!("invalid JDK API URL: {error}")))?;
-            url.path_segments_mut()
+    async fn resolve_asset(&self, request: &ToolchainRequest) -> Result<ResolvedAsset, BuildError> {
+        let mut endpoint = self.api_root.clone();
+        if request.exact() {
+            endpoint
+                .path_segments_mut()
                 .map_err(|()| BuildError::Invalid("invalid JDK API root".to_owned()))?
                 .extend(["assets", "version", &request.version]);
-            url
         } else {
-            Url::parse(&format!(
-                "{API_ROOT}/assets/latest/{}/hotspot",
-                request.major()?
-            ))
-            .map_err(|error| BuildError::Invalid(format!("invalid JDK API URL: {error}")))?
-        };
+            let major = request.major()?.to_string();
+            endpoint
+                .path_segments_mut()
+                .map_err(|()| BuildError::Invalid("invalid JDK API root".to_owned()))?
+                .extend(["assets", "latest", &major, "hotspot"]);
+        }
         let response = self
             .client
             .get(endpoint)
@@ -407,18 +565,55 @@ impl ToolchainManager {
             ])
             .send()
             .await
-            .map_err(|error| BuildError::Invalid(format!("JDK metadata request failed: {error}")))?
+            .map_err(metadata_request_error)?
             .error_for_status()
-            .map_err(|error| {
-                BuildError::Invalid(format!("JDK metadata request failed: {error}"))
+            .map_err(metadata_request_error)?;
+        if request.exact() {
+            let releases = response
+                .json::<Vec<ReleaseAsset>>()
+                .await
+                .map_err(|error| BuildError::Invalid(format!("invalid JDK metadata: {error}")))?;
+            let release = releases.into_iter().next().ok_or_else(|| {
+                BuildError::Invalid(format!("no Temurin JDK found for {}", request.version))
             })?;
-        let assets = response
-            .json::<Vec<Asset>>()
-            .await
-            .map_err(|error| BuildError::Invalid(format!("invalid JDK metadata: {error}")))?;
-        assets.into_iter().next().ok_or_else(|| {
-            BuildError::Invalid(format!("no Temurin JDK found for {}", request.version))
-        })
+            let package = release.binaries.into_iter().next().ok_or_else(|| {
+                BuildError::Invalid(format!("no Temurin JDK found for {}", request.version))
+            })?;
+            let (version, major) =
+                normalize_release_name(&release.release_name).ok_or_else(|| {
+                    BuildError::Invalid(format!(
+                        "invalid JDK release name `{}`",
+                        release.release_name
+                    ))
+                })?;
+            debug_assert_eq!(major, release.version_data.major);
+            Ok(ResolvedAsset {
+                package: package.package,
+                version,
+                major,
+            })
+        } else {
+            let assets = response
+                .json::<Vec<LatestAsset>>()
+                .await
+                .map_err(|error| BuildError::Invalid(format!("invalid JDK metadata: {error}")))?;
+            let asset = assets.into_iter().next().ok_or_else(|| {
+                BuildError::Invalid(format!("no Temurin JDK found for {}", request.version))
+            })?;
+            let (version, major) =
+                normalize_release_name(&asset.release_name).ok_or_else(|| {
+                    BuildError::Invalid(format!(
+                        "invalid JDK release name `{}`",
+                        asset.release_name
+                    ))
+                })?;
+            debug_assert_eq!(major, asset.version.major);
+            Ok(ResolvedAsset {
+                package: asset.binary.package,
+                version,
+                major,
+            })
+        }
     }
 
     async fn download_verified(
@@ -629,6 +824,48 @@ fn platform_arch() -> &'static str {
     }
 }
 
+fn normalize_release_name(release: &str) -> Option<(String, u16)> {
+    let version = release
+        .strip_prefix("jdk-")
+        .or_else(|| release.strip_prefix("jdk"))?;
+    let major = version
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .ok()?;
+    Some((version.to_owned(), major))
+}
+
+fn normalize_managed_version(version: &str, major: u16) -> String {
+    if major == 8 {
+        let numbers = version_key(version);
+        if numbers.len() >= 5 && numbers[0] == 8 {
+            return format!("8u{}-b{:02}", numbers[2], numbers[4]);
+        }
+    }
+    let Some(without_lts) = version.strip_suffix(".0.LTS") else {
+        return version.to_owned();
+    };
+    let Some((core, encoded_build)) = without_lts.rsplit_once('+') else {
+        return version.to_owned();
+    };
+    let Ok(encoded_build) = encoded_build.parse::<u32>() else {
+        return version.to_owned();
+    };
+    if encoded_build >= 100 {
+        format!("{core}.{}+{}", encoded_build / 100, encoded_build % 100)
+    } else {
+        format!("{core}+{encoded_build}")
+    }
+}
+
+fn metadata_request_error(error: reqwest::Error) -> BuildError {
+    let message = error.to_string();
+    drop(error);
+    BuildError::Invalid(format!("JDK metadata request failed: {message}"))
+}
+
 fn sanitize(value: &str) -> String {
     value
         .chars()
@@ -643,11 +880,20 @@ fn sanitize(value: &str) -> String {
 }
 
 fn version_key(value: &str) -> Vec<u32> {
-    value
+    let (core, suffix) = value.split_once('+').unwrap_or((value, ""));
+    let mut key = core
         .split(|character: char| !character.is_ascii_digit())
         .filter(|part| !part.is_empty())
         .filter_map(|part| part.parse().ok())
-        .collect()
+        .collect::<Vec<_>>();
+    key.resize(4, 0);
+    key.extend(
+        suffix
+            .split(|character: char| !character.is_ascii_digit())
+            .filter(|part| !part.is_empty())
+            .filter_map(|part| part.parse::<u32>().ok()),
+    );
+    key
 }
 
 async fn acquire_install_lock(path: PathBuf) -> Result<File, BuildError> {
@@ -694,6 +940,12 @@ async fn rollback_staged(staged: &[(PathBuf, PathBuf)]) {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
     use super::*;
 
     #[test]
@@ -710,12 +962,104 @@ mod tests {
         assert!(!major.exact());
         assert_eq!(exact.major().expect("major"), 17);
         assert!(exact.exact());
+
+        let java_8 = ToolchainRequest {
+            version: "8u504-b01".to_owned(),
+            vendor: "temurin".to_owned(),
+        };
+        assert_eq!(java_8.major().expect("major"), 8);
+        assert!(java_8.exact());
     }
 
     #[test]
     fn sanitizes_versions_for_install_directories() {
         assert_eq!(sanitize("17.0.20+8"), "17.0.20_8");
         assert!(version_key("17.0.20+8") > version_key("17.0.9+9"));
+        assert!(version_key("21.0.12+8") > version_key("21+35"));
+        assert_eq!(
+            normalize_release_name("jdk-21.0.12+8"),
+            Some(("21.0.12+8".to_owned(), 21))
+        );
+        assert_eq!(
+            normalize_release_name("jdk8u504-b01"),
+            Some(("8u504-b01".to_owned(), 8))
+        );
+        assert_eq!(
+            normalize_managed_version("21.0.12+101.0.LTS", 21),
+            "21.0.12.1+1"
+        );
+        assert_eq!(
+            normalize_managed_version("21.0.12+8.0.LTS", 21),
+            "21.0.12+8"
+        );
+        assert_eq!(normalize_managed_version("8.0.504+1", 8), "8u504-b01");
+    }
+
+    #[tokio::test]
+    async fn lists_remote_lts_catalog_and_stops_on_missing_page() {
+        let (api_root, server) = catalog_server(vec![
+            (
+                "/v3/info/available_releases",
+                200,
+                r#"{"available_lts_releases":[8,21]}"#,
+            ),
+            (
+                "/v3/info/release_names?",
+                200,
+                r#"{"releases":["jdk-22.0.1+8","jdk-21.0.2+13","jdk8u402-b06"]}"#,
+            ),
+            ("/v3/info/release_names?", 404, r#"{"error":"page"}"#),
+        ]);
+        let cache = tempfile::tempdir().expect("cache");
+        let manager = ToolchainManager::with_api_root(cache.path(), &api_root).expect("manager");
+
+        let available = manager.available(None, true).await.expect("catalog");
+
+        assert_eq!(
+            available
+                .iter()
+                .map(|jdk| (jdk.version.as_str(), jdk.major, jdk.lts))
+                .collect::<Vec<_>>(),
+            [("21.0.2+13", 21, true), ("8u402-b06", 8, true)]
+        );
+        server.join().expect("catalog server");
+    }
+
+    #[tokio::test]
+    async fn resolves_latest_and_exact_adoptium_response_shapes() {
+        let (api_root, server) = catalog_server(vec![
+            (
+                "/v3/assets/latest/21/hotspot?",
+                200,
+                r#"[{"binary":{"package":{"checksum":"latest","link":"https://example.test/latest.tar.gz","name":"latest.tar.gz"}},"release_name":"jdk-21.0.12.1+1","version":{"major":21}}]"#,
+            ),
+            (
+                "/v3/assets/version/8u504-b01?",
+                200,
+                r#"[{"binaries":[{"package":{"checksum":"exact","link":"https://example.test/exact.tar.gz","name":"exact.tar.gz"}}],"release_name":"jdk8u504-b01","version_data":{"major":8}}]"#,
+            ),
+        ]);
+        let cache = tempfile::tempdir().expect("cache");
+        let manager = ToolchainManager::with_api_root(cache.path(), &api_root).expect("manager");
+
+        let latest = manager
+            .resolve_asset(&ToolchainRequest {
+                version: "21".to_owned(),
+                vendor: "temurin".to_owned(),
+            })
+            .await
+            .expect("latest asset");
+        let exact = manager
+            .resolve_asset(&ToolchainRequest {
+                version: "8u504-b01".to_owned(),
+                vendor: "temurin".to_owned(),
+            })
+            .await
+            .expect("exact asset");
+
+        assert_eq!((latest.version.as_str(), latest.major), ("21.0.12.1+1", 21));
+        assert_eq!((exact.version.as_str(), exact.major), ("8u504-b01", 8));
+        server.join().expect("asset server");
     }
 
     #[tokio::test]
@@ -765,5 +1109,33 @@ mod tests {
         .await
         .expect("metadata file");
         home
+    }
+
+    fn catalog_server(
+        responses: Vec<(&'static str, u16, &'static str)>,
+    ) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("catalog listener");
+        let address = listener.local_addr().expect("catalog address");
+        let server = thread::spawn(move || {
+            for (expected_path, status, body) in responses {
+                let (mut connection, _) = listener.accept().expect("catalog connection");
+                let mut request = [0_u8; 4096];
+                let read = connection.read(&mut request).expect("catalog request");
+                let request = String::from_utf8_lossy(&request[..read]);
+                assert!(request.starts_with("GET "));
+                assert!(
+                    request.contains(expected_path),
+                    "unexpected request: {request}"
+                );
+                let reason = if status == 200 { "OK" } else { "Not Found" };
+                write!(
+                    connection,
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .expect("catalog response");
+            }
+        });
+        (format!("http://{address}/v3"), server)
     }
 }

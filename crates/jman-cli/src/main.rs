@@ -262,14 +262,27 @@ struct Java {
 enum JavaCommand {
     /// Download and install a verified Temurin JDK.
     Install(JavaVersion),
-    /// List JDKs installed by JMAN.
-    List,
+    /// List installed and remotely available JDKs.
+    List(JavaList),
     /// Remove a JDK installed by JMAN.
     Remove(JavaRemove),
     /// Pin this project to a JDK version.
     Use(JavaUse),
     /// Print the managed JDK selected for this project.
     Which(ProjectPath),
+}
+
+#[derive(Debug, Args)]
+struct JavaList {
+    /// List only JDKs installed by JMAN without contacting the remote catalog.
+    #[arg(long)]
+    local: bool,
+    /// List only versions from this Java feature release.
+    #[arg(long)]
+    major: Option<u16>,
+    /// List only long-term-support releases.
+    #[arg(long)]
+    lts: bool,
 }
 
 #[derive(Debug, Args)]
@@ -887,7 +900,7 @@ async fn java_command(arguments: Java, ui: &Ui) -> Result<()> {
                 jdk.home.display()
             ));
         }
-        JavaCommand::List => list_java(&manager).await?,
+        JavaCommand::List(arguments) => list_java(&manager, arguments).await?,
         JavaCommand::Remove(arguments) => remove_java(&manager, arguments, ui).await?,
         JavaCommand::Use(arguments) => {
             let target = absolute_path(&arguments.path)?;
@@ -935,19 +948,79 @@ async fn java_command(arguments: Java, ui: &Ui) -> Result<()> {
     Ok(())
 }
 
-async fn list_java(manager: &jman_build::toolchain::ToolchainManager) -> Result<()> {
-    let jdks = manager.list().await?;
-    if jdks.is_empty() {
-        println!("No JMAN-managed JDKs installed.");
+async fn list_java(
+    manager: &jman_build::toolchain::ToolchainManager,
+    arguments: JavaList,
+) -> Result<()> {
+    let installed = manager
+        .list()
+        .await?
+        .into_iter()
+        .filter(|jdk| arguments.major.is_none_or(|major| jdk.major == major))
+        .filter(|jdk| !arguments.lts || jman_build::toolchain::is_lts_major(jdk.major))
+        .collect::<Vec<_>>();
+
+    if arguments.local {
+        if installed.is_empty() {
+            println!("No matching JMAN-managed JDKs installed.");
+        } else {
+            for jdk in installed {
+                println!(
+                    "{} {} {}-{} {}",
+                    jdk.vendor,
+                    jdk.version,
+                    jdk.os,
+                    jdk.architecture,
+                    jdk.home.display()
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    println!("Installed:");
+    if installed.is_empty() {
+        println!("  none");
     } else {
-        for jdk in jdks {
+        for jdk in &installed {
+            let lts = if jman_build::toolchain::is_lts_major(jdk.major) {
+                " LTS"
+            } else {
+                ""
+            };
             println!(
-                "{} {} {}-{} {}",
+                "  {} {} {}-{}{} {}",
                 jdk.vendor,
                 jdk.version,
                 jdk.os,
                 jdk.architecture,
+                lts,
                 jdk.home.display()
+            );
+        }
+    }
+
+    let installed_versions = installed
+        .iter()
+        .map(|jdk| (jdk.vendor.as_str(), jdk.version.as_str()))
+        .collect::<std::collections::HashSet<_>>();
+    let available = manager
+        .available(arguments.major, arguments.lts)
+        .await
+        .context("could not load remote JDK catalog; use `jman java list --local` to list installed JDKs only")?
+        .into_iter()
+        .filter(|jdk| !installed_versions.contains(&(jdk.vendor.as_str(), jdk.version.as_str())))
+        .collect::<Vec<_>>();
+
+    println!("Available:");
+    if available.is_empty() {
+        println!("  none");
+    } else {
+        for jdk in available {
+            let lts = if jdk.lts { " LTS" } else { "" };
+            println!(
+                "  {} {} {}-{}{}",
+                jdk.vendor, jdk.version, jdk.os, jdk.architecture, lts
             );
         }
     }
@@ -2572,6 +2645,23 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    #[test]
+    fn java_list_accepts_local_major_and_lts_filters() {
+        let cli =
+            Cli::try_parse_from(["jman", "java", "list", "--local", "--major", "21", "--lts"])
+                .expect("java list arguments");
+
+        let Command::Java(Java {
+            command: JavaCommand::List(arguments),
+        }) = cli.command
+        else {
+            panic!("expected java list command");
+        };
+        assert!(arguments.local);
+        assert_eq!(arguments.major, Some(21));
+        assert!(arguments.lts);
+    }
 
     #[test]
     fn workspace_manifest_and_lock_use_distinct_staging_paths() {
