@@ -1,0 +1,26 @@
+[package]
+name = "jman-build"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+futures.workspace = true
+flate2.workspace = true
+fs2.workspace = true
+hex.workspace = true
+jman-config = { path = "../jman-config" }
+reqwest.workspace = true
+roxmltree.workspace = true
+serde.workspace = true
+serde_json = "1.0"
+sha2.workspace = true
+tar.workspace = true
+thiserror.workspace = true
+tempfile = "3.0"
+tokio.workspace = true
+zip.workspace = true
+
+[lints]
+workspace = true

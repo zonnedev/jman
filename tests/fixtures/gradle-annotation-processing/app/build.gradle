@@ -1,0 +1,24 @@
+plugins {
+  id "java"
+}
+
+sourceSets {
+  integrationTest
+  processorTest
+}
+
+dependencies {
+  compileOnly project(":processor")
+  annotationProcessor project(":processor")
+  compileOnly "org.projectlombok:lombok:1.18.46"
+  annotationProcessor "org.projectlombok:lombok:1.18.46"
+  implementation "org.mapstruct:mapstruct:1.6.3"
+  annotationProcessor "org.mapstruct:mapstruct-processor:1.6.3"
+  integrationTestAnnotationProcessor "io.github.zonnedev.jman.tests:deliberately-missing:"
+  processorTestCompileOnly project(":processor")
+  processorTestAnnotationProcessor project(":processor")
+}
+
+tasks.withType(JavaCompile).configureEach {
+  options.compilerArgs += ["-Agreeting.mode=strict"]
+}

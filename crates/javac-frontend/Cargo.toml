@@ -1,0 +1,28 @@
+[package]
+name = "javac-frontend"
+version.workspace = true
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.97"
+
+[features]
+default = []
+native-ffi = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[lib]
+path = "src/lib.rs"
+
+[[example]]
+name = "semantic_probe"
+required-features = ["native-ffi"]
+
+[[example]]
+name = "navigation_probe"
+required-features = ["native-ffi"]
+
+[[example]]
+name = "module_semantic_probe"
+required-features = ["native-ffi"]

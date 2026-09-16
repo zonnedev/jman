@@ -1,0 +1,32 @@
+[package]
+name = "jman-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "jman"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+dirs.workspace = true
+futures.workspace = true
+hex.workspace = true
+indicatif.workspace = true
+jman-build = { path = "../jman-build" }
+jman-config = { path = "../jman-config" }
+jman-resolver = { path = "../jman-resolver" }
+jman-java-lsp = { path = "../jman-java-lsp", features = ["native-ffi"] }
+serde.workspace = true
+serde_json = "1.0"
+sha2.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3.0"
+
+[lints]
+workspace = true

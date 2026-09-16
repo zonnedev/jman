@@ -1,0 +1,3 @@
+rootProject.name = "annotation-processing-fixture"
+include("processor", "app")
+

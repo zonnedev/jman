@@ -1,0 +1,138 @@
+import groovy.json.JsonOutput
+import org.gradle.api.plugins.JavaPluginExtension
+import org.gradle.api.tasks.compile.JavaCompile
+
+def resolvePaths = { files, component, errors ->
+  if (files == null) {
+    return []
+  }
+  try {
+    return files.files.collect { it.absolutePath }.sort()
+  } catch (Exception failure) {
+    errors.add([
+      component: component,
+      message: failure.message ?: failure.class.name,
+    ])
+    return []
+  }
+}
+
+allprojects { project ->
+  def modelTask = tasks.register("javaFrontendModel") {
+    group = "java frontend"
+    description = "Emits the configured Java compile model as newline-delimited JSON."
+
+    doLast {
+      project.tasks.withType(JavaCompile).sort { it.path }.each { compileTask ->
+        def options = compileTask.options
+        def compilerArgs = options.compilerArgs.collect { it.toString() }
+        def processorPath = options.annotationProcessorPath
+        def generatedSources = options.generatedSourceOutputDirectory.orNull
+        def javaExtension = project.extensions.findByType(JavaPluginExtension)
+        def requestedLanguageVersion = javaExtension?.toolchain?.languageVersion?.orNull
+        def sourceSet =
+            javaExtension?.sourceSets?.find { it.compileJavaTaskName == compileTask.name }
+        def sourceRoots =
+            sourceSet == null
+                ? []
+                : sourceSet.java.srcDirs.collect { it.absolutePath }.sort()
+        def compileConfiguration =
+            sourceSet == null
+                ? null
+                : project.configurations.findByName(sourceSet.compileClasspathConfigurationName)
+        def projectDependencies =
+            compileConfiguration == null
+                ? []
+                : compileConfiguration.allDependencies
+                    .findAll { it instanceof org.gradle.api.artifacts.ProjectDependency }
+                    .collect { it.path }
+                    .unique()
+                    .sort()
+        def processorOptions = []
+        for (int argumentIndex = 0; argumentIndex < compilerArgs.size(); argumentIndex++) {
+          def argument = compilerArgs[argumentIndex]
+          if (argument.startsWith("-A") || argument.startsWith("-processor=")) {
+            processorOptions.add(argument)
+          } else if (argument == "-processor" && argumentIndex + 1 < compilerArgs.size()) {
+            processorOptions.add(argument)
+            processorOptions.add(compilerArgs[++argumentIndex])
+          }
+        }
+        def generatedDirectories =
+            generatedSources == null ? [] : [generatedSources.asFile.absolutePath]
+        def resolutionErrors = []
+        def classpath = resolvePaths(
+            compileTask.classpath,
+            "classpath",
+            resolutionErrors)
+        def mainModuleInfo = new File(project.projectDir, "src/main/java/module-info.java")
+        def sourceModuleInfo =
+            compileTask.source.files.find { it.name == "module-info.java" }
+        def modularCompilation = sourceModuleInfo != null || mainModuleInfo.isFile()
+        def mainOutputDirectories =
+            javaExtension?.sourceSets?.findByName("main")?.output?.classesDirs?.files
+                ?.collect { it.absolutePath } ?: []
+        def modulePath = []
+        if (modularCompilation) {
+          modulePath = classpath.findAll { path ->
+            def entry = new File(path)
+            entry.name.endsWith(".jar") ||
+                (entry.isDirectory() && new File(entry, "module-info.class").isFile()) ||
+                mainOutputDirectories.contains(path)
+          }
+          classpath = classpath.findAll { !modulePath.contains(it) }
+        }
+        def annotationProcessorPath = resolvePaths(
+            processorPath,
+            "annotationProcessorPath",
+            resolutionErrors)
+
+        def model = [
+          schemaVersion: 2,
+          buildSystem: "gradle",
+          projectPath: project.path,
+          projectDirectory: project.projectDir.absolutePath,
+          taskPath: compileTask.path,
+          sourceFiles: compileTask.source.files.collect { it.absolutePath }.sort(),
+          sourceRoots: sourceRoots,
+          classpath: classpath,
+          modulePath: modulePath,
+          projectDependencies: projectDependencies,
+          annotationProcessorPath: annotationProcessorPath,
+          annotationProcessorOptions: processorOptions,
+          compilerArgs: compilerArgs,
+          release: options.release.orNull,
+          encoding: options.encoding,
+          generatedSourcesDirectory:
+              generatedSources == null ? null : generatedSources.asFile.absolutePath,
+          generatedSourceDirectories: generatedDirectories,
+          destinationDirectory: compileTask.destinationDirectory.get().asFile.absolutePath,
+          javaCompilerExecutable: null,
+          javaLanguageVersion:
+              requestedLanguageVersion == null
+                  ? javaExtension?.sourceCompatibility?.majorVersion?.toInteger()
+                  : requestedLanguageVersion.asInt(),
+          resolutionErrors: resolutionErrors,
+        ]
+        println("JAVAC_FRONTEND_MODEL " + JsonOutput.toJson(model))
+      }
+    }
+  }
+}
+
+gradle.projectsEvaluated {
+  allprojects { project ->
+    def modelTask = project.tasks.named("javaFrontendModel")
+    def processorTasks = project.tasks.withType(JavaCompile)
+        .findAll { compileTask -> compileTask.name == "compileJava" }
+        .collectMany { compileTask ->
+          def processorPath = compileTask.options.annotationProcessorPath
+          processorPath == null
+              ? []
+              : processorPath.buildDependencies.getDependencies(compileTask).toList()
+    }.unique()
+    modelTask.configure {
+      dependsOn(processorTasks)
+    }
+  }
+}

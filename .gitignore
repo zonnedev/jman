@@ -1,0 +1,7 @@
+/target/
+/editors/vscode/node_modules/
+/editors/vscode/dist/
+/editors/vscode/server/
+/.jman/
+__pycache__/
+.local/

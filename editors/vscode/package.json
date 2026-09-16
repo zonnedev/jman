@@ -1,0 +1,130 @@
+{
+  "name": "jman-java",
+  "displayName": "JMAN Java",
+  "description": "JMAN's Rust and GraalVM Java language server",
+  "version": "0.1.6",
+  "publisher": "zonnedev",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zonnedev/jman.git"
+  },
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:java",
+    "onCommand:jmanJava.showStatus",
+    "onCommand:jmanJava.syncWorkspace",
+    "onCommand:jmanJava.check",
+    "onCommand:jmanJava.build",
+    "onCommand:jmanJava.run",
+    "onCommand:jmanJava.test",
+    "onCommand:jmanJava.restart",
+    "onCommand:jmanJava.changeSignature",
+    "onCommand:jmanJava.rebuildIndex",
+    "onCommand:jmanJava.clearWorkspaceCache"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "jmanJava.showStatus",
+        "title": "JMAN Java: Show Status"
+      },
+      {
+        "command": "jmanJava.restart",
+        "title": "JMAN Java: Restart Server"
+      },
+      {
+        "command": "jmanJava.syncWorkspace",
+        "title": "JMAN Java: Sync Workspace"
+      },
+      {
+        "command": "jmanJava.check",
+        "title": "JMAN Java: Check Project"
+      },
+      {
+        "command": "jmanJava.build",
+        "title": "JMAN Java: Build Project"
+      },
+      {
+        "command": "jmanJava.run",
+        "title": "JMAN Java: Run Application"
+      },
+      {
+        "command": "jmanJava.test",
+        "title": "JMAN Java: Run All Tests"
+      },
+      {
+        "command": "jmanJava.changeSignature",
+        "title": "JMAN Java: Change Method Signature"
+      },
+      {
+        "command": "jmanJava.rebuildIndex",
+        "title": "JMAN Java: Rebuild Project Index"
+      },
+      {
+        "command": "jmanJava.clearWorkspaceCache",
+        "title": "JMAN Java: Clear Workspace Cache"
+      }
+    ],
+    "configuration": {
+      "title": "JMAN Java",
+      "properties": {
+        "jman.java.server.path": {
+          "type": "string",
+          "default": "",
+          "description": "Optional absolute path to the jman executable. The extension starts it with the lsp subcommand."
+        },
+        "jman.java.javaHome": {
+          "type": "string",
+          "default": "",
+          "description": "Java 25 GraalVM home used by the native compiler frontend."
+        },
+        "jman.java.buildSystem": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "jman",
+            "gradle",
+            "maven"
+          ],
+          "default": "auto",
+          "description": "Workspace model to use. Auto prefers JMAN when jman.toml is present, then detects Gradle or Maven."
+        },
+        "jman.java.buildSync": {
+          "type": "string",
+          "enum": [
+            "manual",
+            "prompt",
+            "automatic"
+          ],
+          "default": "prompt",
+          "description": "How JMAN, Maven, or Gradle project synchronization is triggered after build files change."
+        },
+        "jman.java.server.extraEnv": {
+          "type": "object",
+          "default": {},
+          "description": "Additional environment variables passed to the language server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "check": "node --check extension.js && node test/extension.test.js",
+    "bundle": "esbuild extension.js --bundle --platform=node --external:vscode --outfile=dist/extension.js",
+    "package": "npm run bundle && vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^10.1.0",
+    "xml2js": "^0.6.2"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.28.1"
+  }
+}
