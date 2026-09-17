@@ -12,6 +12,7 @@ use std::{
 use crate::{
     AnalysisBackend, CacheStatus, CompileModel, JpmsCatalog, ProcessorRequest, ProcessorWorker,
     SourceMetadata,
+    build_runtime::BuildRuntime,
     cache::{FileLock, cache_root, directory_size, project_cache_directory, stable_project_id},
     file_uri_to_path, load_project, select_compile_model,
 };
@@ -153,6 +154,16 @@ impl NativeBackend {
             return;
         };
         self.cache_status.bytes = directory_size(&project_cache_directory(root));
+    }
+
+    fn record_build_runtime(&mut self, runtime: Option<&BuildRuntime>) {
+        self.cache_status.build_tool_version =
+            runtime.and_then(|runtime| runtime.build_tool_version.clone());
+        self.cache_status.build_java_home =
+            runtime.map(|runtime| runtime.java_home.to_string_lossy().into_owned());
+        self.cache_status.build_java_version = runtime.map(|runtime| runtime.java_version.clone());
+        self.cache_status.build_java_major = runtime.map(|runtime| runtime.java_major);
+        self.cache_status.build_java_source = runtime.map(|runtime| runtime.source.to_owned());
     }
 
     pub(crate) fn defer_semantic_refinement(&self) -> bool {
@@ -2097,6 +2108,7 @@ impl AnalysisBackend for NativeBackend {
                 .into_owned(),
             ..CacheStatus::default()
         };
+        self.record_build_runtime(loaded.build_runtime.as_ref());
         self.root = Some(root);
         self.preferred_build_system = preference.map(str::to_owned);
         self.models = loaded.models;
@@ -2244,6 +2256,7 @@ impl AnalysisBackend for NativeBackend {
             .as_ref()
             .ok_or_else(|| "project has not been initialized".to_owned())?;
         let loaded = load_project(root, self.preferred_build_system.as_deref())?;
+        let build_runtime = loaded.build_runtime.clone();
         let previous: HashMap<_, _> = self
             .models
             .iter()
@@ -2280,6 +2293,7 @@ impl AnalysisBackend for NativeBackend {
                 .and_then(|path| select_compile_model(&previous_models, &path))
                 .is_some_and(|model| !changed.contains(&compile_model_key(model)))
         });
+        self.record_build_runtime(build_runtime.as_ref());
         Ok(true)
     }
 
@@ -2309,7 +2323,9 @@ impl AnalysisBackend for NativeBackend {
             .clone()
             .ok_or_else(|| "project has not been initialized".to_owned())?;
         let loaded = load_project(&root, self.preferred_build_system.as_deref())?;
+        let build_runtime = loaded.build_runtime.clone();
         self.models = loaded.models;
+        self.record_build_runtime(build_runtime.as_ref());
         for path in [structural_cache_path(&root), semantic_cache_path(&root)] {
             if path.is_file() {
                 std::fs::remove_file(&path)

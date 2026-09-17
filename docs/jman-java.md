@@ -276,6 +276,11 @@ contains both. Disable other Java language servers for the workspace during
 the first comparison. The **JMAN Java** output channel contains server
 startup and protocol failures.
 
+Gradle imports select a compatible installed JDK from the wrapper version,
+project daemon criteria, JMAN-managed installations, SDKMAN installations, and
+the environment. Set `jman.java.buildJavaHome` only when an explicit build-tool
+runtime is required. JMAN does not download a JDK during project import.
+
 Real-project import tests default to the read-only fixtures under
 `/home/jfsanchez/zonnedev/tmp/test`. Override them with environment variables
 when needed.

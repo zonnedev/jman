@@ -82,7 +82,14 @@ async function main() {
       if (params.command === "jman.java.status") {
         return {
           protocolVersion: 1,
-          workspace: { buildSystem: "jman", nativeOperations: true },
+          workspace: {
+            buildSystem: "jman",
+            nativeOperations: true,
+            buildRuntime: {
+              buildToolVersion: "8.7",
+              javaMajor: 21,
+            },
+          },
           indexedDocuments: 12,
           semanticDocuments: 10,
           openDocuments: 2,
@@ -149,9 +156,12 @@ async function main() {
             const values = {
               "server.path": "/extension/server/jman",
               javaHome: "/graalvm",
+              buildJavaHome: "/build-jdk",
               buildSystem: "auto",
               buildSync: "prompt",
-              "server.extraEnv": {},
+              "server.extraEnv": {
+                JAVA_LSP_BUILD_JAVA_HOME: "/legacy-build-jdk",
+              },
             };
             return values[key] ?? fallback;
           },
@@ -265,6 +275,11 @@ async function main() {
   assert.deepEqual(outputChannelOptions, { log: true });
   assert.equal(serverOptions.command, "/extension/server/jman");
   assert.deepEqual(serverOptions.args, ["lsp"]);
+  assert.equal(serverOptions.options.env.JAVA_HOME, "/graalvm");
+  assert.equal(
+    serverOptions.options.env.JAVA_LSP_BUILD_JAVA_HOME,
+    "/build-jdk",
+  );
   assert(watcherPatterns.includes("**/jman.toml"));
   assert(watcherPatterns.includes("**/jman.lock"));
   assert.equal(clientOptions.outputChannel, logChannel);
@@ -436,6 +451,7 @@ async function main() {
   assert.match(shownMessage, /11\/12 structural hits/);
   assert.match(shownMessage, /9\/10 semantic hits/);
   assert.match(shownMessage, /4 KiB/);
+  assert.match(shownMessage, /Gradle 8\.7 on Java 21/);
   await notifications.get("jman.java/buildSyncStatus")({
     state: "required",
     pendingChanges: 2,

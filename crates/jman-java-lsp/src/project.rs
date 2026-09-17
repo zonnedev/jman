@@ -5,6 +5,8 @@ use jman_config::{Lockfile, Manifest};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::build_runtime::{BuildRuntime, select_gradle_runtime};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuildTool {
     Jman { root: PathBuf },
@@ -16,6 +18,7 @@ pub enum BuildTool {
 pub struct LoadedProject {
     pub tool: BuildTool,
     pub models: Vec<CompileModel>,
+    pub build_runtime: Option<BuildRuntime>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -194,7 +197,11 @@ pub fn load_project(
         .ok_or_else(|| "no JMAN, Maven, or Gradle build was detected".to_owned())?;
     if matches!(tool, BuildTool::Jman { .. }) {
         let models = load_jman_models(root)?;
-        return Ok(LoadedProject { tool, models });
+        return Ok(LoadedProject {
+            tool,
+            models,
+            build_runtime: None,
+        });
     }
     let cache = model_cache_path(root, &tool);
     if let Some(parent) = cache.parent() {
@@ -202,7 +209,7 @@ pub fn load_project(
             .map_err(|error| format!("cannot create model cache: {error}"))?;
     }
     let _lock = crate::cache::FileLock::acquire(&cache)?;
-    import_project(&tool, root, &cache)?;
+    let build_runtime = import_project(&tool, root, &cache)?;
     let encoded = std::fs::read_to_string(&cache)
         .map_err(|error| format!("cannot read {}: {error}", cache.display()))?;
     let mut models = parse_models(&encoded)
@@ -220,7 +227,11 @@ pub fn load_project(
             "partialUnits": models.iter().filter(|model| !model.resolution_errors.is_empty()).count()
         }),
     );
-    Ok(LoadedProject { tool, models })
+    Ok(LoadedProject {
+        tool,
+        models,
+        build_runtime,
+    })
 }
 
 fn retain_usable_model_paths(models: &mut [CompileModel]) {
@@ -242,15 +253,29 @@ fn retain_usable_model_paths(models: &mut [CompileModel]) {
     }
 }
 
-fn import_project(tool: &BuildTool, root: &Path, cache: &Path) -> Result<(), String> {
+fn import_project(
+    tool: &BuildTool,
+    root: &Path,
+    cache: &Path,
+) -> Result<Option<BuildRuntime>, String> {
     // The language server owns stdout: every byte written there must be an LSP
     // frame. Capture build-tool output so Maven/Gradle diagnostics can never
     // corrupt the JSON-RPC transport.
     let temporary = cache.with_extension(format!("ndjson.{}.tmp", std::process::id()));
-    let result = match tool {
+    let build_runtime = match tool {
+        BuildTool::Gradle { .. } => select_gradle_runtime(root),
+        BuildTool::Maven { .. } => Ok(None),
         BuildTool::Jman { .. } => unreachable!("JMAN models do not use an external importer"),
-        BuildTool::Gradle { executable, .. } => import_gradle(executable, root, &temporary),
-        BuildTool::Maven { executable, .. } => import_maven(executable, root, &temporary),
+    };
+    let result = match (tool, &build_runtime) {
+        (BuildTool::Jman { .. }, _) => {
+            unreachable!("JMAN models do not use an external importer")
+        }
+        (BuildTool::Gradle { executable, .. }, Ok(runtime)) => {
+            import_gradle(executable, root, &temporary, runtime.as_ref())
+        }
+        (BuildTool::Gradle { .. }, Err(error)) => Err(error.clone()),
+        (BuildTool::Maven { executable, .. }, _) => import_maven(executable, root, &temporary),
     };
     if result.is_ok() {
         let encoded = std::fs::read_to_string(&temporary)
@@ -262,7 +287,7 @@ fn import_project(tool: &BuildTool, root: &Path, cache: &Path) -> Result<(), Str
         }
         std::fs::rename(&temporary, cache)
             .map_err(|error| format!("cannot publish build model: {error}"))?;
-        return Ok(());
+        return Ok(build_runtime.ok().flatten());
     }
     let _ = std::fs::remove_file(&temporary);
     let diagnostic = result.unwrap_err();
@@ -282,12 +307,17 @@ fn import_project(tool: &BuildTool, root: &Path, cache: &Path) -> Result<(), Str
                 "diagnostic": diagnostic.trim()
             }),
         );
-        return Ok(());
+        return Ok(build_runtime.ok().flatten());
     }
     Err(diagnostic)
 }
 
-fn import_gradle(executable: &Path, root: &Path, output: &Path) -> Result<(), String> {
+fn import_gradle(
+    executable: &Path,
+    root: &Path,
+    output: &Path,
+    runtime: Option<&BuildRuntime>,
+) -> Result<(), String> {
     let support = support_directory();
     let init_script = support.join("tools/gradle-importer/javac-frontend-model.init.gradle");
     if !init_script.is_file() {
@@ -310,7 +340,10 @@ fn import_gradle(executable: &Path, root: &Path, output: &Path) -> Result<(), St
         .args(["--console=plain", "--no-configuration-cache", "-I"])
         .arg(&init_script)
         .arg("javaFrontendModel");
-    configure_build_java(&mut command, "25.0.4-graal");
+    if let Some(runtime) = runtime {
+        configure_java_home(&mut command, &runtime.java_home);
+        eprintln!("jman-java-lsp build import: {}", runtime.summary());
+    }
     let process = captured_output(&mut command, "Gradle model import")?;
     let model = process
         .lines()
@@ -458,7 +491,11 @@ fn configure_build_java(command: &mut Command, default_sdkman_candidate: &str) {
     let Some(java_home) = build_java_home(default_sdkman_candidate) else {
         return;
     };
-    command.env("JAVA_HOME", &java_home);
+    configure_java_home(command, &java_home);
+}
+
+fn configure_java_home(command: &mut Command, java_home: &Path) {
+    command.env("JAVA_HOME", java_home);
     let mut paths = vec![java_home.join("bin")];
     if let Some(current) = std::env::var_os("PATH") {
         paths.extend(std::env::split_paths(&current));
@@ -905,6 +942,53 @@ processors = []
                 .unwrap()
                 .len(),
             1
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn gradle_import_receives_the_selected_build_java_home() {
+        let root =
+            std::env::temp_dir().join(format!("jman-java-importer-runtime-{}", std::process::id()));
+        let java_home = root.join("jdk-21");
+        std::fs::create_dir_all(java_home.join("bin")).unwrap();
+        std::fs::write(java_home.join("bin/java"), "runtime").unwrap();
+        std::fs::write(java_home.join("release"), "JAVA_VERSION=\"21.0.2\"\n").unwrap();
+        std::fs::create_dir_all(root.join("gradle/wrapper")).unwrap();
+        std::fs::write(
+            root.join("gradle/wrapper/gradle-wrapper.properties"),
+            "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.7-bin.zip\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("gradle.properties"),
+            format!("org.gradle.java.home={}\n", java_home.display()),
+        )
+        .unwrap();
+        let script = root.join("gradlew");
+        let cache = root.join("model.ndjson");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nprintf '%s' \"$JAVA_HOME\" > \"$PWD/selected-java-home\"\nprintf '%s\\n' 'JAVAC_FRONTEND_MODEL {\"schemaVersion\":2,\"buildSystem\":\"gradle\",\"projectPath\":\":app\",\"projectDirectory\":\"/work/app\",\"taskPath\":\":app:compileJava\",\"sourceFiles\":[],\"sourceRoots\":[],\"classpath\":[],\"annotationProcessorPath\":[],\"compilerArgs\":[],\"release\":21,\"encoding\":\"UTF-8\",\"generatedSourcesDirectory\":null,\"destinationDirectory\":null,\"javaCompilerExecutable\":null,\"javaLanguageVersion\":21}'\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script, permissions).unwrap();
+
+        let tool = BuildTool::Gradle {
+            root: root.clone(),
+            executable: script,
+        };
+        let runtime = import_project(&tool, &root, &cache)
+            .expect("Gradle import")
+            .expect("selected runtime");
+
+        assert_eq!(runtime.java_major, 21);
+        assert_eq!(runtime.build_tool_version.as_deref(), Some("8.7"));
+        assert_eq!(
+            std::fs::read_to_string(root.join("selected-java-home")).unwrap(),
+            java_home.to_string_lossy()
         );
         std::fs::remove_dir_all(root).unwrap();
     }

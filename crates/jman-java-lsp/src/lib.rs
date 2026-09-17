@@ -2,6 +2,7 @@
 
 #[cfg(feature = "native-ffi")]
 mod async_native_backend;
+mod build_runtime;
 mod cache;
 mod documents;
 mod metrics;

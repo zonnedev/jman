@@ -121,6 +121,11 @@
           "default": "",
           "description": "Java 25 GraalVM home used by the native compiler frontend."
         },
+        "jman.java.buildJavaHome": {
+          "type": "string",
+          "default": "",
+          "description": "Optional JDK home used to run Maven or Gradle. When empty, Gradle imports select an installed runtime compatible with the project wrapper."
+        },
         "jman.java.buildSystem": {
           "type": "string",
           "enum": [

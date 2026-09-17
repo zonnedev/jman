@@ -38,6 +38,10 @@ for (const [name, property] of Object.entries(manifest.contributes.configuration
   assert.ok(name.startsWith("jman.java."), `unexpected setting namespace: ${name}`);
   assert.ok(property.description, `setting has no description: ${name}`);
 }
+assert.equal(
+  manifest.contributes.configuration.properties["jman.java.buildJavaHome"].default,
+  "",
+);
 
 assert.equal(
   manifest.scripts.package,

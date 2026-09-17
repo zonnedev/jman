@@ -13,6 +13,7 @@ java_homes=(
   "/home/jfsanchez/.sdkman/candidates/java/25-open"
 )
 gradle_bins=(
+  "${JAVA_LSP_MATRIX_GRADLE_8_7:-/home/jfsanchez/.sdkman/candidates/gradle/8.7/bin/gradle}"
   "/home/jfsanchez/.sdkman/candidates/gradle/8.14.1/bin/gradle"
   "/home/jfsanchez/.sdkman/candidates/gradle/9.1.0/bin/gradle"
 )
@@ -38,9 +39,16 @@ done
 
 for gradle_bin in "${gradle_bins[@]}"; do
   test -x "${gradle_bin}"
-  gradle_version="$("${gradle_bin}" --version | sed -n 's/^Gradle //p')"
+  gradle_version="$(
+    JAVA_HOME="${java_homes[1]}" \
+    PATH="${java_homes[1]}/bin:${PATH}" \
+      "${gradle_bin}" --version | sed -n 's/^Gradle //p'
+  )"
   for java_home in "${java_homes[@]}"; do
     release="$("${java_home}/bin/java" -version 2>&1 | sed -n '1s/.*version "\([0-9][0-9]*\).*/\1/p')"
+    if [[ "${release}" == 25 && "${gradle_version}" != 9.1.0 ]]; then
+      continue
+    fi
     output="${matrix_dir}/gradle-${gradle_version}-jdk-${release}.ndjson"
     JAVA_LSP_GRADLE="${gradle_bin}" \
     JAVA_LSP_BUILD_JAVA_HOME="${java_home}" \
@@ -48,6 +56,7 @@ for gradle_bin in "${gradle_bins[@]}"; do
     jq -e '
       select(.projectPath == ":" and .taskPath == ":compileJava")
       | .javaLanguageVersion == 17
+        and (.projectDependencies | index(":model") != null)
         and (.sourceFiles | any(endswith("/module-info.java")))
         and (.modulePath | type == "array")
         and (.resolutionErrors | length == 0)
@@ -55,4 +64,4 @@ for gradle_bin in "${gradle_bins[@]}"; do
   done
 done
 
-echo "Compatibility matrix passed: Maven 3.9.9 and Gradle 8.14.1/9.1.0 on JDK 17/21/25"
+echo "Compatibility matrix passed: Maven 3.9.9 and Gradle 8.7/8.14.1/9.1.0 on their supported JDK 17/21/25 cells"

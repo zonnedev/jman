@@ -56,8 +56,8 @@ Every release candidate must satisfy all of the following from a clean tree:
 1. `make gates` passes, including Rust, Java, native frontend, importer, real
    semantics, LSP subprocess, VS Code, and Neovim tests.
 2. `cargo fmt --all -- --check` and strict workspace Clippy pass.
-3. `make test-compatibility-matrix` passes against Maven 3.9.9, Gradle 8.14.1
-   and 9.1.0, and JDK 17, 21, and 25.
+3. `make test-compatibility-matrix` passes against Maven 3.9.9, Gradle 8.7,
+   8.14.1 and 9.1.0, and their supported JDK 17, 21, and 25 cells.
 4. `cargo build --release --workspace` and `make release` succeed.
 5. Declared resolver fixtures have exact normalized dependency-graph agreement;
    deterministic Java build and packaging tests are byte-for-byte stable.

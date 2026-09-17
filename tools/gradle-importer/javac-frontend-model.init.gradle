@@ -17,6 +17,15 @@ def resolvePaths = { files, component, errors ->
   }
 }
 
+def projectDependencyPath = { dependency ->
+  // ProjectDependency.getPath() was added in Gradle 8.11. Older supported
+  // wrappers expose the target through the deprecated dependencyProject API.
+  if (!dependency.metaClass.respondsTo(dependency, "getPath").isEmpty()) {
+    return dependency.path
+  }
+  return dependency.dependencyProject.path
+}
+
 allprojects { project ->
   def modelTask = tasks.register("javaFrontendModel") {
     group = "java frontend"
@@ -45,7 +54,7 @@ allprojects { project ->
                 ? []
                 : compileConfiguration.allDependencies
                     .findAll { it instanceof org.gradle.api.artifacts.ProjectDependency }
-                    .collect { it.path }
+                    .collect { projectDependencyPath(it) }
                     .unique()
                     .sort()
         def processorOptions = []

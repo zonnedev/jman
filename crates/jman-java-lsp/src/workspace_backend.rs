@@ -219,6 +219,7 @@ impl AnalysisBackend for WorkspaceBackend {
             .iter()
             .map(|workspace| workspace.backend.cache_status())
             .collect();
+        let single = (statuses.len() == 1).then(|| &statuses[0]);
         CacheStatus {
             project_id: statuses
                 .iter()
@@ -245,6 +246,11 @@ impl AnalysisBackend for WorkspaceBackend {
                 .iter()
                 .map(|status| status.indexing_milliseconds)
                 .sum(),
+            build_tool_version: single.and_then(|status| status.build_tool_version.clone()),
+            build_java_home: single.and_then(|status| status.build_java_home.clone()),
+            build_java_version: single.and_then(|status| status.build_java_version.clone()),
+            build_java_major: single.and_then(|status| status.build_java_major),
+            build_java_source: single.and_then(|status| status.build_java_source.clone()),
         }
     }
 

@@ -32,6 +32,9 @@ keeps editor analysis aligned with the project's real build model.
 
 JMAN may invoke a Maven or Gradle wrapper when importing those project types.
 The wrapper and repositories must therefore be usable from the extension host.
+For Gradle wrappers, JMAN selects the newest installed LTS JDK that the wrapper
+can run on. This build-tool runtime is independent from the Java 25 GraalVM
+used by the native compiler frontend, and JMAN never installs a JDK implicitly.
 
 ## Getting started
 
@@ -47,6 +50,7 @@ Example workspace settings:
 ```json
 {
   "jman.java.javaHome": "/path/to/graalvm-jdk-25",
+  "jman.java.buildJavaHome": "",
   "jman.java.buildSystem": "auto",
   "jman.java.buildSync": "prompt"
 }
@@ -62,6 +66,7 @@ metadata for more than one build tool.
 | --- | --- | --- |
 | `jman.java.server.path` | bundled server | Override the `jman` executable used by the extension. |
 | `jman.java.javaHome` | empty | Select the Java 25 GraalVM installation used by JMAN. |
+| `jman.java.buildJavaHome` | empty | Override the JDK used to run Maven or Gradle; empty lets Gradle select a compatible installed runtime. |
 | `jman.java.buildSystem` | `auto` | Choose `auto`, `jman`, `gradle`, or `maven`. |
 | `jman.java.buildSync` | `prompt` | Choose `manual`, `prompt`, or `automatic` synchronization. |
 | `jman.java.server.extraEnv` | `{}` | Add environment variables to the language-server process. |
@@ -111,6 +116,10 @@ Open **View → Output → JMAN Java** for server startup and protocol diagnosti
 If startup fails, verify the configured GraalVM path, confirm the project wrapper
 is executable, and run the corresponding build tool from a terminal. Use
 **JMAN Java: Show Status** to inspect synchronization and indexing failures.
+If no installed JDK can run the Gradle wrapper, install the suggested version
+with `jman java install <major>` or set `jman.java.buildJavaHome`. This setting
+changes the build-tool runtime only; Gradle still owns the project's compiler
+toolchain and target release.
 
 Report reproducible problems through [GitHub Issues](https://github.com/zonnedev/jman/issues).
 Include the JMAN Java version, VS Code version, Linux distribution, selected

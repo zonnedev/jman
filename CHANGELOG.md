@@ -3,6 +3,16 @@
 All notable changes to JMAN are documented here. The project follows Semantic
 Versioning while it approaches a stable 0.3.0 release.
 
+## [Unreleased]
+
+### Fixed
+
+- Gradle model import now separates the build-tool JVM from the Java 25 native
+  frontend runtime, honors project and editor overrides, and automatically
+  selects an installed JDK compatible with the wrapper.
+- Gradle project-dependency discovery now supports both the pre-8.11 and
+  current `ProjectDependency` APIs.
+
 ## [0.3.0-rc.1] - 2026-09-17
 
 ### Added

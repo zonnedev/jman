@@ -1,1 +1,2 @@
 rootProject.name = "compatibility-gradle"
+include("model")

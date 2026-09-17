@@ -397,12 +397,16 @@ async function activate(context) {
   const command =
     configuredPath || context.asAbsolutePath(path.join("server", "jman"));
   const javaHome = configuration.get("javaHome", "") || process.env.JAVA_HOME;
+  const buildJavaHome = configuration.get("buildJavaHome", "");
   const environment = {
     ...process.env,
     ...configuration.get("server.extraEnv", {}),
   };
   if (javaHome) {
     environment.JAVA_HOME = javaHome;
+  }
+  if (buildJavaHome) {
+    environment.JAVA_LSP_BUILD_JAVA_HOME = buildJavaHome;
   }
 
   const buildSystem = configuration.get("buildSystem", "auto");
@@ -535,13 +539,17 @@ async function activate(context) {
         structural: { hits: 0, entries: 0 },
         semantic: { hits: 0, entries: 0 },
       };
+      const runtime = result.workspace?.buildRuntime;
+      const runtimeSummary = runtime
+        ? `; Gradle ${runtime.buildToolVersion || "unknown"} on Java ${runtime.javaMajor}`
+        : "";
       const message =
         `JMAN Java ready — ${result.indexedDocuments} indexed, ` +
         `${result.semanticDocuments} semantic, ${result.openDocuments} open, ` +
         `revision ${result.structuralRevision}; cache ` +
         `${cache.structural.hits}/${cache.structural.entries} structural hits, ` +
         `${cache.semantic.hits}/${cache.semantic.entries} semantic hits, ` +
-        `${Math.round(cache.bytes / 1024)} KiB`;
+        `${Math.round(cache.bytes / 1024)} KiB${runtimeSummary}`;
       outputChannel.info(message, result);
       vscode.window.showInformationMessage(message);
     }),

@@ -25,6 +25,11 @@ pub struct CacheStatus {
     pub external_entries: usize,
     pub bytes: u64,
     pub indexing_milliseconds: u128,
+    pub build_tool_version: Option<String>,
+    pub build_java_home: Option<String>,
+    pub build_java_version: Option<String>,
+    pub build_java_major: Option<u16>,
+    pub build_java_source: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -2958,12 +2963,22 @@ impl<'backend> Server<'backend> {
             )
         });
         let native_operations = build_system.as_deref() == Some("jman");
+        let build_runtime = cache.build_java_major.map(|major| {
+            json!({
+                "buildToolVersion": cache.build_tool_version.as_deref(),
+                "javaHome": cache.build_java_home.as_deref(),
+                "javaVersion": cache.build_java_version.as_deref(),
+                "javaMajor": major,
+                "source": cache.build_java_source.as_deref()
+            })
+        });
         json!({
             "protocolVersion": 1,
             "state": "ready",
             "workspace": {
                 "buildSystem": build_system,
-                "nativeOperations": native_operations
+                "nativeOperations": native_operations,
+                "buildRuntime": build_runtime
             },
             "buildSync": {
                 "state": sync_state,
@@ -5084,6 +5099,14 @@ mod tests {
             reply(&status)["result"]["workspace"]["nativeOperations"],
             true
         );
+        assert_eq!(
+            reply(&status)["result"]["workspace"]["buildRuntime"]["javaMajor"],
+            21
+        );
+        assert_eq!(
+            reply(&status)["result"]["workspace"]["buildRuntime"]["buildToolVersion"],
+            "8.7"
+        );
 
         server.dispatch(json!({
             "jsonrpc":"2.0","id":3,"method":"workspace/executeCommand",
@@ -6615,6 +6638,11 @@ mod tests {
                 external_entries: 100,
                 bytes: 4096,
                 indexing_milliseconds: 12,
+                build_tool_version: Some("8.7".to_owned()),
+                build_java_home: Some("/jdks/21".to_owned()),
+                build_java_version: Some("21.0.2".to_owned()),
+                build_java_major: Some(21),
+                build_java_source: Some("JMAN-managed".to_owned()),
             }
         }
 
