@@ -13,6 +13,7 @@ fn main() {
     let source = PathBuf::from(&arguments[3]);
     let processor = PathBuf::from(&arguments[4]);
     let request = ProcessorRequest {
+        java_executable: PathBuf::from(&arguments[1]),
         sources: vec![source.clone()],
         source_path: source.parent().map(PathBuf::from).into_iter().collect(),
         classpath: vec![processor.clone()],

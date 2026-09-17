@@ -10,6 +10,11 @@ source_file="${project_dir}/tools/annotation-processor-worker/src/main/java/io/g
 
 rm -rf "${classes}"
 mkdir -p "${classes}"
-javac -Werror -Xlint:all -d "${classes}" "${source_file}"
+javac --release 17 -Werror -Xlint:all -d "${classes}" "${source_file}"
 jar --create --date=1980-01-01T00:00:02Z --file "${jar_file}" -C "${classes}" .
 test -s "${jar_file}"
+javap \
+  -classpath "${jar_file}" \
+  -verbose \
+  io.github.zonnedev.jman.processor.worker.ProcessorWorker \
+  | grep -q 'major version: 61'

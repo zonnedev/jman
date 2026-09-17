@@ -10,6 +10,7 @@ const PROCESSOR_PROTOCOL_VERSION: u8 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessorRequest {
+    pub java_executable: PathBuf,
     pub sources: Vec<PathBuf>,
     pub source_path: Vec<PathBuf>,
     pub classpath: Vec<PathBuf>,
@@ -159,6 +160,7 @@ impl ProcessorRequest {
     fn fingerprint(&self) -> Result<u64, String> {
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         PROCESSOR_PROTOCOL_VERSION.hash(&mut hash);
+        fingerprint_path(&self.java_executable, true, &mut hash)?;
         self.release.hash(&mut hash);
         self.processor_options.hash(&mut hash);
         self.generated_directory.hash(&mut hash);
@@ -278,6 +280,7 @@ mod tests {
     #[test]
     fn serializes_versioned_processor_requests() {
         let request = ProcessorRequest {
+            java_executable: PathBuf::from("/jdk/bin/java"),
             sources: vec![PathBuf::from("/work/App.java")],
             source_path: vec![PathBuf::from("/work/src/main/java")],
             classpath: vec![PathBuf::from("/repo/api.jar")],
@@ -304,10 +307,13 @@ mod tests {
         let source = root.join("App.java");
         let classpath = root.join("api.jar");
         let processor = root.join("processor.jar");
+        let java = root.join("java");
         std::fs::write(&source, "class App {}").unwrap();
         std::fs::write(&classpath, "api-one").unwrap();
         std::fs::write(&processor, "processor-one").unwrap();
+        std::fs::write(&java, "runtime-one").unwrap();
         let request = ProcessorRequest {
+            java_executable: java.clone(),
             sources: vec![source.clone()],
             source_path: vec![root.join("src")],
             classpath: vec![classpath.clone()],
@@ -333,6 +339,8 @@ mod tests {
         let mut changed_classes = request.clone();
         changed_classes.classes_directory = root.join("other-classes");
         assert_ne!(baseline, changed_classes.fingerprint().unwrap());
+        std::fs::write(&java, "runtime-two").unwrap();
+        assert_ne!(baseline, request.fingerprint().unwrap());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -345,9 +353,12 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let source = root.join("App.java");
         let processor = root.join("processor.jar");
+        let java = root.join("java");
         std::fs::write(&source, "class App {}").unwrap();
         std::fs::write(&processor, "processor").unwrap();
+        std::fs::write(&java, "runtime").unwrap();
         let request = ProcessorRequest {
+            java_executable: java,
             sources: vec![source.clone()],
             source_path: vec![root.join("future-generated-sources")],
             classpath: vec![root.join("future-classes")],
@@ -377,9 +388,12 @@ mod tests {
         std::fs::write(generated.join("Generated.java"), "class Generated {}").unwrap();
         let source = root.join("App.java");
         let processor = root.join("processor.jar");
+        let java = root.join("java");
         std::fs::write(&source, "class App {}").unwrap();
         std::fs::write(&processor, "processor").unwrap();
+        std::fs::write(&java, "runtime").unwrap();
         let request = ProcessorRequest {
+            java_executable: java,
             sources: vec![source],
             source_path: vec![root.join("src")],
             classpath: vec![],

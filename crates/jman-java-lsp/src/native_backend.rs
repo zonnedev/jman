@@ -29,7 +29,8 @@ pub struct NativeBackend {
     sessions: HashMap<String, ProjectSession>,
     root: Option<std::path::PathBuf>,
     preferred_build_system: Option<String>,
-    processor_worker: Option<ProcessorWorker>,
+    build_runtime: Option<BuildRuntime>,
+    processor_workers: HashMap<PathBuf, ProcessorWorker>,
     structural_documents: Vec<(String, String, SemanticResult)>,
     structural_revision: u64,
     cancellation_generation: Arc<AtomicU64>,
@@ -140,7 +141,8 @@ impl NativeBackend {
             sessions: HashMap::new(),
             root: None,
             preferred_build_system: None,
-            processor_worker: None,
+            build_runtime: None,
+            processor_workers: HashMap::new(),
             structural_documents: Vec::new(),
             structural_revision: 0,
             cancellation_generation,
@@ -235,12 +237,16 @@ impl NativeBackend {
             .collect();
         models.sort_by_key(|model| !is_main_compile_model(model));
         if models.is_empty() {
+            self.processor_workers.clear();
             return Ok(());
         }
         let model_count = models.len();
         let mut processor_classes: Vec<(String, PathBuf)> = Vec::new();
+        let mut used_java_executables = std::collections::HashSet::new();
         for model in models {
             let key = format!("{}:{}", model.project_path, model.task_path);
+            let java = processor_java(&model, self.build_runtime.as_ref())?;
+            used_java_executables.insert(java.clone());
             let generated_directory = model
                 .generated_source_directories
                 .first()
@@ -311,6 +317,7 @@ impl NativeBackend {
                 }
             }
             let request = ProcessorRequest {
+                java_executable: java.clone(),
                 sources,
                 source_path,
                 classpath,
@@ -329,33 +336,40 @@ impl NativeBackend {
                 }
                 continue;
             }
-            if self.processor_worker.is_none() {
-                let java = processor_java();
+            if !self.processor_workers.contains_key(&java) {
                 let worker = processor_worker_classpath()
                     .and_then(|classpath| ProcessorWorker::start(&java, &classpath));
                 match worker {
-                    Ok(worker) => self.processor_worker = Some(worker),
+                    Ok(worker) => {
+                        self.processor_workers.insert(java.clone(), worker);
+                    }
                     Err(message) => {
                         eprintln!(
-                            "jman-java-lsp annotation processor warning for {key}: {message}"
+                            "jman-java-lsp annotation processor warning for {key} using {}: {message}",
+                            java.display()
                         );
-                        break;
+                        continue;
                     }
                 }
             }
-            let result =
-                self.processor_worker
-                    .as_mut()
-                    .unwrap()
-                    .process(&key, &request, &request_file);
+            let result = self
+                .processor_workers
+                .get_mut(&java)
+                .expect("processor worker was started")
+                .process(&key, &request, &request_file);
             if let Err(message) = result {
-                eprintln!("jman-java-lsp annotation processor warning for {key}: {message}");
-                self.processor_worker = None;
+                eprintln!(
+                    "jman-java-lsp annotation processor warning for {key} using {}: {message}",
+                    java.display()
+                );
+                self.processor_workers.remove(&java);
             }
             if request.classes_directory.is_dir() {
                 processor_classes.push((key, request.classes_directory));
             }
         }
+        self.processor_workers
+            .retain(|java, _| used_java_executables.contains(java));
         for model in &mut self.models {
             let key = format!("{}:{}", model.project_path, model.task_path);
             for (_, classes) in processor_classes
@@ -1002,12 +1016,47 @@ fn workspace_batches(sources: &[WorkspaceSource]) -> Vec<Vec<WorkspaceSource>> {
     batches
 }
 
-fn processor_java() -> std::path::PathBuf {
+fn processor_java(
+    model: &CompileModel,
+    build_runtime: Option<&BuildRuntime>,
+) -> Result<PathBuf, String> {
+    let executable_name = if cfg!(windows) { "java.exe" } else { "java" };
+    let compiler_runtime = model
+        .java_compiler_executable
+        .as_deref()
+        .and_then(Path::parent)
+        .map(|bin| bin.join(executable_name));
+    let build_runtime =
+        build_runtime.map(|runtime| runtime.java_home.join("bin").join(executable_name));
+
+    compiler_runtime
+        .into_iter()
+        .chain(build_runtime)
+        .chain(environment_java())
+        .find(|candidate| candidate.is_file())
+        .map(|candidate| std::fs::canonicalize(&candidate).unwrap_or(candidate))
+        .ok_or_else(|| {
+            format!(
+                "no Java runtime is available for annotation processors in {}:{}",
+                model.project_path, model.task_path
+            )
+        })
+}
+
+fn environment_java() -> Option<PathBuf> {
+    let executable_name = if cfg!(windows) { "java.exe" } else { "java" };
     std::env::var_os("JAVA_HOME")
-        .map(std::path::PathBuf::from)
-        .map(|home| home.join("bin/java"))
-        .filter(|java| java.is_file())
-        .unwrap_or_else(|| std::path::PathBuf::from("java"))
+        .map(PathBuf::from)
+        .map(|home| home.join("bin").join(executable_name))
+        .filter(|candidate| candidate.is_file())
+        .or_else(|| {
+            std::env::var_os("PATH").and_then(|path| {
+                std::env::split_paths(&path)
+                    .map(|directory| directory.join(executable_name))
+                    .find(|candidate| candidate.is_file())
+            })
+        })
+        .map(|candidate| std::fs::canonicalize(&candidate).unwrap_or(candidate))
 }
 
 fn processor_worker_classpath() -> Result<std::path::PathBuf, String> {
@@ -1515,14 +1564,15 @@ fn decompile_definition(
         std::fs::write(&class_path, &class_bytes)
             .map_err(|error| format!("cannot write decompiler input: {error}"))?;
         let vineflower = vineflower_jar()?;
-        let process = std::process::Command::new(processor_java())
-            .arg("-jar")
-            .arg(vineflower)
-            .args(["-dgs=1", "-asc=1", "-rbr=1", "-rsy=1"])
-            .arg(&class_path)
-            .arg(&output)
-            .output()
-            .map_err(|error| format!("cannot start Vineflower: {error}"))?;
+        let process =
+            std::process::Command::new(environment_java().unwrap_or_else(|| PathBuf::from("java")))
+                .arg("-jar")
+                .arg(vineflower)
+                .args(["-dgs=1", "-asc=1", "-rbr=1", "-rsy=1"])
+                .arg(&class_path)
+                .arg(&output)
+                .output()
+                .map_err(|error| format!("cannot start Vineflower: {error}"))?;
         if !process.status.success() {
             return Err(format!(
                 "Vineflower failed: {}",
@@ -2111,6 +2161,7 @@ impl AnalysisBackend for NativeBackend {
         self.record_build_runtime(loaded.build_runtime.as_ref());
         self.root = Some(root);
         self.preferred_build_system = preference.map(str::to_owned);
+        self.build_runtime = loaded.build_runtime;
         self.models = loaded.models;
         self.sessions.clear();
         self.editor_queries.clear();
@@ -2256,7 +2307,7 @@ impl AnalysisBackend for NativeBackend {
             .as_ref()
             .ok_or_else(|| "project has not been initialized".to_owned())?;
         let loaded = load_project(root, self.preferred_build_system.as_deref())?;
-        let build_runtime = loaded.build_runtime.clone();
+        let build_runtime = loaded.build_runtime;
         let previous: HashMap<_, _> = self
             .models
             .iter()
@@ -2274,6 +2325,8 @@ impl AnalysisBackend for NativeBackend {
             .cloned()
             .collect();
         let previous_models = std::mem::replace(&mut self.models, loaded.models);
+        let previous_build_runtime =
+            std::mem::replace(&mut self.build_runtime, build_runtime.clone());
         let previous_structural = self.structural_documents.clone();
         let previous_revision = self.structural_revision;
         let previous_status = self.cache_status.clone();
@@ -2282,6 +2335,7 @@ impl AnalysisBackend for NativeBackend {
             .and_then(|()| self.rebuild_structural_index())
         {
             self.models = previous_models;
+            self.build_runtime = previous_build_runtime;
             self.structural_documents = previous_structural;
             self.structural_revision = previous_revision;
             self.cache_status = previous_status;
@@ -2323,9 +2377,10 @@ impl AnalysisBackend for NativeBackend {
             .clone()
             .ok_or_else(|| "project has not been initialized".to_owned())?;
         let loaded = load_project(&root, self.preferred_build_system.as_deref())?;
-        let build_runtime = loaded.build_runtime.clone();
+        let build_runtime = loaded.build_runtime;
         self.models = loaded.models;
         self.record_build_runtime(build_runtime.as_ref());
+        self.build_runtime = build_runtime;
         for path in [structural_cache_path(&root), semantic_cache_path(&root)] {
             if path.is_file() {
                 std::fs::remove_file(&path)
@@ -2462,6 +2517,82 @@ mod decompiler_tests {
             definition: None,
             type_definition: None,
         }
+    }
+
+    fn processor_model(root: &Path, compiler: Option<PathBuf>) -> CompileModel {
+        serde_json::from_value(serde_json::json!({
+            "schemaVersion": 2,
+            "buildSystem": "gradle",
+            "projectPath": ":app",
+            "projectDirectory": root,
+            "taskPath": ":app:compileJava",
+            "sourceFiles": [],
+            "sourceRoots": [],
+            "classpath": [],
+            "modulePath": [],
+            "projectDependencies": [],
+            "annotationProcessorPath": [],
+            "annotationProcessorOptions": [],
+            "compilerArgs": [],
+            "release": 21,
+            "encoding": "UTF-8",
+            "generatedSourcesDirectory": null,
+            "generatedSourceDirectories": [],
+            "destinationDirectory": null,
+            "javaCompilerExecutable": compiler,
+            "javaLanguageVersion": 21,
+            "resolutionErrors": []
+        }))
+        .unwrap()
+    }
+
+    fn fake_jdk(root: &Path, name: &str) -> PathBuf {
+        let home = root.join(name);
+        std::fs::create_dir_all(home.join("bin")).unwrap();
+        std::fs::write(home.join("bin/java"), "runtime").unwrap();
+        std::fs::write(home.join("bin/javac"), "compiler").unwrap();
+        home
+    }
+
+    #[test]
+    fn annotation_processors_prefer_the_compile_units_jdk() {
+        let root = tempfile::tempdir().unwrap();
+        let compiler_home = fake_jdk(root.path(), "compiler-jdk");
+        let build_home = fake_jdk(root.path(), "build-jdk");
+        let model = processor_model(root.path(), Some(compiler_home.join("bin/javac")));
+        let build_runtime = BuildRuntime {
+            build_tool: "Gradle",
+            build_tool_version: Some("8.7".to_owned()),
+            java_home: build_home,
+            java_version: "21.0.12".to_owned(),
+            java_major: 21,
+            source: "test",
+        };
+
+        assert_eq!(
+            processor_java(&model, Some(&build_runtime)).unwrap(),
+            std::fs::canonicalize(compiler_home.join("bin/java")).unwrap()
+        );
+    }
+
+    #[test]
+    fn annotation_processors_fall_back_to_the_selected_build_jdk() {
+        let root = tempfile::tempdir().unwrap();
+        let build_home = fake_jdk(root.path(), "build-jdk");
+        let model = processor_model(root.path(), None);
+        let build_runtime = BuildRuntime {
+            build_tool: "Gradle",
+            build_tool_version: Some("8.7".to_owned()),
+            java_home: build_home.clone(),
+            java_version: "21.0.12".to_owned(),
+            java_major: 21,
+            source: "test",
+        };
+
+        assert_eq!(
+            processor_java(&model, Some(&build_runtime)).unwrap(),
+            std::fs::canonicalize(build_home.join("bin/java")).unwrap()
+        );
     }
 
     #[test]

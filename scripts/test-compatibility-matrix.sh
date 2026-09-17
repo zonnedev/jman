@@ -56,6 +56,7 @@ for gradle_bin in "${gradle_bins[@]}"; do
     jq -e '
       select(.projectPath == ":" and .taskPath == ":compileJava")
       | .javaLanguageVersion == 17
+        and (.javaCompilerExecutable | endswith("/bin/javac"))
         and (.projectDependencies | index(":model") != null)
         and (.sourceFiles | any(endswith("/module-info.java")))
         and (.modulePath | type == "array")

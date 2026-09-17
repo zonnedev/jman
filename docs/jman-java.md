@@ -280,6 +280,10 @@ Gradle imports select a compatible installed JDK from the wrapper version,
 project daemon criteria, JMAN-managed installations, SDKMAN installations, and
 the environment. Set `jman.java.buildJavaHome` only when an explicit build-tool
 runtime is required. JMAN does not download a JDK during project import.
+Annotation processors run in isolated workers using the compile unit's Gradle
+toolchain when available, otherwise the selected build JDK. This keeps
+compiler-coupled processors such as Lombok aligned with the project's javac
+instead of JMAN's Java 25 native-frontend runtime.
 
 Real-project import tests default to the read-only fixtures under
 `/home/jfsanchez/zonnedev/tmp/test`. Override them with environment variables

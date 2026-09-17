@@ -12,6 +12,9 @@ Versioning while it approaches a stable 0.3.0 release.
   selects an installed JDK compatible with the wrapper.
 - Gradle project-dependency discovery now supports both the pre-8.11 and
   current `ProjectDependency` APIs.
+- Annotation processors now run with each compile unit's configured JDK, or
+  the selected build JDK when the build model has no compiler executable, so
+  processors such as Lombok are not forced onto JMAN's Java 25 runtime.
 
 ## [0.3.0-rc.1] - 2026-09-17
 

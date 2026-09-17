@@ -95,6 +95,15 @@ allprojects { project ->
             processorPath,
             "annotationProcessorPath",
             resolutionErrors)
+        def javaCompilerExecutable = null
+        try {
+          javaCompilerExecutable =
+              compileTask.javaCompiler.orNull?.executablePath?.asFile?.absolutePath
+        } catch (Exception ignored) {
+          // A compiler can be unavailable while resolving an incomplete
+          // toolchain. The language server falls back to the build JVM and
+          // preserves the model's existing resolution diagnostics.
+        }
 
         def model = [
           schemaVersion: 2,
@@ -116,7 +125,7 @@ allprojects { project ->
               generatedSources == null ? null : generatedSources.asFile.absolutePath,
           generatedSourceDirectories: generatedDirectories,
           destinationDirectory: compileTask.destinationDirectory.get().asFile.absolutePath,
-          javaCompilerExecutable: null,
+          javaCompilerExecutable: javaCompilerExecutable,
           javaLanguageVersion:
               requestedLanguageVersion == null
                   ? javaExtension?.sourceCompatibility?.majorVersion?.toInteger()
