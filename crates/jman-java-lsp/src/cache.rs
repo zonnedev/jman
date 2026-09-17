@@ -26,7 +26,7 @@ pub(crate) fn stable_project_id(root: &Path) -> String {
             digest.update(relative.as_bytes());
         }
     }
-    format!("{:x}", digest.finalize())[..24].to_owned()
+    hex::encode(digest.finalize())[..24].to_owned()
 }
 
 #[cfg(feature = "native-ffi")]

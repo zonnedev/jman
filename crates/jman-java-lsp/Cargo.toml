@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 base64 = "0.22"
 dirs = "6"
+hex.workspace = true
 javac-frontend = { path = "../javac-frontend" }
 jman-config = { path = "../jman-config" }
 serde = { version = "1", features = ["derive"] }

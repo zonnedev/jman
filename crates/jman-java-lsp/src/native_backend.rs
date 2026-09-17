@@ -1475,7 +1475,7 @@ fn decompile_definition(
     definition: &mut javac_frontend::EditorDefinition,
 ) -> Result<(), String> {
     let (class_bytes, entry_name) = find_class_bytes(classpath, &definition.owner, release)?;
-    let hash = format!("{:x}", Sha256::digest(&class_bytes));
+    let hash = hex::encode(Sha256::digest(&class_bytes));
     let cache = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
