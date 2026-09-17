@@ -5,6 +5,8 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ## [Unreleased]
 
+## [0.3.0-rc.2] - 2026-09-18
+
 ### Fixed
 
 - Gradle model import now separates the build-tool JVM from the Java 25 native

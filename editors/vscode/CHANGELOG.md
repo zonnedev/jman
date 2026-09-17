@@ -4,6 +4,8 @@ All notable changes to the JMAN Java extension are documented here.
 
 ## Unreleased
 
+## 0.3.1 - 2026-09-18
+
 ### Fixed
 
 - Select a Gradle-compatible installed JDK independently from the Java 25
