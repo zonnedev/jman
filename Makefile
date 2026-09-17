@@ -109,10 +109,10 @@ test-jpms-correctness: native test-java test-processor-worker test-maven-import
 test-compatibility-matrix: test-java
 	./scripts/test-compatibility-matrix.sh
 
-package-vscode:
+package-vscode: native
 	./scripts/package-vscode.sh
 
-release:
+release: native
 	./scripts/package-release.sh
 
 stage-release:

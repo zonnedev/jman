@@ -6,6 +6,7 @@ extension_dir="${project_dir}/editors/vscode"
 server_dir="${extension_dir}/server"
 output_dir="${project_dir}/target/vscode"
 native_dir="${project_dir}/target/native"
+native_library="${native_dir}/libjman_javac_frontend.so"
 extension_version="$(node -p 'require(process.argv[1]).version' "${extension_dir}/package.json")"
 target_platform="linux-x64"
 
@@ -15,7 +16,11 @@ if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
   exit 1
 fi
 
-"${project_dir}/scripts/build-native.sh"
+if [[ ! -f "${native_library}" ]]; then
+  printf 'Native frontend is missing; run make native from %s\n' "${project_dir}" >&2
+  exit 1
+fi
+
 "${project_dir}/scripts/build-processor-worker.sh"
 "${project_dir}/scripts/build-vineflower.sh"
 JAVAC_FRONTEND_LIB_DIR="${native_dir}" \
@@ -29,7 +34,7 @@ rm -rf "${server_dir}" "${output_dir}"
 mkdir -p "${server_dir}" "${output_dir}"
 cp "${project_dir}/target/release/jman" "${server_dir}/jman"
 strip --strip-unneeded "${server_dir}/jman"
-cp "${native_dir}/libjman_javac_frontend.so" "${server_dir}/libjman_javac_frontend.so"
+cp "${native_library}" "${server_dir}/libjman_javac_frontend.so"
 cp "${project_dir}/target/processor-worker.jar" "${server_dir}/processor-worker.jar"
 cp "${project_dir}/target/vineflower-1.12.0.jar" "${server_dir}/vineflower.jar"
 mkdir -p "${server_dir}/tools"

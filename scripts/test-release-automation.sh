@@ -100,6 +100,19 @@ if grep -R -Eq '^rust-version[[:space:]]*=[[:space:]]*"' \
 fi
 grep -Eq '^test-rust:.*[[:space:]]vineflower([[:space:]]|$)' \
   "${project_dir}/Makefile"
+for packaging_target in release package-vscode; do
+  if ! grep -Eq "^${packaging_target}:.*[[:space:]]native([[:space:]]|$)" \
+    "${project_dir}/Makefile"; then
+    echo "${packaging_target} must reuse Make's native frontend artifact" >&2
+    exit 1
+  fi
+done
+if grep -q 'scripts/build-native.sh' \
+  "${project_dir}/scripts/package-release.sh" \
+  "${project_dir}/scripts/package-vscode.sh"; then
+  echo "Packaging scripts must not rebuild the native frontend" >&2
+  exit 1
+fi
 while IFS= read -r action_reference; do
   if [[ ! "${action_reference}" =~ @[0-9a-f]{40}$ ]]; then
     echo "GitHub Action is not pinned to a full commit: ${action_reference}" >&2
