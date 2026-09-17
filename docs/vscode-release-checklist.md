@@ -10,7 +10,7 @@ From a clean reviewed checkout on Linux x86-64:
 
 ```bash
 make package-vscode
-(cd target/vscode && sha256sum --check jman-java-0.1.7-linux-x64.vsix.sha256)
+(cd target/vscode && sha256sum --check jman-java-0.3.0-linux-x64.vsix.sha256)
 ```
 
 The packaging command rebuilds the native frontend, Java workers, bundled JMAN
@@ -31,7 +31,7 @@ mkdir -p /tmp/jman-vscode-profile /tmp/jman-vscode-extensions
 code \
   --user-data-dir /tmp/jman-vscode-profile \
   --extensions-dir /tmp/jman-vscode-extensions \
-  --install-extension target/vscode/jman-java-0.1.7-linux-x64.vsix
+  --install-extension target/vscode/jman-java-0.3.0-linux-x64.vsix
 ```
 
 Launch VS Code with the same two directory arguments and verify:
@@ -68,7 +68,8 @@ other server for the remainder of acceptance testing.
 5. Install the Marketplace copy into the clean profile and repeat the startup,
    status, completion, and test-discovery smoke checks.
 
-The workflow uses Visual Studio Marketplace trusted publishing through GitHub
-OIDC; it requires no PAT or stored publishing secret. It verifies and publishes
-the VSIX already attached to the GitHub Release rather than rebuilding it. See
-the [release guide](releasing.md) for the one-time policy configuration.
+The workflow exchanges GitHub OIDC tokens for short-lived Microsoft Entra
+credentials; it requires no PAT or stored publishing credential. It verifies
+and publishes the VSIX already attached to the GitHub Release rather than
+rebuilding it. See the [release guide](releasing.md) for the one-time identity
+configuration.

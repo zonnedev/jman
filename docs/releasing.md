@@ -58,8 +58,8 @@ dependency-audit checks against the exact tag.
 Create and push an annotated tag that exactly matches the workspace version:
 
 ```bash
-git tag -a v0.1.0-rc.1 -m "JMAN 0.1.0-rc.1"
-git push origin v0.1.0-rc.1
+git tag -a v0.3.0-rc.1 -m "JMAN 0.3.0-rc.1"
+git push origin v0.3.0-rc.1
 ```
 
 Tags whose version contains a hyphen, such as `-rc.1`, become GitHub
@@ -85,7 +85,7 @@ After downloading an artifact, verify both controls:
 
 ```bash
 sha256sum --check SHA256SUMS
-gh attestation verify jman-0.1.0-rc.1-linux-x86_64.tar.gz \
+gh attestation verify jman-0.3.0-rc.1-linux-x86_64.tar.gz \
   --repo zonnedev/jman
 ```
 
@@ -116,7 +116,7 @@ release:
 ```bash
 make release
 make package-vscode
-make stage-release TAG=v0.1.0-rc.1
+make stage-release TAG=v0.3.0-rc.1
 (cd target/github-release && sha256sum --check SHA256SUMS)
 ```
 

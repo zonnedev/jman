@@ -2,7 +2,7 @@
   "name": "jman-java",
   "displayName": "JMAN Java",
   "description": "Native Java language support for JMAN, Maven, and Gradle projects",
-  "version": "0.1.7",
+  "version": "0.3.0",
   "publisher": "zonnedev",
   "author": "ZonneDev",
   "preview": true,

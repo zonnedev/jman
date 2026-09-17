@@ -1,9 +1,9 @@
 # Changelog
 
 All notable changes to JMAN are documented here. The project follows Semantic
-Versioning while it approaches a stable 0.1.0 release.
+Versioning while it approaches a stable 0.3.0 release.
 
-## [0.1.0-rc.1] - 2026-09-16
+## [0.3.0-rc.1] - 2026-09-17
 
 ### Added
 

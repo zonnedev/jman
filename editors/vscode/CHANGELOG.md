@@ -2,7 +2,7 @@
 
 All notable changes to the JMAN Java extension are documented here.
 
-## 0.1.7 - 2026-09-16
+## 0.3.0 - 2026-09-17
 
 ### Added
 
