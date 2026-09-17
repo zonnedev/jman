@@ -98,6 +98,8 @@ if grep -R -Eq '^rust-version[[:space:]]*=[[:space:]]*"' \
   echo "Workspace crates must inherit workspace.package.rust-version" >&2
   exit 1
 fi
+grep -Eq '^test-rust:.*[[:space:]]vineflower([[:space:]]|$)' \
+  "${project_dir}/Makefile"
 while IFS= read -r action_reference; do
   if [[ ! "${action_reference}" =~ @[0-9a-f]{40}$ ]]; then
     echo "GitHub Action is not pinned to a full commit: ${action_reference}" >&2

@@ -7,7 +7,7 @@ NATIVE_FRONTEND_INPUTS := \
 	scripts/build-native.sh \
 	scripts/use-sdkman-java.sh
 
-.PHONY: gates ci test test-rust test-java test-jman-runner test-processor-worker test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-micronaut-correctness test-vscode-extension test-neovim-plugin test-release-automation package-vscode release stage-release native test-native clean clear
+.PHONY: gates ci test test-rust test-java test-jman-runner test-processor-worker vineflower test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-micronaut-correctness test-vscode-extension test-neovim-plugin test-release-automation package-vscode release stage-release native test-native clean clear
 
 gates: test test-native test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-real-semantics test-lsp test-vscode-extension test-neovim-plugin
 
@@ -15,7 +15,7 @@ ci: test test-native test-vscode-extension test-release-automation
 
 test: test-rust test-java test-jman-runner
 
-test-rust: $(DEBUG_NATIVE_FRONTEND)
+test-rust: $(DEBUG_NATIVE_FRONTEND) vineflower
 	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
 	LD_LIBRARY_PATH="$(CURDIR)/target/native$${LD_LIBRARY_PATH:+:$${LD_LIBRARY_PATH}}" \
 	cargo test --workspace
@@ -29,8 +29,10 @@ test-jman-runner:
 test-processor-worker:
 	./scripts/build-processor-worker.sh
 
-test-vineflower:
+vineflower:
 	./scripts/build-vineflower.sh
+
+test-vineflower: vineflower
 	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
 	LD_LIBRARY_PATH="$(CURDIR)/target/native" \
 	cargo test -p jman-java-lsp --features native-ffi \
