@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use javac_frontend::{EditorQueryResult, ProjectState, SemanticResult};
 use serde_json::{Value, json};
 
-use crate::{Documents, offset_to_position};
+use crate::{Documents, file_uri_to_path, offset_to_position};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct JpmsCatalog {
@@ -220,6 +220,7 @@ pub struct Server<'backend> {
     project: ProjectState,
     structural_project: ProjectState,
     structural_revision: u64,
+    workspace_roots: Vec<PathBuf>,
     build_sync_mode: BuildSyncMode,
     build_sync_state: BuildSyncState,
     pending_build_changes: HashSet<String>,
@@ -244,6 +245,7 @@ impl Default for Server<'_> {
             project: ProjectState::default(),
             structural_project: ProjectState::default(),
             structural_revision: 0,
+            workspace_roots: Vec::new(),
             build_sync_mode: BuildSyncMode::default(),
             build_sync_state: BuildSyncState::default(),
             pending_build_changes: HashSet::new(),
@@ -309,6 +311,13 @@ impl<'backend> Server<'backend> {
                     .and_then(|value| value["rootUri"].as_str())
                     .map(str::to_owned)
                     .or_else(|| folders.first().cloned());
+                self.workspace_roots = folders
+                    .iter()
+                    .chain(primary.iter())
+                    .filter_map(|uri| file_uri_to_path(uri))
+                    .collect();
+                self.workspace_roots.sort();
+                self.workspace_roots.dedup();
                 if let Some(backend) = self.backend.as_mut() {
                     let options = params.and_then(|value| value.get("initializationOptions"));
                     if let Err(message) = backend.initialize(primary.as_deref(), options) {
@@ -673,7 +682,19 @@ impl<'backend> Server<'backend> {
                     backend.workspace_folders_changed(&added, &removed)
                 });
                 match result {
-                    Ok(()) => self.reindex_open_documents(),
+                    Ok(()) => {
+                        let removed_paths: HashSet<_> = removed
+                            .iter()
+                            .filter_map(|uri| file_uri_to_path(uri))
+                            .collect();
+                        self.workspace_roots
+                            .retain(|root| !removed_paths.contains(root));
+                        self.workspace_roots
+                            .extend(added.iter().filter_map(|uri| file_uri_to_path(uri)));
+                        self.workspace_roots.sort();
+                        self.workspace_roots.dedup();
+                        self.reindex_open_documents()
+                    }
                     Err(message) => Dispatch::Reply(json!({
                         "jsonrpc":"2.0","method":"window/logMessage",
                         "params":{"type":1,"message":message}
@@ -1130,12 +1151,15 @@ impl<'backend> Server<'backend> {
             return Dispatch::Reply(success(id, Value::Null));
         };
         let identity = definition_identity(&definition);
-        let workspace_locations: Vec<_> = self
+        let mut workspace_locations: Vec<_> = self
             .all_definitions(&definition.symbol_id)
             .into_iter()
             .chain(self.all_definitions(&identity))
             .filter_map(|location| self.location(&location))
             .collect();
+        if workspace_locations.is_empty() {
+            workspace_locations = self.workspace_editor_definition_locations(&definition);
+        }
         if !workspace_locations.is_empty() {
             return Dispatch::Reply(success(id, json!(workspace_locations)));
         }
@@ -3380,7 +3404,81 @@ impl<'backend> Server<'backend> {
                 return locations;
             }
         }
-        Vec::new()
+        self.pending_local_source_location(definition)
+            .into_iter()
+            .collect()
+    }
+
+    fn pending_local_source_location(
+        &self,
+        definition: &javac_frontend::EditorDefinition,
+    ) -> Option<Value> {
+        if !self
+            .backend
+            .as_ref()
+            .is_some_and(|backend| backend.workspace_index_pending())
+        {
+            return None;
+        }
+        let file_name = PathBuf::from(&definition.source_name)
+            .file_name()?
+            .to_owned();
+        let owner = definition.owner.replace('$', ".");
+        for root in &self.workspace_roots {
+            let mut pending = vec![root.clone()];
+            while let Some(directory) = pending.pop() {
+                let Ok(entries) = std::fs::read_dir(&directory) else {
+                    continue;
+                };
+                let mut entries: Vec<_> = entries.filter_map(Result::ok).collect();
+                entries.sort_by_key(std::fs::DirEntry::file_name);
+                for entry in entries.into_iter().rev() {
+                    let path = entry.path();
+                    let Ok(file_type) = entry.file_type() else {
+                        continue;
+                    };
+                    if file_type.is_dir() {
+                        if !excluded_local_source_directory(&entry.file_name()) {
+                            pending.push(path);
+                        }
+                        continue;
+                    }
+                    if !file_type.is_file() || entry.file_name() != file_name {
+                        continue;
+                    }
+                    let Ok(source) = std::fs::read_to_string(&path) else {
+                        continue;
+                    };
+                    let package = java_import_context(&source).0.unwrap_or_default();
+                    let Some(type_name) = path
+                        .file_stem()
+                        .map(|name| name.to_string_lossy().into_owned())
+                    else {
+                        continue;
+                    };
+                    let qualified = if package.is_empty() {
+                        type_name.clone()
+                    } else {
+                        format!("{package}.{type_name}")
+                    };
+                    if owner != qualified && !owner.starts_with(&format!("{qualified}.")) {
+                        continue;
+                    }
+                    let Some((start, end)) = java_type_declaration_range(&source, &type_name)
+                    else {
+                        continue;
+                    };
+                    return Some(json!({
+                        "uri": format!("file://{}", path.display()),
+                        "range": {
+                            "start": offset_to_position(&source, start),
+                            "end": offset_to_position(&source, end)
+                        }
+                    }));
+                }
+            }
+        }
+        None
     }
 
     fn related_symbol_ids(&self, symbol_id: &str) -> Vec<String> {
@@ -3899,6 +3997,7 @@ fn publish_diagnostics(
 fn lsp_diagnostics(diagnostics: &[javac_frontend::SemanticDiagnostic], source: &str) -> Vec<Value> {
     diagnostics
         .iter()
+        .filter(|diagnostic| !is_generated_lombok_log_diagnostic(diagnostic, source))
         .map(|diagnostic| {
             json!({
                 "range": {
@@ -3917,6 +4016,140 @@ fn lsp_diagnostics(diagnostics: &[javac_frontend::SemanticDiagnostic], source: &
             })
         })
         .collect()
+}
+
+fn is_generated_lombok_log_diagnostic(
+    diagnostic: &javac_frontend::SemanticDiagnostic,
+    source: &str,
+) -> bool {
+    if !diagnostic.code.contains("cant.resolve") || !diagnostic.message.contains("variable log") {
+        return false;
+    }
+    let byte = utf16_offset_to_byte(source, diagnostic.start);
+    let Some((start, end)) = java_identifier_range(source, byte) else {
+        return false;
+    };
+    if &source[start..end] != "log" {
+        return false;
+    }
+    enclosing_braces(source, start).into_iter().any(|brace| {
+        let header_start = source[..brace]
+            .rfind([';', '{', '}'])
+            .map_or(0, |index| index + 1);
+        let header = &source[header_start..brace];
+        has_java_type_declaration(header) && has_lombok_log_annotation(header)
+    })
+}
+
+fn java_identifier_range(source: &str, cursor: usize) -> Option<(usize, usize)> {
+    let mut start = cursor.min(source.len());
+    while start > 0 {
+        let character = source[..start].chars().next_back()?;
+        if !CharacterExt::java_identifier_part(character) {
+            break;
+        }
+        start -= character.len_utf8();
+    }
+    let mut end = cursor.min(source.len());
+    while end < source.len() {
+        let character = source[end..].chars().next()?;
+        if !CharacterExt::java_identifier_part(character) {
+            break;
+        }
+        end += character.len_utf8();
+    }
+    (start < end).then_some((start, end))
+}
+
+fn has_java_type_declaration(header: &str) -> bool {
+    header
+        .split(|character: char| !CharacterExt::java_identifier_part(character))
+        .any(|token| matches!(token, "class" | "enum" | "interface" | "record"))
+}
+
+fn has_lombok_log_annotation(header: &str) -> bool {
+    const LOG_ANNOTATIONS: &[&str] = &[
+        "CommonsLog",
+        "Flogger",
+        "JBossLog",
+        "Log",
+        "Log4j",
+        "Log4j2",
+        "Slf4j",
+        "XSlf4j",
+    ];
+    let bytes = header.as_bytes();
+    let mut index = 0;
+    let mut line_comment = false;
+    let mut block_comment = false;
+    let mut quote = None;
+    let mut escaped = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if line_comment {
+            if byte == b'\n' {
+                line_comment = false;
+            }
+            index += 1;
+            continue;
+        }
+        if block_comment {
+            if byte == b'*' && bytes.get(index + 1) == Some(&b'/') {
+                block_comment = false;
+                index += 2;
+            } else {
+                index += 1;
+            }
+            continue;
+        }
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == delimiter {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if byte == b'/' && bytes.get(index + 1) == Some(&b'/') {
+            line_comment = true;
+            index += 2;
+            continue;
+        }
+        if byte == b'/' && bytes.get(index + 1) == Some(&b'*') {
+            block_comment = true;
+            index += 2;
+            continue;
+        }
+        if matches!(byte, b'\'' | b'"') {
+            quote = Some(byte);
+            index += 1;
+            continue;
+        }
+        if byte != b'@' {
+            index += 1;
+            continue;
+        }
+        index += 1;
+        let start = index;
+        while bytes
+            .get(index)
+            .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$' | b'.'))
+        {
+            index += 1;
+        }
+        let annotation = &header[start..index];
+        if annotation
+            .rsplit('.')
+            .next()
+            .is_some_and(|name| LOG_ANNOTATIONS.contains(&name))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn error(id: Value, code: i32, message: &str) -> Value {
@@ -4418,6 +4651,54 @@ fn java_import_context(source: &str) -> (Option<String>, Vec<String>, usize) {
         offset += line.len();
     }
     (package, imports, insertion)
+}
+
+fn excluded_local_source_directory(name: &std::ffi::OsStr) -> bool {
+    matches!(
+        name.to_str(),
+        Some(".git" | ".gradle" | ".idea" | ".jman" | "build" | "node_modules" | "out" | "target")
+    )
+}
+
+fn java_type_declaration_range(source: &str, name: &str) -> Option<(u64, u64)> {
+    for keyword in ["class", "interface", "enum", "record", "@interface"] {
+        let mut offset = 0;
+        while let Some(found) = source[offset..].find(keyword) {
+            let keyword_start = offset + found;
+            let keyword_end = keyword_start + keyword.len();
+            let bounded_start = keyword_start == 0
+                || !source[..keyword_start]
+                    .chars()
+                    .next_back()
+                    .is_some_and(CharacterExt::java_identifier_part);
+            let bounded_end = source[keyword_end..]
+                .chars()
+                .next()
+                .is_some_and(char::is_whitespace);
+            if bounded_start && bounded_end {
+                let whitespace = source[keyword_end..]
+                    .chars()
+                    .take_while(|character| character.is_whitespace())
+                    .map(char::len_utf8)
+                    .sum::<usize>();
+                let name_start = keyword_end + whitespace;
+                let name_end = name_start + name.len();
+                if source.get(name_start..name_end) == Some(name)
+                    && source[name_end..]
+                        .chars()
+                        .next()
+                        .is_none_or(|character| !CharacterExt::java_identifier_part(character))
+                {
+                    return Some((
+                        source[..name_start].encode_utf16().count() as u64,
+                        source[..name_end].encode_utf16().count() as u64,
+                    ));
+                }
+            }
+            offset = keyword_end;
+        }
+    }
+    None
 }
 
 fn missing_type_name(message: &str) -> Option<&str> {
@@ -4945,6 +5226,79 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[test]
+    fn suppresses_only_missing_lombok_generated_log_fields() {
+        let source = r#"
+import lombok.extern.slf4j.Slf4j;
+@Slf4j
+class Example {
+  void run() {
+    Runnable nested = () -> log.debug("ok");
+    Missing value;
+  }
+}
+"#;
+        let diagnostic = |name: &str| {
+            let byte = source.find(name).unwrap();
+            let start = source[..byte].encode_utf16().count() as u64;
+            SemanticDiagnostic {
+                kind: "error".to_owned(),
+                code: "compiler.err.cant.resolve.location".to_owned(),
+                start,
+                end: start + name.encode_utf16().count() as u64,
+                line: 1,
+                column: 1,
+                message: format!("cannot find symbol: variable {name}"),
+            }
+        };
+
+        let diagnostics = lsp_diagnostics(&[diagnostic("log"), diagnostic("Missing")], source);
+
+        assert_eq!(diagnostics.len(), 1);
+        assert!(
+            diagnostics[0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Missing")
+        );
+    }
+
+    #[test]
+    fn does_not_treat_commented_lombok_annotations_as_generated_fields() {
+        let source = "// @Slf4j\nclass Example { void run() { log.debug(\"no\"); } }";
+        let byte = source.find("log.debug").unwrap();
+        let start = source[..byte].encode_utf16().count() as u64;
+        let diagnostic = SemanticDiagnostic {
+            kind: "error".to_owned(),
+            code: "compiler.err.cant.resolve.location".to_owned(),
+            start,
+            end: start + 3,
+            line: 1,
+            column: 1,
+            message: "cannot find symbol: variable log".to_owned(),
+        };
+
+        assert_eq!(lsp_diagnostics(&[diagnostic], source).len(), 1);
+    }
+
+    #[test]
+    fn does_not_suppress_missing_log_methods_in_lombok_annotated_types() {
+        let source = "@Slf4j class Example { void run() { log(); } }";
+        let byte = source.find("log()").unwrap();
+        let start = source[..byte].encode_utf16().count() as u64;
+        let diagnostic = SemanticDiagnostic {
+            kind: "error".to_owned(),
+            code: "compiler.err.cant.resolve.location.args".to_owned(),
+            start,
+            end: start + 3,
+            line: 1,
+            column: 1,
+            message: "cannot find symbol: method log()".to_owned(),
+        };
+
+        assert_eq!(lsp_diagnostics(&[diagnostic], source).len(), 1);
+    }
+
+    #[test]
     fn enforces_initialize_shutdown_exit_lifecycle() {
         let mut server = Server::default();
         let before = server.dispatch(json!({"jsonrpc":"2.0","id":1,"method":"shutdown"}));
@@ -5411,6 +5765,68 @@ mod tests {
         }));
 
         assert_eq!(reply(&definition)["result"][0]["uri"], response_uri);
+        assert!(server.external_origins.is_empty());
+
+        let type_definition = server.dispatch(json!({
+            "jsonrpc":"2.0","id":3,"method":"textDocument/typeDefinition",
+            "params":{
+                "textDocument":{"uri":test_uri},
+                "position":{"line":0,"character":55}
+            }
+        }));
+
+        assert_eq!(reply(&type_definition)["result"][0]["uri"], response_uri);
+        assert!(server.external_origins.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pending_workspace_index_still_prefers_local_source_over_decompilation() {
+        let root = std::env::temp_dir().join(format!(
+            "jman-java-pending-definition-precedence-{}",
+            std::process::id()
+        ));
+        let package = root.join("module/src/main/java/com/example");
+        std::fs::create_dir_all(&package).unwrap();
+        let response = package.join("HelloResponse.java");
+        std::fs::write(
+            &response,
+            "package com.example;\npublic record HelloResponse(String name) {}",
+        )
+        .unwrap();
+        let response_uri = format!("file://{}", response.display());
+        let test_uri = format!("file://{}/HelloResponseTest.java", root.display());
+        let test_source = "package com.example; class HelloResponseTest { HelloResponse value; }";
+        let mut server = Server::with_backend(PendingWorkspaceShadowBackend);
+        server.dispatch(json!({
+            "jsonrpc":"2.0","id":1,"method":"initialize",
+            "params":{"rootUri":format!("file://{}", root.display())}
+        }));
+        server.dispatch(json!({
+            "jsonrpc":"2.0","method":"textDocument/didOpen",
+            "params":{"textDocument":{"uri":test_uri,"version":1,"text":test_source}}
+        }));
+
+        let definition = server.dispatch(json!({
+            "jsonrpc":"2.0","id":2,"method":"textDocument/definition",
+            "params":{
+                "textDocument":{"uri":test_uri},
+                "position":{"line":0,"character":55}
+            }
+        }));
+
+        assert_eq!(reply(&definition)["result"][0]["uri"], response_uri);
+        assert!(server.external_origins.is_empty());
+
+        let type_definition = server.dispatch(json!({
+            "jsonrpc":"2.0","id":3,"method":"textDocument/typeDefinition",
+            "params":{
+                "textDocument":{"uri":test_uri},
+                "position":{"line":0,"character":55}
+            }
+        }));
+
+        assert_eq!(reply(&type_definition)["result"][0]["uri"], response_uri);
         assert!(server.external_origins.is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -6784,6 +7200,8 @@ mod tests {
         source: PathBuf,
     }
 
+    struct PendingWorkspaceShadowBackend;
+
     struct JpmsBackend {
         sources: Vec<PathBuf>,
     }
@@ -6970,23 +7388,71 @@ mod tests {
             _source: &str,
             _cursor: u32,
         ) -> Result<EditorQueryResult, String> {
+            let definition = javac_frontend::EditorDefinition {
+                symbol_id: "unnamed|Lcom/example/HelloResponse;".to_owned(),
+                module: String::new(),
+                owner: "com.example.HelloResponse".to_owned(),
+                name: "<init>".to_owned(),
+                descriptor: "(java.lang.String)void".to_owned(),
+                source_name: "HelloResponse.java".to_owned(),
+                source: "package com.example; record HelloResponse() {}".to_owned(),
+                start: 28,
+                end: 41,
+                decompiled: true,
+            };
             Ok(EditorQueryResult {
                 completions: Vec::new(),
                 signatures: Vec::new(),
                 hover: None,
-                definition: Some(javac_frontend::EditorDefinition {
-                    symbol_id: "unnamed|Lcom/example/HelloResponse;".to_owned(),
-                    module: String::new(),
-                    owner: "com.example.HelloResponse".to_owned(),
-                    name: "<init>".to_owned(),
-                    descriptor: "(java.lang.String)void".to_owned(),
-                    source_name: "HelloResponse.java".to_owned(),
-                    source: "package com.example; record HelloResponse() {}".to_owned(),
-                    start: 28,
-                    end: 41,
-                    decompiled: true,
-                }),
-                type_definition: None,
+                definition: Some(definition.clone()),
+                type_definition: Some(definition),
+            })
+        }
+    }
+
+    impl AnalysisBackend for PendingWorkspaceShadowBackend {
+        fn analyze(
+            &mut self,
+            _uri: &str,
+            _file_name: &str,
+            _source: &str,
+        ) -> Result<SemanticResult, String> {
+            Ok(SemanticResult {
+                package_name: "com.example".to_owned(),
+                symbols: Vec::new(),
+                diagnostics: Vec::new(),
+            })
+        }
+
+        fn workspace_index_pending(&self) -> bool {
+            true
+        }
+
+        fn editor_query(
+            &mut self,
+            _uri: &str,
+            _file_name: &str,
+            _source: &str,
+            _cursor: u32,
+        ) -> Result<EditorQueryResult, String> {
+            let definition = javac_frontend::EditorDefinition {
+                symbol_id: "unnamed|Lcom/example/HelloResponse;".to_owned(),
+                module: String::new(),
+                owner: "com.example.HelloResponse".to_owned(),
+                name: "<init>".to_owned(),
+                descriptor: "(java.lang.String)void".to_owned(),
+                source_name: "HelloResponse.java".to_owned(),
+                source: "package com.example; record HelloResponse() {}".to_owned(),
+                start: 28,
+                end: 41,
+                decompiled: true,
+            };
+            Ok(EditorQueryResult {
+                completions: Vec::new(),
+                signatures: Vec::new(),
+                hover: None,
+                definition: Some(definition.clone()),
+                type_definition: Some(definition),
             })
         }
     }

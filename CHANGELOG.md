@@ -15,6 +15,13 @@ Versioning while it approaches a stable 0.3.0 release.
 - Annotation processors now run with each compile unit's configured JDK, or
   the selected build JDK when the build model has no compiler executable, so
   processors such as Lombok are not forced onto JMAN's Java 25 runtime.
+- Annotation processing now runs dependency modules first and retains useful
+  partial generated classes when unrelated project errors prevent a complete
+  compile; false missing-`log` diagnostics are suppressed for Lombok logging
+  annotations while a workspace is temporarily broken.
+- Go to Definition and Go to Type Definition now prefer matching workspace
+  source files over decompiled classpath copies while background indexing is
+  still pending.
 
 ## [0.3.0-rc.1] - 2026-09-17
 

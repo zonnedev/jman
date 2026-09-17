@@ -11,6 +11,10 @@ All notable changes to the JMAN Java extension are documented here.
   actionable diagnostics when no compatible runtime is installed.
 - Run annotation processors with the compile unit or selected build JDK,
   preventing false missing-symbol diagnostics from older Lombok versions.
+- Preserve usable annotation-processor output across partial compilation
+  failures and avoid false Lombok logging-field diagnostics during refactors.
+- Keep definition navigation on local workspace sources instead of opening
+  decompiled copies while the background index is still being built.
 
 ## 0.3.0 - 2026-09-17
 

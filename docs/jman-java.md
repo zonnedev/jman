@@ -285,6 +285,17 @@ toolchain when available, otherwise the selected build JDK. This keeps
 compiler-coupled processors such as Lombok aligned with the project's javac
 instead of JMAN's Java 25 native-frontend runtime.
 
+Processor workers execute dependency modules before their consumers. If javac
+reports unrelated source errors after processors have emitted usable classes,
+JMAN retains those partial outputs in a separate cache generation without
+overwriting the last complete result. Lombok logging annotations also remain
+diagnostic-tolerant while the surrounding module is temporarily uncompilable.
+
+Definition navigation always gives workspace source precedence over classpath
+and decompiled copies. During initial background indexing, JMAN matches javac's
+resolved owner and source name against the active workspace roots so local
+navigation remains stable before the structural index is available.
+
 Real-project import tests default to the read-only fixtures under
 `/home/jfsanchez/zonnedev/tmp/test`. Override them with environment variables
 when needed.

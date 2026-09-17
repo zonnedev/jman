@@ -66,8 +66,10 @@ public final class ProcessorWorker {
         generatedTarget.resolveSibling(generatedTarget.getFileName() + ".jman-java-staging");
     Path classesTarget = Path.of(required(request, "classes.directory"));
     Path classes = stagingClassesDirectory(classesTarget);
+    Path partialClasses = partialClassesDirectory(classesTarget);
     cleanDirectory(generated);
     cleanDirectory(classes);
+    cleanDirectory(partialClasses);
     Files.createDirectories(generated);
     Files.createDirectories(classes);
 
@@ -103,6 +105,8 @@ public final class ProcessorWorker {
                   files.getJavaFileObjectsFromPaths(sources))
               .call();
       if (!success) {
+        publishDirectory(classes, partialClasses);
+        cleanDirectory(generated);
         String encoded =
             diagnostics.getDiagnostics().stream()
                 .map(diagnostic -> diagnostic.getCode() + ": " + diagnostic.getMessage(Locale.ROOT))
@@ -115,30 +119,44 @@ public final class ProcessorWorker {
     try (Stream<Path> paths = Files.walk(generated)) {
       generatedCount = paths.filter(path -> path.toString().endsWith(".java")).count();
     }
-    cleanDirectory(generatedTarget);
-    cleanDirectory(classesTarget);
-    Files.createDirectories(generatedTarget.getParent());
-    Files.createDirectories(classesTarget.getParent());
-    Files.move(generated, generatedTarget);
-    Files.move(classes, classesTarget);
+    publishDirectory(generated, generatedTarget);
+    publishDirectory(classes, classesTarget);
     return new Result(generatedCount);
   }
 
   static Path stagingClassesDirectory(Path target) {
+    return stateClassesDirectory(target, "staging", ".jman-java-staging");
+  }
+
+  static Path partialClassesDirectory(Path target) {
+    return stateClassesDirectory(target, "partial", ".jman-java-partial");
+  }
+
+  private static Path stateClassesDirectory(Path target, String state, String legacySuffix) {
     for (int index = 0; index < target.getNameCount(); index++) {
       if (target.getName(index).toString().equals("current")) {
-        Path staging = target.getRoot();
-        if (staging == null) {
-          staging = Path.of("");
+        Path directory = target.getRoot();
+        if (directory == null) {
+          directory = Path.of("");
         }
         for (int component = 0; component < target.getNameCount(); component++) {
-          staging =
-              staging.resolve(component == index ? "staging" : target.getName(component).toString());
+          directory =
+              directory.resolve(
+                  component == index ? state : target.getName(component).toString());
         }
-        return staging;
+        return directory;
       }
     }
-    return target.resolveSibling(target.getFileName() + ".jman-java-staging");
+    return target.resolveSibling(target.getFileName() + legacySuffix);
+  }
+
+  private static void publishDirectory(Path source, Path target) throws IOException {
+    cleanDirectory(target);
+    Path parent = target.getParent();
+    if (parent != null) {
+      Files.createDirectories(parent);
+    }
+    Files.move(source, target);
   }
 
   private static void addPathOption(List<String> options, String name, List<Path> paths) {

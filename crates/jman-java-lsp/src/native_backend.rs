@@ -226,16 +226,11 @@ impl NativeBackend {
             .filter(|model| {
                 is_java_compile_model(model)
                     && !model.annotation_processor_path.is_empty()
-                    && model
-                        .classpath
-                        .iter()
-                        .chain(&model.module_path)
-                        .chain(&model.annotation_processor_path)
-                        .all(|path| path.exists())
+                    && processor_inputs_available(model, &self.models)
             })
             .cloned()
             .collect();
-        models.sort_by_key(|model| !is_main_compile_model(model));
+        order_processor_models(&mut models);
         if models.is_empty() {
             self.processor_workers.clear();
             return Ok(());
@@ -292,13 +287,16 @@ impl NativeBackend {
                     }
                 }
             }
+            let mut processor_classpath = Vec::new();
             for (processed_key, path) in &processor_classes {
                 if processor_output_is_dependency(&model, processed_key, &self.models)
-                    && !classpath.contains(path)
+                    && !processor_classpath.contains(path)
                 {
-                    classpath.push(path.clone());
+                    processor_classpath.push(path.clone());
                 }
             }
+            processor_classpath.extend(classpath);
+            classpath = processor_classpath;
             let mut source_path = model.source_path();
             for root in dependency_source_roots(&model, &self.models) {
                 if !source_path.contains(&root) {
@@ -331,8 +329,8 @@ impl NativeBackend {
             };
             let request_file = state.join("request.properties");
             if matches!(request.persistent_cache_hit(&request_file), Ok(Some(_))) {
-                if request.classes_directory.is_dir() {
-                    processor_classes.push((key.clone(), request.classes_directory.clone()));
+                for classes in processor_output_directories(&request) {
+                    processor_classes.push((key.clone(), classes));
                 }
                 continue;
             }
@@ -364,20 +362,22 @@ impl NativeBackend {
                 );
                 self.processor_workers.remove(&java);
             }
-            if request.classes_directory.is_dir() {
-                processor_classes.push((key, request.classes_directory));
+            for classes in processor_output_directories(&request) {
+                processor_classes.push((key.clone(), classes));
             }
         }
         self.processor_workers
             .retain(|java, _| used_java_executables.contains(java));
         for model in &mut self.models {
             let key = format!("{}:{}", model.project_path, model.task_path);
-            for (_, classes) in processor_classes
+            let outputs: Vec<_> = processor_classes
                 .iter()
                 .filter(|(candidate, _)| candidate == &key)
-            {
-                if !model.classpath.contains(classes) {
-                    model.classpath.insert(0, classes.clone());
+                .map(|(_, classes)| classes.clone())
+                .collect();
+            for classes in outputs.into_iter().rev() {
+                if !model.classpath.contains(&classes) {
+                    model.classpath.insert(0, classes);
                 }
             }
         }
@@ -1091,6 +1091,80 @@ fn safe_key(key: &str) -> String {
         .collect()
 }
 
+fn order_processor_models(models: &mut Vec<CompileModel>) {
+    let mut remaining = std::mem::take(models);
+    while !remaining.is_empty() {
+        let next = remaining
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| {
+                !remaining.iter().any(|dependency| {
+                    (candidate
+                        .project_dependencies
+                        .iter()
+                        .any(|project| project == &dependency.project_path)
+                        || (!is_main_compile_model(candidate)
+                            && is_main_compile_model(dependency)
+                            && candidate.project_path == dependency.project_path))
+                        && compile_model_key(candidate) != compile_model_key(dependency)
+                })
+            })
+            .min_by_key(|(_, candidate)| {
+                (
+                    !is_main_compile_model(candidate),
+                    candidate.project_path.as_str(),
+                    candidate.task_path.as_str(),
+                )
+            })
+            .map(|(index, _)| index)
+            .unwrap_or_else(|| {
+                remaining
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, candidate)| {
+                        (
+                            !is_main_compile_model(candidate),
+                            candidate.project_path.as_str(),
+                            candidate.task_path.as_str(),
+                        )
+                    })
+                    .map_or(0, |(index, _)| index)
+            });
+        models.push(remaining.remove(next));
+    }
+}
+
+fn processor_output_directories(request: &ProcessorRequest) -> Vec<PathBuf> {
+    [
+        partial_processor_classes_directory(&request.classes_directory),
+        request.classes_directory.clone(),
+    ]
+    .into_iter()
+    .filter(|directory| directory.is_dir())
+    .collect()
+}
+
+fn partial_processor_classes_directory(target: &Path) -> PathBuf {
+    let mut partial = PathBuf::new();
+    let mut replaced = false;
+    for component in target.components() {
+        if !replaced && component.as_os_str() == "current" {
+            partial.push("partial");
+            replaced = true;
+        } else {
+            partial.push(component.as_os_str());
+        }
+    }
+    if replaced {
+        partial
+    } else {
+        target.with_file_name(format!(
+            "{}.jman-java-partial",
+            target.file_name().unwrap_or_default().to_string_lossy()
+        ))
+    }
+}
+
 fn dependency_source_roots(
     owner: &CompileModel,
     models: &[CompileModel],
@@ -1121,6 +1195,24 @@ fn dependency_source_roots(
         }
     }
     roots
+}
+
+fn processor_inputs_available(model: &CompileModel, models: &[CompileModel]) -> bool {
+    if !model
+        .annotation_processor_path
+        .iter()
+        .all(|path| path.exists())
+        || !model.module_path.iter().all(|path| path.exists())
+    {
+        return false;
+    }
+    let dependencies = dependency_compile_models(model, models);
+    model.classpath.iter().all(|path| {
+        path.exists()
+            || dependencies
+                .iter()
+                .any(|dependency| path.starts_with(&dependency.project_directory))
+    })
 }
 
 fn dependency_compile_models<'a>(
@@ -2892,6 +2984,114 @@ mod decompiler_tests {
         assert_eq!(
             projects,
             std::collections::HashSet::from([":middle", ":base"])
+        );
+    }
+
+    #[test]
+    fn processor_inputs_allow_unbuilt_reactor_outputs_but_not_missing_external_inputs() {
+        let root = tempfile::tempdir().unwrap();
+        let domain = root.path().join("domain");
+        let app = root.path().join("app");
+        let processor = root.path().join("processor.jar");
+        std::fs::create_dir_all(&domain).unwrap();
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(&processor, "processor").unwrap();
+        let model =
+            |project: &str, directory: &Path, classpath: Vec<PathBuf>, dependencies: Vec<&str>| {
+                serde_json::from_value::<CompileModel>(serde_json::json!({
+                    "schemaVersion": 2,
+                    "buildSystem": "gradle",
+                    "projectPath": project,
+                    "projectDirectory": directory,
+                    "taskPath": format!("{project}:compileJava"),
+                    "sourceFiles": [],
+                    "sourceRoots": [],
+                    "classpath": classpath,
+                    "modulePath": [],
+                    "projectDependencies": dependencies,
+                    "annotationProcessorPath": [processor],
+                    "compilerArgs": [],
+                    "release": 21,
+                    "encoding": "UTF-8",
+                    "generatedSourcesDirectory": null,
+                    "destinationDirectory": null,
+                    "javaCompilerExecutable": null,
+                    "javaLanguageVersion": 21
+                }))
+                .unwrap()
+            };
+        let dependency = model(":domain", &domain, vec![], vec![]);
+        let missing_reactor_output = domain.join("build/libs/domain.jar");
+        let owner = model(":app", &app, vec![missing_reactor_output], vec![":domain"]);
+        let models = vec![owner.clone(), dependency];
+        assert!(processor_inputs_available(&owner, &models));
+
+        let missing_external = model(
+            ":app",
+            &app,
+            vec![root.path().join("repository/missing.jar")],
+            vec![":domain"],
+        );
+        assert!(!processor_inputs_available(&missing_external, &models));
+    }
+
+    #[test]
+    fn annotation_processors_run_dependencies_before_consumers_and_tests() {
+        let model = |project: &str, task: &str, dependencies: Vec<&str>| {
+            serde_json::from_value::<CompileModel>(serde_json::json!({
+                "schemaVersion": 2,
+                "buildSystem": "gradle",
+                "projectPath": project,
+                "projectDirectory": format!("/workspace/{project}"),
+                "taskPath": task,
+                "sourceFiles": [],
+                "sourceRoots": [],
+                "classpath": [],
+                "modulePath": [],
+                "projectDependencies": dependencies,
+                "annotationProcessorPath": ["/processors/lombok.jar"],
+                "compilerArgs": [],
+                "release": 21,
+                "encoding": "UTF-8",
+                "generatedSourcesDirectory": null,
+                "destinationDirectory": null,
+                "javaCompilerExecutable": null,
+                "javaLanguageVersion": 21
+            }))
+            .unwrap()
+        };
+        let mut models = vec![
+            model(":app", ":app:compileTestJava", vec![":domain"]),
+            model(":app", ":app:compileJava", vec![":domain"]),
+            model(":domain", ":domain:compileJava", vec![]),
+        ];
+
+        order_processor_models(&mut models);
+
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| model.task_path.as_str())
+                .collect::<Vec<_>>(),
+            [
+                ":domain:compileJava",
+                ":app:compileJava",
+                ":app:compileTestJava"
+            ]
+        );
+    }
+
+    #[test]
+    fn partial_processor_output_uses_a_parallel_cache_generation() {
+        assert_eq!(
+            partial_processor_classes_directory(Path::new(
+                "/cache/processors/unit/current/build/classes/java/main"
+            )),
+            PathBuf::from("/cache/processors/unit/partial/build/classes/java/main")
+        );
+        assert_eq!(
+            partial_processor_classes_directory(Path::new("/tmp/classes")),
+            PathBuf::from("/tmp/classes.jman-java-partial")
         );
     }
 
