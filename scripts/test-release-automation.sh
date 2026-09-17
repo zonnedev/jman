@@ -91,6 +91,8 @@ grep -q 'environment: vscode-marketplace' \
   "${workflow_dir}/verify-vscode-marketplace-identity.yml"
 grep -q '499b84ac-1321-427f-aa17-267ca6975798' \
   "${workflow_dir}/verify-vscode-marketplace-identity.yml"
+grep -q 'vsce verify-pat --azure-credential zonnedev' \
+  "${workflow_dir}/verify-vscode-marketplace-identity.yml"
 if grep -R -q 'VSCE_PAT' "${workflow_dir}"; then
   echo "Marketplace workflow must not use a long-lived PAT" >&2
   exit 1

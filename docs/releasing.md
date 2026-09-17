@@ -20,9 +20,15 @@ versions, commits, or tags.
    role.
 5. Add the identity's client, tenant, and subscription IDs to the environment as
    `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` secrets.
-6. Run **Verify VS Code Marketplace Identity**, copy the identity shown in its
-   job summary, and add it to the `zonnedev` Marketplace publisher with the
-   `Contributor` role.
+6. Create or use an Azure DevOps organization connected to the same Microsoft
+   Entra directory, then add the managed identity to the organization with the
+   free `Stakeholder` access level. This creates the Azure DevOps profile used
+   by Visual Studio Marketplace.
+7. Run **Verify VS Code Marketplace Identity** and copy the identity shown in
+   its job summary. Add that identity to the `zonnedev` Marketplace publisher
+   with the `Contributor` role.
+8. Rerun **Verify VS Code Marketplace Identity** and confirm that its
+   Marketplace publisher access check succeeds.
 
 Marketplace publishing exchanges GitHub OIDC tokens for short-lived Microsoft
 Entra credentials. Do not add a `VSCE_PAT` secret; the workflow intentionally
