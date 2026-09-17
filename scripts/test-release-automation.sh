@@ -20,6 +20,17 @@ release_dist_dir="${test_root}/release-dist"
 vscode_dist_dir="${test_root}/vscode"
 output_dir="${test_root}/github-release"
 workflow_dir="${project_dir}/.github/workflows"
+workspace_rust_version="$({
+  awk '
+    $0 == "[workspace.package]" { in_workspace_package = 1; next }
+    /^\[/ { in_workspace_package = 0 }
+    in_workspace_package && $1 == "rust-version" {
+      gsub(/"/, "", $3)
+      print $3
+      exit
+    }
+  ' "${project_dir}/Cargo.toml"
+})"
 
 rm -rf "${test_root}"
 mkdir -p "${release_dist_dir}" "${vscode_dist_dir}"
@@ -78,6 +89,15 @@ fi
 for workflow in ci.yml release.yml publish-vscode.yml verify-vscode-marketplace-identity.yml; do
   test -s "${workflow_dir}/${workflow}"
 done
+for workflow in ci.yml release.yml; do
+  grep -Eq "rustup toolchain install ${workspace_rust_version}([.]|[[:space:]])" \
+    "${workflow_dir}/${workflow}"
+done
+if grep -R -Eq '^rust-version[[:space:]]*=[[:space:]]*"' \
+  "${project_dir}/crates"/*/Cargo.toml; then
+  echo "Workspace crates must inherit workspace.package.rust-version" >&2
+  exit 1
+fi
 while IFS= read -r action_reference; do
   if [[ ! "${action_reference}" =~ @[0-9a-f]{40}$ ]]; then
     echo "GitHub Action is not pinned to a full commit: ${action_reference}" >&2

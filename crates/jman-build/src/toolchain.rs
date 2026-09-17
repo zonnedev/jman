@@ -20,7 +20,7 @@ const API_ROOT: &str = "https://api.adoptium.net/v3";
 const METADATA: &str = ".jman-toolchain.json";
 const REMOTE_PAGE_SIZE: usize = 20;
 const CATALOG_CACHE_SCHEMA: u32 = 1;
-const CATALOG_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
+const CATALOG_CACHE_TTL: Duration = Duration::from_mins(15);
 const KNOWN_LTS_MAJORS: &[u16] = &[8, 11, 17, 21, 25];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
