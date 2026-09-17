@@ -75,7 +75,7 @@ if JMAN_RELEASE_DIST_DIR="${release_dist_dir}" \
   exit 1
 fi
 
-for workflow in ci.yml release.yml publish-vscode.yml; do
+for workflow in ci.yml release.yml publish-vscode.yml verify-vscode-marketplace-identity.yml; do
   test -s "${workflow_dir}/${workflow}"
 done
 while IFS= read -r action_reference; do
@@ -84,7 +84,13 @@ while IFS= read -r action_reference; do
     exit 1
   fi
 done < <(sed -n 's/^[[:space:]]*uses:[[:space:]]*\([^ #]*\).*/\1/p' "${workflow_dir}"/*.yml)
-grep -q -- '--oidc' "${workflow_dir}/publish-vscode.yml"
+grep -q 'azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43' \
+  "${workflow_dir}/publish-vscode.yml"
+grep -q -- '--azure-credential' "${workflow_dir}/publish-vscode.yml"
+grep -q 'environment: vscode-marketplace' \
+  "${workflow_dir}/verify-vscode-marketplace-identity.yml"
+grep -q '499b84ac-1321-427f-aa17-267ca6975798' \
+  "${workflow_dir}/verify-vscode-marketplace-identity.yml"
 if grep -R -q 'VSCE_PAT' "${workflow_dir}"; then
   echo "Marketplace workflow must not use a long-lived PAT" >&2
   exit 1

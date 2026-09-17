@@ -14,13 +14,19 @@ versions, commits, or tags.
    merging.
 3. Create a GitHub environment named `vscode-marketplace`. Add required
    reviewers so Marketplace publication remains a deliberate approval step.
-4. In the Visual Studio Marketplace publisher settings for `zonnedev`, create a
-   trusted-publishing policy for GitHub owner `zonnedev`, repository `jman`,
-   workflow `publish-vscode.yml`, and environment `vscode-marketplace`.
+4. Create an Azure user-assigned managed identity with a federated credential
+   for GitHub owner `zonnedev`, repository `jman`, and environment
+   `vscode-marketplace`. Assign the identity the Azure subscription `Reader`
+   role.
+5. Add the identity's client, tenant, and subscription IDs to the environment as
+   `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` secrets.
+6. Run **Verify VS Code Marketplace Identity**, copy the identity shown in its
+   job summary, and add it to the `zonnedev` Marketplace publisher with the
+   `Contributor` role.
 
-Marketplace publishing uses GitHub OIDC and short-lived credentials. Do not add
-a `VSCE_PAT` secret; the workflow intentionally does not support long-lived
-Marketplace tokens.
+Marketplace publishing exchanges GitHub OIDC tokens for short-lived Microsoft
+Entra credentials. Do not add a `VSCE_PAT` secret; the workflow intentionally
+does not support long-lived Marketplace tokens.
 
 ## Prepare a release
 
