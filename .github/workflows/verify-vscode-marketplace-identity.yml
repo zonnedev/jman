@@ -9,7 +9,7 @@ concurrency:
 
 jobs:
   verify:
-    name: Resolve Marketplace identity
+    name: Verify Marketplace access
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     environment: vscode-marketplace
@@ -38,22 +38,6 @@ jobs:
 
       - name: Install pinned publisher CLI
         run: npm ci --prefix editors/vscode
-
-      - name: Resolve Visual Studio Marketplace identity
-        shell: bash
-        run: |
-          set -euo pipefail
-          profile_id="$(az rest \
-            --url https://app.vssps.visualstudio.com/_apis/profile/profiles/me \
-            --resource 499b84ac-1321-427f-aa17-267ca6975798 \
-            --query id \
-            --output tsv)"
-          test -n "${profile_id}"
-          {
-            printf '## Visual Studio Marketplace identity\n\n'
-            printf 'Add this identity to the `zonnedev` publisher as a Contributor:\n\n'
-            printf '`%s`\n' "${profile_id}"
-          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Verify Marketplace publisher access
         working-directory: editors/vscode

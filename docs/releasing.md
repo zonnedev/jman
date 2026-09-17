@@ -24,11 +24,21 @@ versions, commits, or tags.
    Entra directory, then add the managed identity to the organization with the
    free `Stakeholder` access level. This creates the Azure DevOps profile used
    by Visual Studio Marketplace.
-7. Run **Verify VS Code Marketplace Identity** and copy the identity shown in
-   its job summary. Add that identity to the `zonnedev` Marketplace publisher
-   with the `Contributor` role.
-8. Rerun **Verify VS Code Marketplace Identity** and confirm that its
-   Marketplace publisher access check succeeds.
+7. From a federated CI job authenticated as the managed identity, retrieve its
+   Visual Studio Marketplace profile ID once with:
+
+   ```bash
+   az rest \
+     --url https://app.vssps.visualstudio.com/_apis/profile/profiles/me \
+     --resource 499b84ac-1321-427f-aa17-267ca6975798 \
+     --query id \
+     --output tsv
+   ```
+
+8. Add that profile ID to the `zonnedev` Marketplace publisher with the
+   `Contributor` role.
+9. Run **Verify VS Code Marketplace Identity** and confirm that its Marketplace
+   publisher access check succeeds.
 
 Marketplace publishing exchanges GitHub OIDC tokens for short-lived Microsoft
 Entra credentials. Do not add a `VSCE_PAT` secret; the workflow intentionally
