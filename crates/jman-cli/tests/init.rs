@@ -38,6 +38,130 @@ fn test_command_exposes_native_module_and_test_selectors() {
 }
 
 #[test]
+fn publish_command_exposes_safe_repository_controls() {
+    let output = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .args(["publish", "--help"])
+        .output()
+        .expect("read publish help");
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).expect("UTF-8 help");
+    for option in [
+        "--to <TO>",
+        "--repository-url <REPOSITORY_URL>",
+        "--local-repository <LOCAL_REPOSITORY>",
+        "--dry-run",
+        "--sign",
+        "--allow-dirty",
+        "--automatic",
+        "--format <FORMAT>",
+    ] {
+        assert!(help.contains(option), "missing {option} in:\n{help}");
+    }
+}
+
+#[test]
+fn publishes_complete_artifact_set_to_local_repository_and_reports_json() {
+    let project = tempfile::tempdir().expect("temporary project");
+    let cache = tempfile::tempdir().expect("temporary cache");
+    let repository = tempfile::tempdir().expect("local Maven repository");
+    fs::create_dir_all(project.path().join("src/main/java/com/example")).expect("sources");
+    fs::write(
+        project
+            .path()
+            .join("src/main/java/com/example/Library.java"),
+        "package com.example; /** Example API. */ public final class Library { \
+         private Library() {} /** Returns a value. */ public static int value() { return 1; } }",
+    )
+    .expect("source");
+    fs::write(
+        project.path().join("jman.toml"),
+        r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "library"
+version = "1.2.3"
+java-release = 17
+packaging = "jar"
+
+[publishing]
+name = "Library"
+description = "Example library"
+url = "https://example.test/library"
+"#,
+    )
+    .expect("manifest");
+    fs::write(
+        project.path().join("jman.lock"),
+        r#"lock-version = 3
+manifest-hash = "sha256:test"
+workspace-hash = "sha256:test"
+platform = "test"
+[toolchain]
+java-release = 17
+[classpath]
+"#,
+    )
+    .expect("lockfile");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .args([
+            "publish",
+            project.path().to_str().expect("UTF-8 path"),
+            "--local-repository",
+            repository.path().to_str().expect("UTF-8 repository"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("publish project");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON report");
+    assert_eq!(report["target"], "local");
+    assert_eq!(report["dryRun"], false);
+    assert_eq!(report["modules"][0]["artifact"], "library");
+    let published = repository.path().join("com/example/library/1.2.3");
+    for file in [
+        "library-1.2.3.jar",
+        "library-1.2.3-sources.jar",
+        "library-1.2.3-javadoc.jar",
+        "library-1.2.3.pom",
+        "library-1.2.3.jar.sha256",
+        "library-1.2.3.pom.sha512",
+    ] {
+        assert!(published.join(file).is_file(), "missing {file}");
+    }
+    let pom = fs::read_to_string(published.join("library-1.2.3.pom")).expect("published POM");
+    assert!(pom.contains("<groupId>com.example</groupId>"));
+    assert!(pom.contains("<description>Example library</description>"));
+
+    let dry_repository = project.path().join("must-not-exist");
+    let dry_run = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .args([
+            "--quiet",
+            "publish",
+            project.path().to_str().expect("UTF-8 path"),
+            "--local-repository",
+            dry_repository.to_str().expect("UTF-8 repository"),
+            "--dry-run",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("dry-run publication");
+    assert!(dry_run.status.success());
+    assert!(!dry_repository.exists());
+    let report: serde_json::Value = serde_json::from_slice(&dry_run.stdout).expect("JSON report");
+    assert_eq!(report["dryRun"], true);
+}
+
+#[test]
 fn local_java_list_json_is_machine_readable_without_network() {
     let cache = tempfile::tempdir().expect("temporary cache");
     let output = Command::new(env!("CARGO_BIN_EXE_jman"))

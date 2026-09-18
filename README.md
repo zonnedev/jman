@@ -32,6 +32,22 @@ normal JMAN operations do not invoke it. Use `jman sync` after dependency
 changes, `jman build --all` for all reproducible archives, and `jman doctor` to
 inspect the selected JDK and optional container runtime.
 
+Publish a library to the local Maven repository, a generic Maven repository,
+or Maven Central:
+
+```bash
+jman publish                         # install into ~/.m2/repository
+jman publish --dry-run --format json # build and validate without delivery
+jman publish --to repository --repository-url https://repo.example/releases
+jman publish --to central            # validate in the Central Portal
+jman publish --to central --automatic
+```
+
+Publishing creates deterministic thin, source, and Javadoc JARs, a standalone
+POM, and Maven-compatible checksums. Central publications are also GPG-signed
+and uploaded as a repository-layout bundle. Credentials are accepted only from
+environment variables; see [the publishing guide](docs/publishing.md).
+
 Manage Java toolchains directly through JMAN:
 
 ```bash

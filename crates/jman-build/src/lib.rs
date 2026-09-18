@@ -2520,6 +2520,7 @@ mod tests {
             toolchain: None,
             maven: None,
             build: None,
+            publishing: None,
             repositories: Vec::new(),
             dependencies: jman_config::Dependencies::default(),
             annotation_processors: BTreeMap::new(),

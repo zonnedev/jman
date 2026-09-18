@@ -50,6 +50,8 @@ pub struct Manifest {
     pub maven: Option<MavenCompatibility>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<Build>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publishing: Option<Publishing>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repositories: Vec<Repository>,
     #[serde(default, skip_serializing_if = "Dependencies::is_empty")]
@@ -138,6 +140,55 @@ pub struct Build {
     pub encoding: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub compiler_args: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Publishing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub licenses: Vec<License>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub developers: Vec<Developer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scm: Option<Scm>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct License {
+    pub name: String,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distribution: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Developer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Scm {
+    pub connection: String,
+    pub developer_connection: String,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -312,6 +363,9 @@ impl Manifest {
                 }
             }
         }
+        if let Some(publishing) = &self.publishing {
+            validate_publishing(publishing)?;
+        }
         Ok(())
     }
 
@@ -457,6 +511,43 @@ fn validate_jdk_vendor(vendor: &str) -> Result<(), ConfigError> {
     }
 }
 
+fn validate_publishing(publishing: &Publishing) -> Result<(), ConfigError> {
+    for (label, value) in [
+        ("publishing name", publishing.name.as_deref()),
+        ("publishing description", publishing.description.as_deref()),
+        ("publishing URL", publishing.url.as_deref()),
+    ] {
+        if value.is_some_and(|value| value.trim().is_empty()) {
+            return Err(ConfigError::Validation(format!("{label} cannot be empty")));
+        }
+    }
+    for license in &publishing.licenses {
+        if license.name.trim().is_empty() || license.url.trim().is_empty() {
+            return Err(ConfigError::Validation(
+                "publishing licenses require non-empty name and URL".to_owned(),
+            ));
+        }
+    }
+    for developer in &publishing.developers {
+        if developer.name.trim().is_empty() {
+            return Err(ConfigError::Validation(
+                "publishing developers require a non-empty name".to_owned(),
+            ));
+        }
+    }
+    if let Some(scm) = &publishing.scm {
+        if scm.connection.trim().is_empty()
+            || scm.developer_connection.trim().is_empty()
+            || scm.url.trim().is_empty()
+        {
+            return Err(ConfigError::Validation(
+                "publishing SCM requires connection, developer-connection, and URL".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn default_packaging() -> String {
     "jar".to_owned()
 }
@@ -512,6 +603,29 @@ mod tests {
                 encoding: "UTF-8".to_owned(),
                 compiler_args: vec!["-parameters".to_owned()],
             }),
+            publishing: Some(Publishing {
+                name: Some("Demo".to_owned()),
+                description: Some("Example project".to_owned()),
+                url: Some("https://example.test/demo".to_owned()),
+                licenses: vec![License {
+                    name: "Apache-2.0".to_owned(),
+                    url: "https://www.apache.org/licenses/LICENSE-2.0.txt".to_owned(),
+                    distribution: Some("repo".to_owned()),
+                }],
+                developers: vec![Developer {
+                    id: Some("developer".to_owned()),
+                    name: "Developer".to_owned(),
+                    email: None,
+                    organization: None,
+                    organization_url: None,
+                }],
+                scm: Some(Scm {
+                    connection: "scm:git:https://example.test/demo.git".to_owned(),
+                    developer_connection: "scm:git:ssh://example.test/demo.git".to_owned(),
+                    url: "https://example.test/demo".to_owned(),
+                    tag: Some("HEAD".to_owned()),
+                }),
+            }),
             repositories: vec![Repository {
                 id: "central".to_owned(),
                 url: "https://repo.maven.apache.org/maven2".to_owned(),
@@ -562,6 +676,38 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn rejects_incomplete_configured_publishing_entries() {
+        let mut manifest = minimal_manifest();
+        manifest.publishing = Some(Publishing {
+            licenses: vec![License {
+                name: String::new(),
+                url: "https://example.test/license".to_owned(),
+                distribution: None,
+            }],
+            ..Publishing::default()
+        });
+        assert!(matches!(
+            manifest.validate(),
+            Err(ConfigError::Validation(message)) if message.contains("licenses")
+        ));
+
+        manifest.publishing = Some(Publishing {
+            developers: vec![Developer {
+                id: None,
+                name: "  ".to_owned(),
+                email: None,
+                organization: None,
+                organization_url: None,
+            }],
+            ..Publishing::default()
+        });
+        assert!(matches!(
+            manifest.validate(),
+            Err(ConfigError::Validation(message)) if message.contains("developers")
+        ));
+    }
+
     fn minimal_manifest() -> Manifest {
         Manifest {
             manifest_version: MANIFEST_VERSION,
@@ -577,6 +723,7 @@ mod tests {
             toolchain: None,
             maven: None,
             build: None,
+            publishing: None,
             repositories: Vec::new(),
             dependencies: Dependencies::default(),
             annotation_processors: BTreeMap::new(),

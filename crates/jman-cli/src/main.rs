@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    env,
     ffi::OsStr,
     fmt::Write as _,
     io::{self, IsTerminal, Write},
@@ -60,6 +61,8 @@ enum Command {
     Check(Check),
     /// Build standard and optional module artifacts.
     Build(BuildCommand),
+    /// Publish Maven-compatible artifacts locally or to a remote repository.
+    Publish(PublishCommand),
     /// Compile and run an application.
     Run(RunCommand),
     /// Compile and run Java tests.
@@ -206,6 +209,60 @@ struct BuildCommand {
     /// Build fat, source, and Javadoc artifacts.
     #[arg(long)]
     all: bool,
+}
+
+#[derive(Debug, Args)]
+#[allow(clippy::struct_excessive_bools)]
+struct PublishCommand {
+    /// Project directory.
+    #[arg(default_value = ".")]
+    path: PathBuf,
+    /// Publication destination.
+    #[arg(long, value_enum, default_value_t = PublishTargetArgument::Local)]
+    to: PublishTargetArgument,
+    /// Generic Maven repository base URL (required with --to repository).
+    #[arg(long)]
+    repository_url: Option<String>,
+    /// Local Maven repository (defaults to ~/.m2/repository).
+    #[arg(long)]
+    local_repository: Option<PathBuf>,
+    /// Maximum number of modules compiled concurrently.
+    #[arg(short, long)]
+    jobs: Option<usize>,
+    /// Do not download a missing managed JDK or dependency.
+    #[arg(long)]
+    offline: bool,
+    /// Build, validate, and stage artifacts without publishing them.
+    #[arg(long)]
+    dry_run: bool,
+    /// Sign artifacts with GPG (always enabled for Maven Central).
+    #[arg(long)]
+    sign: bool,
+    /// GPG key ID or fingerprint (defaults to the GPG default key).
+    #[arg(long)]
+    gpg_key: Option<String>,
+    /// Allow remote publication from a dirty Git worktree.
+    #[arg(long)]
+    allow_dirty: bool,
+    /// Permit a plain HTTP generic repository URL for local development.
+    #[arg(long)]
+    allow_insecure: bool,
+    /// Ask Maven Central to publish immediately after validation.
+    #[arg(long)]
+    automatic: bool,
+    /// Maximum seconds to wait for Maven Central validation/publication.
+    #[arg(long, default_value_t = 300)]
+    timeout_seconds: u64,
+    /// Publication report format.
+    #[arg(long, value_enum, default_value_t = ReportFormat::Human)]
+    format: ReportFormat,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum PublishTargetArgument {
+    Local,
+    Repository,
+    Central,
 }
 
 #[derive(Debug, Args)]
@@ -401,6 +458,9 @@ async fn main() {
                 format: ReportFormat::Json,
                 ..
             }),
+        }) | Command::Publish(PublishCommand {
+            format: ReportFormat::Json,
+            ..
         })
     );
     let ui = Ui::new(cli.quiet, cli.verbose, cli.no_progress, structured);
@@ -420,6 +480,7 @@ async fn run(cli: Cli, ui: &Ui) -> Result<()> {
         Command::Why(arguments) => dependency_why(&arguments),
         Command::Check(arguments) => compile_project(&arguments, ui, "Checking", "Checked").await,
         Command::Build(arguments) => build_project(&arguments, ui).await,
+        Command::Publish(arguments) => publish_project(&arguments, ui).await,
         Command::Run(arguments) => run_project(&arguments, ui).await,
         Command::Test(arguments) => test_project(&arguments, ui).await,
         Command::Doctor(arguments) => doctor_project(&arguments.path, ui).await,
@@ -1145,6 +1206,165 @@ async fn build_project(arguments: &BuildCommand, ui: &Ui) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+async fn publish_project(arguments: &PublishCommand, ui: &Ui) -> Result<()> {
+    let target = absolute_path(&arguments.path)?;
+    if !target.join("jman.toml").is_file() {
+        bail!(
+            "cannot publish {}: jman.toml was not found",
+            target.display()
+        );
+    }
+    if arguments.timeout_seconds == 0 {
+        bail!("--timeout-seconds must be at least 1");
+    }
+    let workspace_root = find_workspace_root(&target);
+    let jobs = arguments
+        .jobs
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from));
+    if jobs == 0 {
+        bail!("--jobs must be at least 1");
+    }
+    let publish_target = publication_target(arguments)?;
+    let activity = ui.activity(format!("Publishing {}", workspace_root.display()));
+    let report = jman_publish::publish(&jman_publish::PublishOptions {
+        root: workspace_root,
+        cache_dir: default_cache_dir(),
+        jobs,
+        offline: arguments.offline,
+        dry_run: arguments.dry_run,
+        sign: arguments.sign,
+        gpg_key: arguments
+            .gpg_key
+            .clone()
+            .or_else(|| env::var("JMAN_GPG_KEY_ID").ok()),
+        gpg_passphrase: env::var("JMAN_GPG_PASSPHRASE").ok(),
+        allow_dirty: arguments.allow_dirty,
+        timeout: std::time::Duration::from_secs(arguments.timeout_seconds),
+        target: publish_target,
+    })
+    .await
+    .context("publication failed")?;
+    activity.finish(if report.dry_run {
+        "Publication staged and validated"
+    } else {
+        "Publication completed"
+    });
+    print_publish_report(&report, arguments.format, ui)
+}
+
+fn publication_target(arguments: &PublishCommand) -> Result<jman_publish::PublishTarget> {
+    Ok(match arguments.to {
+        PublishTargetArgument::Local => {
+            if arguments.repository_url.is_some() {
+                bail!("--repository-url requires --to repository");
+            }
+            if arguments.automatic || arguments.allow_insecure {
+                bail!("--automatic and --allow-insecure do not apply to local publication");
+            }
+            let repository = arguments.local_repository.clone().unwrap_or_else(|| {
+                dirs::home_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join(".m2/repository")
+            });
+            jman_publish::PublishTarget::Local { repository }
+        }
+        PublishTargetArgument::Repository => {
+            if arguments.local_repository.is_some() {
+                bail!("--local-repository requires --to local");
+            }
+            if arguments.automatic {
+                bail!("--automatic requires --to central");
+            }
+            let value = arguments
+                .repository_url
+                .as_deref()
+                .context("--to repository requires --repository-url")?;
+            let url = value
+                .parse()
+                .with_context(|| format!("invalid repository URL `{value}`"))?;
+            jman_publish::PublishTarget::Repository {
+                url,
+                credentials: jman_publish::RepositoryCredentials {
+                    username: env::var("JMAN_PUBLISH_USERNAME").ok(),
+                    password: env::var("JMAN_PUBLISH_PASSWORD").ok(),
+                    token: env::var("JMAN_PUBLISH_TOKEN").ok(),
+                },
+                allow_insecure: arguments.allow_insecure,
+            }
+        }
+        PublishTargetArgument::Central => {
+            if arguments.repository_url.is_some() || arguments.local_repository.is_some() {
+                bail!("repository URL/path options do not apply to Maven Central");
+            }
+            if arguments.allow_insecure {
+                bail!("--allow-insecure does not apply to Maven Central");
+            }
+            let token = central_credentials(arguments.dry_run)?;
+            jman_publish::PublishTarget::Central {
+                token,
+                automatic: arguments.automatic,
+                api_url: jman_publish::CENTRAL_API_URL
+                    .parse()
+                    .expect("static Maven Central API URL"),
+            }
+        }
+    })
+}
+
+fn print_publish_report(
+    report: &jman_publish::PublishReport,
+    format: ReportFormat,
+    ui: &Ui,
+) -> Result<()> {
+    match format {
+        ReportFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+        ReportFormat::Human => {
+            for module in &report.modules {
+                ui.success(format!(
+                    "{}:{}:{} ({})",
+                    module.group, module.artifact, module.version, module.packaging
+                ));
+            }
+            ui.success(format!(
+                "{} file{} staged at {}",
+                report.files.len(),
+                if report.files.len() == 1 { "" } else { "s" },
+                report.staging_directory.display()
+            ));
+            if let Some(bundle) = &report.bundle {
+                ui.success(format!("Central bundle -> {}", bundle.display()));
+            }
+            if let Some(id) = &report.deployment_id {
+                ui.success(format!(
+                    "Central deployment {id}: {}",
+                    report.deployment_state.as_deref().unwrap_or("submitted")
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn central_credentials(optional: bool) -> Result<String> {
+    if let Ok(token) = env::var("JMAN_CENTRAL_TOKEN") {
+        if !token.trim().is_empty() {
+            return Ok(token);
+        }
+    }
+    match (
+        env::var("JMAN_CENTRAL_USERNAME").ok(),
+        env::var("JMAN_CENTRAL_PASSWORD").ok(),
+    ) {
+        (Some(username), Some(password)) if !username.is_empty() && !password.is_empty() => {
+            Ok(jman_publish::central_token(&username, &password))
+        }
+        _ if optional => Ok(String::new()),
+        _ => bail!(
+            "Maven Central credentials are missing; set JMAN_CENTRAL_TOKEN or both JMAN_CENTRAL_USERNAME and JMAN_CENTRAL_PASSWORD"
+        ),
+    }
 }
 
 async fn compile_project(
@@ -1910,6 +2130,7 @@ fn scaffold_manifest(
             encoding: "UTF-8".to_owned(),
             compiler_args: Vec::new(),
         }),
+        publishing: None,
         repositories: Vec::new(),
         dependencies: Dependencies::default(),
         annotation_processors: BTreeMap::new(),
@@ -2987,6 +3208,7 @@ fn manifest_from_maven(effective: &EffectivePom, maven_authoritative: bool) -> R
                 .unwrap_or_else(|| "UTF-8".to_owned()),
             compiler_args: effective.compiler_args.clone(),
         }),
+        publishing: None,
         repositories: effective
             .repositories
             .iter()

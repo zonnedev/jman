@@ -7,6 +7,12 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ### Added
 
+- `jman publish` now builds and stages Maven-compatible multi-module
+  publications for the local Maven repository, generic HTTPS repositories, and
+  the Maven Central Portal. It generates standalone POM metadata, source and
+  Javadoc JARs, checksums, optional or Central-required GPG signatures,
+  deterministic Central bundles, dry-run validation, and JSON reports while
+  keeping credentials in environment variables.
 - `jman test` now reports each JUnit test as it starts and finishes through a
   versioned listener protocol, with a live module/suite/test tree, nested
   failure details, accurate method and suite-lifecycle timings, JSON and editor

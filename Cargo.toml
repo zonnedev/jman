@@ -6,6 +6,7 @@ members = [
     "crates/jman-resolver",
     "crates/javac-frontend",
     "crates/jman-java-lsp",
+    "crates/jman-publish",
 ]
 resolver = "3"
 
@@ -20,6 +21,7 @@ readme = "README.md"
 
 [workspace.dependencies]
 anyhow = "1.0"
+base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
 dirs = "6.0"
 futures = "0.3"
@@ -27,9 +29,11 @@ flate2 = "1.0"
 fs2 = "0.4"
 hex = "0.4"
 indicatif = "0.17"
-reqwest = { version = "0.12", default-features = false, features = ["http2", "json", "rustls-tls", "stream"] }
+md-5 = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["http2", "json", "multipart", "rustls-tls", "stream"] }
 roxmltree = "0.20"
 serde = { version = "1.0", features = ["derive"] }
+sha1 = "0.10"
 sha2 = "0.10"
 tar = "0.4"
 thiserror = "2.0"
