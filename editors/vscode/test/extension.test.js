@@ -350,6 +350,18 @@ async function main() {
     })).selector,
     "dev.GreetingTest#greets",
   );
+  assert.equal(
+    extension.parseTestEventLine(JSON.stringify({
+      reason: "test-suite",
+      module: "app",
+      suite: {
+        selector: "dev.GreetingTest",
+        durationMillis: 1200,
+        lifecycleMillis: 900,
+      },
+    })).suite.lifecycleMillis,
+    900,
+  );
   assert.deepEqual(
     extension.selectTestItems(roots, [methodItem], []),
     [methodItem],

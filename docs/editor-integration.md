@@ -41,8 +41,10 @@ settings, build, wrapper, version-catalog, and `buildSrc` files.
 The initialization result advertises these extensions under
 `capabilities.experimental.jmanJavaTesting`. Version 2 reports
 `streamingEvents: true`; JMAN test processes emit protocol-version-3
-`test-case-started` and `test-case` records as each JUnit test runs. Editors use
-those records instead of inferring results from console text, while JUnit XML
+`test-case-started`, `test-case`, `test-suite-started`, and `test-suite` records
+as JUnit executes tests and class containers. Suite records distinguish total
+container duration from shared lifecycle time outside child methods. Editors use
+these records instead of inferring results from console text, while JUnit XML
 remains available for final reconciliation.
 
 Editor integrations own only process startup, initialization options, file

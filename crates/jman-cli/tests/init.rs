@@ -280,15 +280,26 @@ public final class ConsoleLauncher {
     var report = arguments.stream()
         .filter(value -> value.startsWith("--reports-dir="))
         .findFirst().orElseThrow().substring("--reports-dir=".length());
+    var container = new TestIdentifier(
+        "[engine:fixture]/[class:com.example.AppTest]",
+        "AppTest",
+        new org.junit.platform.engine.support.descriptor.ClassSource("com.example.AppTest"),
+        null,
+        false);
     var identifier = new TestIdentifier(
         "[engine:fixture]/[class:com.example.AppTest]/[method:greets]",
         "greets(String)[1]",
-        new MethodSource("com.example.AppTest", "greets"));
+        new MethodSource("com.example.AppTest", "greets"),
+        container.getUniqueId(),
+        true);
     for (var listener : ServiceLoader.load(TestExecutionListener.class)) {
+      listener.executionStarted(container);
+      Thread.sleep(150);
       listener.executionStarted(identifier);
       Thread.sleep(120);
       listener.executionFinished(identifier, TestExecutionResult.failed(
           new AssertionError("expected Ada")));
+      listener.executionFinished(container, TestExecutionResult.successful());
     }
     Thread.sleep(350);
     Files.writeString(Path.of(report).resolve("TEST-fixture.xml"),
@@ -325,12 +336,17 @@ public final class TestIdentifier {
   private final String id;
   private final String displayName;
   private final TestSource source;
-  public TestIdentifier(String id, String displayName, TestSource source) {
+  private final String parentId;
+  private final boolean test;
+  public TestIdentifier(
+      String id, String displayName, TestSource source, String parentId, boolean test) {
     this.id = id; this.displayName = displayName; this.source = source;
+    this.parentId = parentId; this.test = test;
   }
-  public boolean isTest() { return true; }
+  public boolean isTest() { return test; }
+  public boolean isContainer() { return !test; }
   public String getUniqueId() { return id; }
-  public Optional<String> getParentId() { return Optional.empty(); }
+  public Optional<String> getParentId() { return Optional.ofNullable(parentId); }
   public Optional<TestSource> getSource() { return Optional.ofNullable(source); }
   public String getDisplayName() { return displayName; }
 }",
@@ -354,6 +370,9 @@ public final class TestExecutionResult {
   }
   public static TestExecutionResult failed(Throwable throwable) {
     return new TestExecutionResult(Status.FAILED, throwable);
+  }
+  public static TestExecutionResult successful() {
+    return new TestExecutionResult(Status.SUCCESSFUL, null);
   }
   public Status getStatus() { return status; }
   public Optional<Throwable> getThrowable() { return Optional.ofNullable(throwable); }
@@ -613,25 +632,51 @@ processors = ["sha256:{digest}"]
         "{}",
         String::from_utf8_lossy(&structured.stderr)
     );
-    assert_eq!(events.len(), 4);
+    assert_eq!(events.len(), 6);
     assert_eq!(events[0]["protocolVersion"], 3);
     assert_eq!(events[0]["reason"], "test-module-started");
-    assert_eq!(events[1]["reason"], "test-case-started");
-    assert_eq!(events[2]["reason"], "test-case");
-    assert_eq!(events[2]["test"]["selector"], "com.example.AppTest#greets");
-    assert_eq!(events[2]["test"]["displayName"], "greets(String)[1]");
+    assert_eq!(events[1]["reason"], "test-suite-started");
+    assert_eq!(events[2]["reason"], "test-case-started");
+    assert_eq!(events[3]["reason"], "test-case");
+    assert_eq!(events[3]["test"]["selector"], "com.example.AppTest#greets");
+    assert_eq!(events[3]["test"]["displayName"], "greets(String)[1]");
     assert!(
-        events[2]["test"]["durationMillis"]
+        events[3]["test"]["durationMillis"]
             .as_u64()
             .expect("duration")
             >= 100
     );
-    assert_eq!(events[2]["test"]["message"], "expected Ada");
-    assert!(events[2]["test"]["details"]
+    assert!(
+        events[3]["test"]["durationNanos"]
+            .as_u64()
+            .expect("precise duration")
+            >= 100_000_000
+    );
+    assert_eq!(events[3]["test"]["message"], "expected Ada");
+    assert!(events[3]["test"]["details"]
         .as_str()
         .expect("failure details")
         .contains("AssertionError: expected Ada"));
-    assert_eq!(events[3]["reason"], "test-module-finished");
+    assert_eq!(events[4]["reason"], "test-suite");
+    assert!(
+        events[4]["suite"]["durationMillis"]
+            .as_u64()
+            .expect("suite duration")
+            >= 250
+    );
+    assert!(
+        events[4]["suite"]["lifecycleMillis"]
+            .as_u64()
+            .expect("lifecycle duration")
+            >= 140
+    );
+    assert!(
+        events[4]["suite"]["lifecycleNanos"]
+            .as_u64()
+            .expect("precise lifecycle duration")
+            >= 140_000_000
+    );
+    assert_eq!(events[5]["reason"], "test-module-finished");
     assert!(!project
         .path()
         .join(".jman/output/test-classes/com/example/AppIntegrationTest.class")

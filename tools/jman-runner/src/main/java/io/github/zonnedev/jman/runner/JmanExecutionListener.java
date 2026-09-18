@@ -2,6 +2,10 @@ package io.github.zonnedev.jman.runner;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.junit.platform.engine.TestExecutionResult;
@@ -16,23 +20,24 @@ public final class JmanExecutionListener implements TestExecutionListener {
     private static final int PROTOCOL_VERSION = 3;
     private static final char RECORD_SEPARATOR = '\u001e';
     private final Map<String, Long> startedAt = new ConcurrentHashMap<>();
+    private final Map<String, List<Interval>> childIntervals = new ConcurrentHashMap<>();
 
     @Override
     public void executionStarted(TestIdentifier identifier) {
-        if (!identifier.isTest()) return;
+        if (!isTestOrContainer(identifier)) return;
         startedAt.put(identifier.getUniqueId(), System.nanoTime());
-        emit(identifier, "test-started", null, null, null);
+        emit(identifier, reason(identifier, "started"), null, null, null);
     }
 
     @Override
     public void executionSkipped(TestIdentifier identifier, String reason) {
-        if (!identifier.isTest()) return;
-        emit(identifier, "test-finished", "skipped", reason, null);
+        if (!isTestOrContainer(identifier)) return;
+        emit(identifier, reason(identifier, "finished"), "skipped", reason, null);
     }
 
     @Override
     public void executionFinished(TestIdentifier identifier, TestExecutionResult result) {
-        if (!identifier.isTest()) return;
+        if (!isTestOrContainer(identifier)) return;
         String status;
         switch (result.getStatus()) {
             case SUCCESSFUL:
@@ -50,7 +55,7 @@ public final class JmanExecutionListener implements TestExecutionListener {
         Throwable failure = result.getThrowable().orElse(null);
         emit(
                 identifier,
-                "test-finished",
+                reason(identifier, "finished"),
                 status,
                 failure == null ? null : failure.getMessage(),
                 stackTrace(failure));
@@ -63,11 +68,29 @@ public final class JmanExecutionListener implements TestExecutionListener {
             String message,
             String details) {
         Source source = source(identifier.getSource().orElse(null));
-        long durationMillis = 0;
+        long durationNanos = 0;
+        long childDurationNanos = 0;
         if (status != null) {
             Long started = startedAt.remove(identifier.getUniqueId());
-            durationMillis = started == null ? 0 : (System.nanoTime() - started) / 1_000_000;
+            long finished = System.nanoTime();
+            long startedNanos = started == null ? finished : started;
+            durationNanos = finished - startedNanos;
+            childDurationNanos = coveredChildDuration(identifier.getUniqueId());
+            Interval interval = new Interval(startedNanos, finished);
+            identifier
+                    .getParentId()
+                    .ifPresent(
+                            parent ->
+                                    childIntervals
+                                            .computeIfAbsent(
+                                                    parent,
+                                                    ignored ->
+                                                            Collections.synchronizedList(
+                                                                    new ArrayList<>()))
+                                            .add(interval));
         }
+        long durationMillis = durationNanos / 1_000_000;
+        long lifecycleMillis = Math.max(0, durationNanos - childDurationNanos) / 1_000_000;
         StringBuilder json = new StringBuilder(512);
         json.append('{');
         field(json, "protocolVersion", Integer.toString(PROTOCOL_VERSION), false);
@@ -80,7 +103,16 @@ public final class JmanExecutionListener implements TestExecutionListener {
         field(json, "displayName", identifier.getDisplayName(), true);
         if (status != null) {
             field(json, "status", status, true);
+            field(json, "durationNanos", Long.toString(durationNanos), false);
             field(json, "durationMillis", Long.toString(durationMillis), false);
+            if (identifier.isContainer() && !identifier.isTest()) {
+                field(
+                        json,
+                        "lifecycleNanos",
+                        Long.toString(Math.max(0, durationNanos - childDurationNanos)),
+                        false);
+                field(json, "lifecycleMillis", Long.toString(lifecycleMillis), false);
+            }
             field(json, "message", message, true);
             field(json, "details", details, true);
         }
@@ -90,6 +122,36 @@ public final class JmanExecutionListener implements TestExecutionListener {
             System.out.println(json);
             System.out.flush();
         }
+    }
+
+    private static boolean isTestOrContainer(TestIdentifier identifier) {
+        return identifier.isTest() || identifier.isContainer();
+    }
+
+    private long coveredChildDuration(String identifier) {
+        List<Interval> intervals = childIntervals.remove(identifier);
+        if (intervals == null || intervals.isEmpty()) return 0;
+        List<Interval> ordered;
+        synchronized (intervals) {
+            ordered = new ArrayList<>(intervals);
+        }
+        ordered.sort(Comparator.comparingLong(interval -> interval.started));
+        long covered = 0;
+        long started = ordered.get(0).started;
+        long finished = ordered.get(0).finished;
+        for (int index = 1; index < ordered.size(); index++) {
+            Interval interval = ordered.get(index);
+            if (interval.started > finished) {
+                covered += finished - started;
+                started = interval.started;
+            }
+            finished = Math.max(finished, interval.finished);
+        }
+        return covered + finished - started;
+    }
+
+    private static String reason(TestIdentifier identifier, String phase) {
+        return identifier.isTest() ? "test-" + phase : "container-" + phase;
     }
 
     private static Source source(TestSource source) {
@@ -102,7 +164,7 @@ public final class JmanExecutionListener implements TestExecutionListener {
         }
         if (source instanceof ClassSource) {
             String className = ((ClassSource) source).getClassName();
-            return new Source(className, className, "");
+            return new Source(className, className, null);
         }
         return new Source(null, null, null);
     }
@@ -159,6 +221,16 @@ public final class JmanExecutionListener implements TestExecutionListener {
             this.selector = selector;
             this.className = className;
             this.methodName = methodName;
+        }
+    }
+
+    private static final class Interval {
+        private final long started;
+        private final long finished;
+
+        private Interval(long started, long finished) {
+            this.started = started;
+            this.finished = finished;
         }
     }
 }

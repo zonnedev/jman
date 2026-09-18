@@ -137,6 +137,8 @@ pub struct TestCaseResult {
     pub invocation: Option<String>,
     pub attempt: u32,
     pub status: TestCaseStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_nanos: Option<u64>,
     pub duration_millis: u64,
     pub message: Option<String>,
     pub details: Option<String>,
@@ -154,6 +156,8 @@ pub enum TestCaseStatus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TestEventReason {
+    ContainerStarted,
+    ContainerFinished,
     TestStarted,
     TestFinished,
 }
@@ -172,7 +176,10 @@ pub struct TestEvent {
     pub method_name: Option<String>,
     pub display_name: String,
     pub status: Option<TestCaseStatus>,
+    pub duration_nanos: Option<u64>,
     pub duration_millis: Option<u64>,
+    pub lifecycle_nanos: Option<u64>,
+    pub lifecycle_millis: Option<u64>,
     pub message: Option<String>,
     pub details: Option<String>,
 }
@@ -830,6 +837,7 @@ fn parse_junit_reports(directory: &Path) -> Result<Vec<TestCaseResult>, BuildErr
                 invocation,
                 attempt: 1,
                 status,
+                duration_nanos: None,
                 duration_millis,
                 message: problem
                     .and_then(|node| node.attribute("message"))

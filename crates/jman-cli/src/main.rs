@@ -536,6 +536,29 @@ fn report_live_test_event(
     report_test_module_started(&event.module, format, started_modules)?;
     let selector = event.selector.as_deref().unwrap_or(&event.id);
     match event.reason {
+        jman_build::TestEventReason::ContainerStarted => {
+            if event.class_name.is_some() && event.method_name.is_none() {
+                activity.set_message(format!(
+                    "Preparing {} › {}",
+                    event.module, event.display_name
+                ));
+                if format == ReportFormat::Json {
+                    print_test_json(&serde_json::json!({
+                        "protocolVersion": 3,
+                        "reason": "test-suite-started",
+                        "module": event.module,
+                        "id": event.id,
+                        "selector": selector,
+                        "displayName": event.display_name,
+                    }))?;
+                }
+            }
+        }
+        jman_build::TestEventReason::ContainerFinished => {
+            if event.class_name.is_some() && event.method_name.is_none() {
+                report_live_test_suite(event, selector, format, activity)?;
+            }
+        }
         jman_build::TestEventReason::TestStarted => {
             activity.set_message(format!("Running {} › {}", event.module, event.display_name));
             if format == ReportFormat::Json {
@@ -560,6 +583,7 @@ fn report_live_test_event(
                 invocation: None,
                 attempt: 1,
                 status,
+                duration_nanos: event.duration_nanos,
                 duration_millis: event.duration_millis.unwrap_or_default(),
                 message: event.message.clone(),
                 details: event.details.clone(),
@@ -584,12 +608,69 @@ fn report_live_test_event(
     Ok(())
 }
 
+fn report_live_test_suite(
+    event: &jman_build::TestEvent,
+    selector: &str,
+    format: ReportFormat,
+    activity: &ui::Activity,
+) -> Result<()> {
+    let status = event.status.unwrap_or(jman_build::TestCaseStatus::Errored);
+    let duration_millis = event.duration_millis.unwrap_or_default();
+    let lifecycle_millis = event.lifecycle_millis.unwrap_or_default();
+    if format == ReportFormat::Json {
+        print_test_json(&serde_json::json!({
+            "protocolVersion": 3,
+            "reason": "test-suite",
+            "module": event.module,
+            "suite": {
+                "id": event.id,
+                "selector": selector,
+                "className": event.class_name,
+                "displayName": event.display_name,
+                "status": status,
+                "durationNanos": event.duration_nanos,
+                "durationMillis": duration_millis,
+                "lifecycleNanos": event.lifecycle_nanos,
+                "lifecycleMillis": lifecycle_millis,
+                "message": event.message,
+                "details": event.details,
+            }
+        }))?;
+        return Ok(());
+    }
+    let total = event.duration_nanos.map_or_else(
+        || ui::format_duration(std::time::Duration::from_millis(duration_millis)),
+        |nanos| ui::format_duration(std::time::Duration::from_nanos(nanos)),
+    );
+    let timing = if event.lifecycle_nanos.unwrap_or_default() == 0 && lifecycle_millis == 0 {
+        format!("{total} total")
+    } else {
+        let lifecycle = event.lifecycle_nanos.map_or_else(
+            || ui::format_duration(std::time::Duration::from_millis(lifecycle_millis)),
+            |nanos| ui::format_duration(std::time::Duration::from_nanos(nanos)),
+        );
+        format!("{total} total, {lifecycle} lifecycle")
+    };
+    let name = format!("{} › {} ({timing})", event.module, event.display_name);
+    match status {
+        jman_build::TestCaseStatus::Passed => activity.status(format!("SUITE {name}")),
+        jman_build::TestCaseStatus::Skipped => activity.status(format!("SKIP SUITE {name}")),
+        jman_build::TestCaseStatus::Failed | jman_build::TestCaseStatus::Errored => {
+            activity.warning(format!("FAIL SUITE {name}"));
+        }
+    }
+    Ok(())
+}
+
 fn report_live_human_test(
     module: &str,
     test: &jman_build::TestCaseResult,
     activity: &ui::Activity,
 ) {
-    let duration = ui::format_duration(std::time::Duration::from_millis(test.duration_millis));
+    let duration = test.duration_nanos.map_or_else(
+        || ui::format_duration(std::time::Duration::from_millis(test.duration_millis)),
+        |nanos| ui::format_duration(std::time::Duration::from_nanos(nanos)),
+    );
     let name = format!("{module} › {} ({duration})", test.display_name);
     match test.status {
         jman_build::TestCaseStatus::Passed => activity.success(format!("PASS {name}")),

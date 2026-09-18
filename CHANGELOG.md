@@ -9,8 +9,8 @@ Versioning while it approaches a stable 0.3.0 release.
 
 - `jman test` now reports each JUnit test as it starts and finishes through a
   versioned listener protocol, with immediate human and JSON output, failure
-  details, editor updates, and XML-backed reconciliation when live events are
-  unavailable.
+  details, accurate method and suite-lifecycle timings, editor updates, and
+  XML-backed reconciliation when live events are unavailable.
 - Maven imports now prefer the project wrapper, then system Maven, before
   falling back to JMAN's native project importer. Maven-provided effective
   models retain active model semantics, compiler arguments, processor paths,

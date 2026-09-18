@@ -191,8 +191,12 @@ fn unknown_download_style() -> ProgressStyle {
 pub fn format_duration(duration: Duration) -> String {
     if duration.as_secs() > 0 {
         format!("{:.1}s", duration.as_secs_f64())
-    } else {
+    } else if duration.as_millis() > 0 {
         format!("{}ms", duration.as_millis())
+    } else if duration.as_nanos() > 0 {
+        format!("{}µs", duration.as_micros().max(1))
+    } else {
+        "0ms".to_owned()
     }
 }
 
@@ -204,6 +208,8 @@ mod tests {
     fn formats_short_and_long_durations_consistently() {
         assert_eq!(format_duration(Duration::from_millis(24)), "24ms");
         assert_eq!(format_duration(Duration::from_millis(1250)), "1.2s");
+        assert_eq!(format_duration(Duration::from_micros(742)), "742µs");
+        assert_eq!(format_duration(Duration::from_nanos(1)), "1µs");
     }
 
     #[test]

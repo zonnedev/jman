@@ -169,6 +169,8 @@ function parseTestEventLine(line) {
     const event = JSON.parse(line);
     if (event.reason === "test-case" && event.test?.selector) return event;
     if (event.reason === "test-case-started" && event.selector) return event;
+    if (event.reason === "test-suite" && event.suite?.selector) return event;
+    if (event.reason === "test-suite-started" && event.selector) return event;
     return undefined;
   } catch {
     return undefined;
@@ -301,6 +303,7 @@ async function configureTesting(context, command, environment, outputChannel) {
       const reported = new Set();
       let stdoutBuffer = "";
       const report = (event) => {
+        if (event.reason === "test-suite" || event.reason === "test-suite-started") return;
         const selector = event.reason === "test-case-started"
           ? event.selector
           : event.test.selector;

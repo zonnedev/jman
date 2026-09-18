@@ -103,10 +103,12 @@ Platform listener emits framed events while the worker is running; `--report
 json` exposes them as flushed, newline-delimited `test-module-started`,
 `test-case-started`, `test-case`, and `test-module-finished` events. Test cases
 retain a stable selector plus a unique display/invocation identity, exact failure
-message/details, duration, and retry attempt. JUnit XML remains the authoritative
-reconciliation fallback. Reruns use exact class or `Class#method` selectors. The
-protocol exposes debug descriptors and an explicit unsupported coverage response
-instead of silently pretending coverage was collected.
+message/details, duration, and retry attempt. Class-container events report total
+suite time and lifecycle time outside child test methods, including shared setup
+and teardown. JUnit XML remains the authoritative reconciliation fallback.
+Reruns use exact class or `Class#method` selectors. The protocol exposes debug
+descriptors and an explicit unsupported coverage response instead of silently
+pretending coverage was collected.
 
 Tests receive `-Djman.test.port=0` by default. Applications that need an HTTP port
 must read `jman.test.port` and bind port zero so the operating system chooses an
