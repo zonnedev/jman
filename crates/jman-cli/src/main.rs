@@ -466,6 +466,7 @@ async fn test_project(arguments: &TestCommand, ui: &Ui) -> Result<()> {
         debug: arguments.debug,
     };
     let (event_sender, mut event_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let test_activity = ui.activity("Compiling test sources");
     let tests = jman_build::test_workspace(
         &workspace_root,
         &cache_dir,
@@ -487,7 +488,7 @@ async fn test_project(arguments: &TestCommand, ui: &Ui) -> Result<()> {
                     report_live_test_event(
                         &event,
                         arguments.report,
-                        ui,
+                        &test_activity,
                         &mut started_modules,
                         &mut streamed_tests,
                     )?;
@@ -503,15 +504,16 @@ async fn test_project(arguments: &TestCommand, ui: &Ui) -> Result<()> {
         report_live_test_event(
             &event,
             arguments.report,
-            ui,
+            &test_activity,
             &mut started_modules,
             &mut streamed_tests,
         )?;
     }
     if results.is_empty() {
-        ui.success("No test sources found");
+        test_activity.finish("No test sources found");
         return Ok(());
     }
+    test_activity.finish("Test execution finished");
     for result in &results {
         report_test_module(
             result,
@@ -527,7 +529,7 @@ async fn test_project(arguments: &TestCommand, ui: &Ui) -> Result<()> {
 fn report_live_test_event(
     event: &jman_build::TestEvent,
     format: ReportFormat,
-    ui: &Ui,
+    activity: &ui::Activity,
     started_modules: &mut BTreeSet<String>,
     streamed_tests: &mut BTreeSet<(String, String, String)>,
 ) -> Result<()> {
@@ -535,6 +537,7 @@ fn report_live_test_event(
     let selector = event.selector.as_deref().unwrap_or(&event.id);
     match event.reason {
         jman_build::TestEventReason::TestStarted => {
+            activity.set_message(format!("Running {} › {}", event.module, event.display_name));
             if format == ReportFormat::Json {
                 print_test_json(&serde_json::json!({
                     "protocolVersion": 3,
@@ -574,23 +577,27 @@ fn report_live_test_event(
                     "test": test_case,
                 }))?;
             } else {
-                report_live_human_test(&event.module, &test_case, ui);
+                report_live_human_test(&event.module, &test_case, activity);
             }
         }
     }
     Ok(())
 }
 
-fn report_live_human_test(module: &str, test: &jman_build::TestCaseResult, ui: &Ui) {
+fn report_live_human_test(
+    module: &str,
+    test: &jman_build::TestCaseResult,
+    activity: &ui::Activity,
+) {
     let duration = ui::format_duration(std::time::Duration::from_millis(test.duration_millis));
     let name = format!("{module} › {} ({duration})", test.display_name);
     match test.status {
-        jman_build::TestCaseStatus::Passed => ui.success(format!("PASS {name}")),
-        jman_build::TestCaseStatus::Skipped => ui.status(format!("SKIP {name}")),
+        jman_build::TestCaseStatus::Passed => activity.success(format!("PASS {name}")),
+        jman_build::TestCaseStatus::Skipped => activity.status(format!("SKIP {name}")),
         jman_build::TestCaseStatus::Failed | jman_build::TestCaseStatus::Errored => {
-            ui.warning(format!("FAIL {name}"));
+            activity.warning(format!("FAIL {name}"));
             if let Some(message) = &test.message {
-                ui.warning(format!("  {message}"));
+                activity.warning(format!("  {message}"));
             }
         }
     }

@@ -286,6 +286,7 @@ public final class ConsoleLauncher {
         new MethodSource("com.example.AppTest", "greets"));
     for (var listener : ServiceLoader.load(TestExecutionListener.class)) {
       listener.executionStarted(identifier);
+      Thread.sleep(120);
       listener.executionFinished(identifier, TestExecutionResult.failed(
           new AssertionError("expected Ada")));
     }
@@ -619,6 +620,12 @@ processors = ["sha256:{digest}"]
     assert_eq!(events[2]["reason"], "test-case");
     assert_eq!(events[2]["test"]["selector"], "com.example.AppTest#greets");
     assert_eq!(events[2]["test"]["displayName"], "greets(String)[1]");
+    assert!(
+        events[2]["test"]["durationMillis"]
+            .as_u64()
+            .expect("duration")
+            >= 100
+    );
     assert_eq!(events[2]["test"]["message"], "expected Ada");
     assert!(events[2]["test"]["details"]
         .as_str()

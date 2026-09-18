@@ -63,8 +63,11 @@ public final class JmanExecutionListener implements TestExecutionListener {
             String message,
             String details) {
         Source source = source(identifier.getSource().orElse(null));
-        Long started = startedAt.remove(identifier.getUniqueId());
-        long durationMillis = started == null ? 0 : (System.nanoTime() - started) / 1_000_000;
+        long durationMillis = 0;
+        if (status != null) {
+            Long started = startedAt.remove(identifier.getUniqueId());
+            durationMillis = started == null ? 0 : (System.nanoTime() - started) / 1_000_000;
+        }
         StringBuilder json = new StringBuilder(512);
         json.append('{');
         field(json, "protocolVersion", Integer.toString(PROTOCOL_VERSION), false);

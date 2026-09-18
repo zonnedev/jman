@@ -62,12 +62,6 @@ impl Ui {
         }
     }
 
-    pub fn status(&self, message: impl AsRef<str>) {
-        if !self.quiet && !self.structured {
-            eprintln!("→ {}", message.as_ref());
-        }
-    }
-
     pub fn warning(&self, message: impl AsRef<str>) {
         if !self.quiet && !self.structured {
             eprintln!("! {}", message.as_ref());
@@ -105,6 +99,27 @@ impl Activity {
     pub fn set_message(&self, message: impl Into<String>) {
         if let Some(progress) = &self.progress {
             progress.set_message(message.into());
+        }
+    }
+
+    pub fn status(&self, message: impl AsRef<str>) {
+        self.print("→", message.as_ref());
+    }
+
+    pub fn success(&self, message: impl AsRef<str>) {
+        self.print("✓", message.as_ref());
+    }
+
+    pub fn warning(&self, message: impl AsRef<str>) {
+        self.print("!", message.as_ref());
+    }
+
+    fn print(&self, prefix: &str, message: &str) {
+        let line = format!("{prefix} {message}");
+        if let Some(progress) = &self.progress {
+            progress.println(line);
+        } else if self.plain {
+            eprintln!("{line}");
         }
     }
 
