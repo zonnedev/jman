@@ -151,6 +151,65 @@ impl DependencyResolver {
         Ok(projects)
     }
 
+    /// Import the effective reactor XML produced by Maven's help plugin.
+    ///
+    /// Maven has already applied project inheritance, profiles, settings, and
+    /// plugin management. JMAN therefore treats each exported project as a
+    /// precomputed model while retaining its parent coordinate as provenance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed exports, projects outside the requested
+    /// workspace, missing source POMs, or invalid effective metadata.
+    pub async fn import_effective_workspace(
+        &self,
+        xml: &str,
+        workspace_root: &Path,
+    ) -> Result<Vec<crate::MavenProject>, ResolverError> {
+        let workspace_root = tokio::fs::canonicalize(workspace_root)
+            .await
+            .map_err(|source| ResolverError::Cache {
+                path: workspace_root.to_owned(),
+                source,
+            })?;
+        let exported = crate::pom::parse_effective_workspace(xml)?;
+        let builder = EffectiveModelBuilder::new(self.repository.clone());
+        let mut projects = Vec::with_capacity(exported.len());
+        let mut sources = HashSet::new();
+        for project in exported {
+            let directory =
+                tokio::fs::canonicalize(&project.directory)
+                    .await
+                    .map_err(|source| ResolverError::Cache {
+                        path: project.directory.clone(),
+                        source,
+                    })?;
+            if !directory.starts_with(&workspace_root) {
+                return Err(ResolverError::InvalidPom(format!(
+                    "effective Maven project {} escapes workspace {}",
+                    directory.display(),
+                    workspace_root.display()
+                )));
+            }
+            let source = tokio::fs::canonicalize(directory.join("pom.xml"))
+                .await
+                .map_err(|source| ResolverError::Cache {
+                    path: directory.join("pom.xml"),
+                    source,
+                })?;
+            if !sources.insert(source.clone()) {
+                return Err(ResolverError::InvalidPom(format!(
+                    "effective Maven reactor contains duplicate project {}",
+                    source.display()
+                )));
+            }
+            let effective = builder.build_precomputed(project.raw).await?;
+            builder.remember(&effective);
+            projects.push(crate::MavenProject { source, effective });
+        }
+        Ok(projects)
+    }
+
     /// Resolve, mediate, and download all project dependency roles.
     ///
     /// # Errors
@@ -723,6 +782,86 @@ mod tests {
         assert_eq!(
             projects[1].effective.dependencies[0].version.as_deref(),
             Some("2")
+        );
+    }
+
+    #[tokio::test]
+    async fn imports_a_precomputed_maven_reactor_without_reapplying_profiles() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let child = temporary.path().join("child");
+        fs::create_dir(&child).expect("child directory");
+        fs::write(
+            temporary.path().join("pom.xml"),
+            pom(
+                "<groupId>com.example</groupId><artifactId>parent</artifactId><version>1</version>",
+            ),
+        )
+        .expect("root POM");
+        fs::write(
+            child.join("pom.xml"),
+            pom(
+                "<parent><groupId>com.example</groupId><artifactId>parent</artifactId>
+                 <version>1</version></parent><artifactId>child</artifactId>",
+            ),
+        )
+        .expect("child POM");
+        let exported = format!(
+            r"<projects>
+              <project><modelVersion>4.0.0</modelVersion>
+                <groupId>com.example</groupId><artifactId>parent</artifactId><version>1</version>
+                <packaging>pom</packaging><modules><module>child</module></modules>
+                <build><directory>{}/target</directory></build>
+              </project>
+              <project><modelVersion>4.0.0</modelVersion>
+                <parent><groupId>com.example</groupId><artifactId>parent</artifactId>
+                  <version>1</version></parent>
+                <groupId>com.example</groupId><artifactId>child</artifactId><version>1</version>
+                <dependencies><dependency><groupId>org.example</groupId>
+                  <artifactId>library</artifactId><version>2</version></dependency></dependencies>
+                <profiles><profile><activation><activeByDefault>true</activeByDefault></activation>
+                  <dependencies><dependency><groupId>org.example</groupId>
+                    <artifactId>must-not-be-reapplied</artifactId><version>1</version>
+                  </dependency></dependencies></profile></profiles>
+                <build><directory>{}/target</directory><plugins><plugin>
+                  <artifactId>maven-compiler-plugin</artifactId><configuration>
+                    <release>21</release><parameters>true</parameters>
+                    <compilerArgs><arg>-Afixture=true</arg></compilerArgs>
+                  </configuration></plugin></plugins></build>
+              </project>
+            </projects>",
+            temporary.path().display(),
+            child.display()
+        );
+        let repository = RepositoryClient::new(
+            temporary.path().join("cache"),
+            vec![format!(
+                "file://{}",
+                temporary.path().join("empty").display()
+            )],
+        )
+        .expect("repository");
+
+        let projects = DependencyResolver::new(repository)
+            .import_effective_workspace(&exported, temporary.path())
+            .await
+            .expect("effective reactor");
+
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[1].source, child.join("pom.xml"));
+        assert_eq!(projects[1].effective.coordinate.artifact, "child");
+        assert_eq!(projects[1].effective.dependencies.len(), 1);
+        assert_eq!(projects[1].effective.dependencies[0].artifact, "library");
+        assert_eq!(
+            projects[1]
+                .effective
+                .properties
+                .get("maven.compiler.release")
+                .map(String::as_str),
+            Some("21")
+        );
+        assert_eq!(
+            projects[1].effective.compiler_args,
+            ["-parameters", "-Afixture=true"]
         );
     }
 

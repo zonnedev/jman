@@ -43,6 +43,19 @@ impl<S: PomSource> EffectiveModelBuilder<S> {
         self.build_raw(raw, Vec::new()).await
     }
 
+    pub(crate) async fn build_precomputed(
+        &self,
+        mut raw: RawPom,
+    ) -> Result<EffectivePom, ResolverError> {
+        let parent = raw
+            .parent
+            .take()
+            .map(|parent| Coordinate::pom(parent.group, parent.artifact, parent.version));
+        let mut effective = self.build_raw(raw, Vec::new()).await?;
+        effective.parent = parent;
+        Ok(effective)
+    }
+
     /// Construct an effective model for a repository coordinate.
     ///
     /// # Errors

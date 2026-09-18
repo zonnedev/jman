@@ -25,9 +25,12 @@ jman test
 jman run
 ```
 
-Import an existing Maven project with `jman init --import .`. Use `jman sync`
-after dependency changes, `jman build --all` for all reproducible archives, and
-`jman doctor` to inspect the selected JDK and optional container runtime.
+Import an existing Maven project with `jman init --import .`. Import prefers the
+project's `mvnw`, then system Maven, and uses JMAN's native Maven importer only
+when neither is present. Maven is used once to export its effective reactor;
+normal JMAN operations do not invoke it. Use `jman sync` after dependency
+changes, `jman build --all` for all reproducible archives, and `jman doctor` to
+inspect the selected JDK and optional container runtime.
 
 Manage Java toolchains directly through JMAN:
 

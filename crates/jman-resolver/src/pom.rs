@@ -1,8 +1,11 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use roxmltree::{Document, Node};
 
-use crate::{Dependency, Exclusion, Parent, RawPom, Relocation, Repository, ResolverError};
+use crate::{
+    AnnotationProcessor, Dependency, Exclusion, Parent, RawPom, Relocation, Repository,
+    ResolverError,
+};
 
 /// Parse the Maven model fields used by native resolution and import.
 ///
@@ -19,6 +22,49 @@ pub fn parse_pom(xml: &str) -> Result<RawPom, ResolverError> {
         ));
     }
 
+    parse_project(project, true)
+}
+
+pub(crate) struct PrecomputedProject {
+    pub directory: PathBuf,
+    pub raw: RawPom,
+}
+
+pub(crate) fn parse_effective_workspace(
+    xml: &str,
+) -> Result<Vec<PrecomputedProject>, ResolverError> {
+    let document =
+        Document::parse(xml).map_err(|error| ResolverError::InvalidPom(error.to_string()))?;
+    let root = document.root_element();
+    let projects = match root.tag_name().name() {
+        "project" => vec![root],
+        "projects" => root
+            .children()
+            .filter(|node| node.is_element() && node.tag_name().name() == "project")
+            .collect(),
+        _ => {
+            return Err(ResolverError::InvalidPom(
+                "effective Maven model root must be <project> or <projects>".to_owned(),
+            ));
+        }
+    };
+    if projects.is_empty() {
+        return Err(ResolverError::InvalidPom(
+            "effective Maven model contains no projects".to_owned(),
+        ));
+    }
+    projects
+        .into_iter()
+        .map(|project| {
+            let directory = effective_project_directory(project)?;
+            let mut raw = parse_project(project, false)?;
+            apply_effective_compiler_configuration(project, &mut raw)?;
+            Ok(PrecomputedProject { directory, raw })
+        })
+        .collect()
+}
+
+fn parse_project(project: Node<'_, '_>, evaluate_profiles: bool) -> Result<RawPom, ResolverError> {
     let parent = child(project, "parent").map(parse_parent).transpose()?;
     let artifact = child_text(project, "artifactId")
         .ok_or_else(|| ResolverError::InvalidPom("missing project artifactId".to_owned()))?;
@@ -38,38 +84,40 @@ pub fn parse_pom(xml: &str) -> Result<RawPom, ResolverError> {
         .map(parse_repositories)
         .transpose()?
         .unwrap_or_default();
-    if let Some(profiles) = child(project, "profiles") {
-        let candidates = profiles
-            .children()
-            .filter(|profile| profile.is_element() && profile.tag_name().name() == "profile")
-            .collect::<Vec<_>>();
-        let explicitly_active = candidates
-            .iter()
-            .copied()
-            .filter(is_environment_active_profile)
-            .collect::<Vec<_>>();
-        let active = if explicitly_active.is_empty() {
-            candidates
-                .into_iter()
-                .filter(is_active_by_default_profile)
-                .collect()
-        } else {
-            explicitly_active
-        };
-        for profile in active {
-            if let Some(profile_properties) = child(profile, "properties") {
-                properties.extend(parse_properties(profile_properties));
-            }
-            if let Some(profile_dependencies) = child(profile, "dependencies") {
-                dependencies.extend(parse_dependencies(profile_dependencies)?);
-            }
-            if let Some(management) =
-                child(profile, "dependencyManagement").and_then(|node| child(node, "dependencies"))
-            {
-                dependency_management.extend(parse_dependencies(management)?);
-            }
-            if let Some(profile_repositories) = child(profile, "repositories") {
-                repositories.extend(parse_repositories(profile_repositories)?);
+    if evaluate_profiles {
+        if let Some(profiles) = child(project, "profiles") {
+            let candidates = profiles
+                .children()
+                .filter(|profile| profile.is_element() && profile.tag_name().name() == "profile")
+                .collect::<Vec<_>>();
+            let explicitly_active = candidates
+                .iter()
+                .copied()
+                .filter(is_environment_active_profile)
+                .collect::<Vec<_>>();
+            let active = if explicitly_active.is_empty() {
+                candidates
+                    .into_iter()
+                    .filter(is_active_by_default_profile)
+                    .collect()
+            } else {
+                explicitly_active
+            };
+            for profile in active {
+                if let Some(profile_properties) = child(profile, "properties") {
+                    properties.extend(parse_properties(profile_properties));
+                }
+                if let Some(profile_dependencies) = child(profile, "dependencies") {
+                    dependencies.extend(parse_dependencies(profile_dependencies)?);
+                }
+                if let Some(management) = child(profile, "dependencyManagement")
+                    .and_then(|node| child(node, "dependencies"))
+                {
+                    dependency_management.extend(parse_dependencies(management)?);
+                }
+                if let Some(profile_repositories) = child(profile, "repositories") {
+                    repositories.extend(parse_repositories(profile_repositories)?);
+                }
             }
         }
     }
@@ -107,6 +155,123 @@ pub fn parse_pom(xml: &str) -> Result<RawPom, ResolverError> {
         compiler_args: Vec::new(),
         relocation,
     })
+}
+
+fn effective_project_directory(project: Node<'_, '_>) -> Result<PathBuf, ResolverError> {
+    let build = child(project, "build");
+    let directory = build
+        .and_then(|build| child_text(build, "directory"))
+        .and_then(|directory| PathBuf::from(directory).parent().map(PathBuf::from))
+        .or_else(|| {
+            build
+                .and_then(|build| child_text(build, "sourceDirectory"))
+                .and_then(|source| {
+                    let source = PathBuf::from(source);
+                    source
+                        .ends_with("src/main/java")
+                        .then(|| source.ancestors().nth(3).map(PathBuf::from))
+                        .flatten()
+                })
+        })
+        .ok_or_else(|| {
+            ResolverError::InvalidPom(format!(
+                "effective Maven project `{}` has no absolute build directory",
+                child_text(project, "artifactId").unwrap_or_else(|| "unknown".to_owned())
+            ))
+        })?;
+    if !directory.is_absolute() {
+        return Err(ResolverError::InvalidPom(format!(
+            "effective Maven project directory must be absolute: {}",
+            directory.display()
+        )));
+    }
+    Ok(directory)
+}
+
+fn apply_effective_compiler_configuration(
+    project: Node<'_, '_>,
+    raw: &mut RawPom,
+) -> Result<(), ResolverError> {
+    let Some(configuration) = child(project, "build")
+        .and_then(|build| child(build, "plugins"))
+        .and_then(|plugins| {
+            plugins.children().filter(Node::is_element).find(|plugin| {
+                plugin.tag_name().name() == "plugin"
+                    && child_text(*plugin, "artifactId").as_deref() == Some("maven-compiler-plugin")
+            })
+        })
+        .and_then(|plugin| child(plugin, "configuration"))
+    else {
+        return Ok(());
+    };
+
+    if let Some(release) = child_text(configuration, "release") {
+        raw.properties
+            .insert("maven.compiler.release".to_owned(), release);
+    } else if let Some(source) = child_text(configuration, "source") {
+        raw.properties
+            .insert("maven.compiler.source".to_owned(), source);
+    }
+    if let Some(encoding) = child_text(configuration, "encoding") {
+        raw.properties
+            .insert("project.build.sourceEncoding".to_owned(), encoding);
+    }
+    if child_text(configuration, "parameters").as_deref() == Some("true") {
+        raw.compiler_args.push("-parameters".to_owned());
+    }
+    if let Some(arguments) = child(configuration, "compilerArgs") {
+        raw.compiler_args.extend(
+            arguments
+                .children()
+                .filter(|argument| argument.is_element() && argument.tag_name().name() == "arg")
+                .map(element_text)
+                .filter(|argument| !argument.is_empty()),
+        );
+    }
+    if let Some(processors) = child(configuration, "annotationProcessors") {
+        let processors = processors
+            .children()
+            .filter(|processor| {
+                processor.is_element() && processor.tag_name().name() == "annotationProcessor"
+            })
+            .map(element_text)
+            .filter(|processor| !processor.is_empty())
+            .collect::<Vec<_>>();
+        if !processors.is_empty() {
+            raw.compiler_args.push("-processor".to_owned());
+            raw.compiler_args.push(processors.join(","));
+        }
+    }
+    if let Some(paths) = child(configuration, "annotationProcessorPaths") {
+        for path in paths
+            .children()
+            .filter(|path| path.is_element() && path.tag_name().name() == "path")
+        {
+            let group = required_text(path, "groupId", "annotation processor")?;
+            let artifact = required_text(path, "artifactId", "annotation processor")?;
+            let version = child_text(path, "version").or_else(|| {
+                raw.dependency_management
+                    .iter()
+                    .find(|dependency| dependency.group == group && dependency.artifact == artifact)
+                    .and_then(|dependency| dependency.version.clone())
+            });
+            raw.annotation_processors.push(AnnotationProcessor {
+                dependency: Dependency {
+                    group,
+                    artifact,
+                    version,
+                    scope: "compile".to_owned(),
+                    scope_explicit: false,
+                    dependency_type: child_text(path, "type").unwrap_or_else(|| "jar".to_owned()),
+                    type_explicit: child(path, "type").is_some(),
+                    classifier: child_text(path, "classifier"),
+                    optional: None,
+                    exclusions: Vec::new(),
+                },
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Return Maven plugins declared by a POM without interpreting their behavior.
@@ -376,6 +541,51 @@ mod tests {
                 "com.example:managed-plugin",
                 "org.apache.maven.plugins:maven-compiler-plugin"
             ]
+        );
+    }
+
+    #[test]
+    fn parses_maven_effective_workspace_into_precomputed_project_models() {
+        let projects = parse_effective_workspace(
+            r"<projects>
+              <project><modelVersion>4.0.0</modelVersion>
+                <groupId>com.example</groupId><artifactId>root</artifactId><version>1</version>
+                <packaging>pom</packaging><modules><module>app</module></modules>
+                <build><directory>/workspace/target</directory></build>
+              </project>
+              <project><modelVersion>4.0.0</modelVersion>
+                <parent><groupId>com.example</groupId><artifactId>root</artifactId><version>1</version></parent>
+                <groupId>com.example</groupId><artifactId>app</artifactId><version>1</version>
+                <profiles><profile><activation><activeByDefault>true</activeByDefault></activation>
+                  <dependencies><dependency><groupId>wrong</groupId><artifactId>duplicate</artifactId><version>1</version></dependency></dependencies>
+                </profile></profiles>
+                <dependencies><dependency><groupId>org.example</groupId><artifactId>library</artifactId><version>2</version></dependency></dependencies>
+                <build><directory>/workspace/app/target</directory><plugins><plugin>
+                  <artifactId>maven-compiler-plugin</artifactId><configuration>
+                    <release>21</release><encoding>UTF-8</encoding><parameters>true</parameters>
+                    <compilerArgs><arg>-Aexample=true</arg><arg>-Xlint:all</arg></compilerArgs>
+                    <annotationProcessorPaths><path><groupId>org.example</groupId>
+                      <artifactId>processor</artifactId><version>3</version></path></annotationProcessorPaths>
+                  </configuration>
+                </plugin></plugins></build>
+              </project>
+            </projects>",
+        )
+        .expect("Maven effective reactor");
+
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[0].directory, PathBuf::from("/workspace"));
+        assert_eq!(projects[1].directory, PathBuf::from("/workspace/app"));
+        assert_eq!(projects[1].raw.dependencies.len(), 1);
+        assert_eq!(projects[1].raw.dependencies[0].artifact, "library");
+        assert_eq!(projects[1].raw.properties["maven.compiler.release"], "21");
+        assert_eq!(
+            projects[1].raw.compiler_args,
+            ["-parameters", "-Aexample=true", "-Xlint:all"]
+        );
+        assert_eq!(
+            projects[1].raw.annotation_processors[0].dependency.artifact,
+            "processor"
         );
     }
 

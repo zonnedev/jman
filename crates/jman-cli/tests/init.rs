@@ -532,6 +532,165 @@ fn import_requires_a_pom() {
         .contains("no pom.xml was found"));
 }
 
+#[cfg(unix)]
+#[test]
+fn maven_import_prefers_the_project_wrapper_and_translates_its_effective_model() {
+    let project = tempfile::tempdir().expect("temporary project");
+    let cache = tempfile::tempdir().expect("temporary cache");
+    let commands = tempfile::tempdir().expect("commands");
+    write_minimal_pom(project.path(), "native.example");
+    write_effective_model(project.path(), "wrapper.example");
+    write_fake_maven(&project.path().join("mvnw"), "wrapper-called", true);
+    write_fake_maven(&commands.path().join("mvn"), "system-called", true);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .env("PATH", commands.path())
+        .args([
+            "--no-progress",
+            "init",
+            "--import",
+            project.path().to_str().expect("UTF-8 path"),
+        ])
+        .output()
+        .expect("import through Maven wrapper");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(project.path().join("wrapper-called").is_file());
+    assert!(!project.path().join("system-called").exists());
+    let manifest = fs::read_to_string(project.path().join("jman.toml")).expect("manifest");
+    assert!(manifest.contains("group = \"wrapper.example\""));
+    assert!(manifest.contains("main-class = \"wrapper.example.Application\""));
+    assert!(manifest.contains("-Aexternal=true"));
+}
+
+#[cfg(unix)]
+#[test]
+fn maven_import_uses_system_maven_when_the_wrapper_is_absent() {
+    let project = tempfile::tempdir().expect("temporary project");
+    let cache = tempfile::tempdir().expect("temporary cache");
+    let commands = tempfile::tempdir().expect("commands");
+    write_minimal_pom(project.path(), "native.example");
+    write_effective_model(project.path(), "system.example");
+    write_fake_maven(&commands.path().join("mvn"), "system-called", true);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .env("PATH", commands.path())
+        .args([
+            "--no-progress",
+            "init",
+            "--import",
+            project.path().to_str().expect("UTF-8 path"),
+        ])
+        .output()
+        .expect("import through system Maven");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(project.path().join("system-called").is_file());
+    let manifest = fs::read_to_string(project.path().join("jman.toml")).expect("manifest");
+    assert!(manifest.contains("group = \"system.example\""));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failing_maven_wrapper_does_not_silently_change_to_another_importer() {
+    let project = tempfile::tempdir().expect("temporary project");
+    let cache = tempfile::tempdir().expect("temporary cache");
+    let commands = tempfile::tempdir().expect("commands");
+    write_minimal_pom(project.path(), "native.example");
+    write_effective_model(project.path(), "system.example");
+    write_fake_maven(&project.path().join("mvnw"), "wrapper-called", false);
+    write_fake_maven(&commands.path().join("mvn"), "system-called", true);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .env("PATH", commands.path())
+        .args([
+            "--no-progress",
+            "init",
+            "--import",
+            project.path().to_str().expect("UTF-8 path"),
+        ])
+        .output()
+        .expect("failed wrapper import");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Maven model export"));
+    assert!(stderr.contains("fixture model failure"));
+    assert!(project.path().join("wrapper-called").is_file());
+    assert!(!project.path().join("system-called").exists());
+    assert!(!project.path().join("jman.toml").exists());
+    assert!(!project.path().join("jman.lock").exists());
+}
+
+#[cfg(unix)]
+fn write_minimal_pom(project: &std::path::Path, group: &str) {
+    fs::write(
+        project.join("pom.xml"),
+        format!(
+            "<project><modelVersion>4.0.0</modelVersion><groupId>{group}</groupId>\
+             <artifactId>demo</artifactId><version>1</version></project>"
+        ),
+    )
+    .expect("POM");
+}
+
+#[cfg(unix)]
+fn write_effective_model(project: &std::path::Path, group: &str) {
+    fs::write(
+        project.join("effective.xml"),
+        format!(
+            r"<project><modelVersion>4.0.0</modelVersion>
+              <groupId>{group}</groupId><artifactId>demo</artifactId><version>1</version>
+              <properties><exec.mainClass>{group}.Application</exec.mainClass></properties>
+              <build><directory>{}/target</directory><plugins><plugin>
+                <artifactId>maven-compiler-plugin</artifactId><configuration>
+                  <release>21</release><parameters>true</parameters>
+                  <compilerArgs><arg>-Aexternal=true</arg></compilerArgs>
+                </configuration>
+              </plugin></plugins></build>
+            </project>",
+            project.display()
+        ),
+    )
+    .expect("effective model");
+}
+
+#[cfg(unix)]
+fn write_fake_maven(path: &std::path::Path, marker: &str, succeeds: bool) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let behavior = if succeeds {
+        "/bin/cp \"$PWD/effective.xml\" \"$output\"\nexit 0"
+    } else {
+        "printf 'fixture model failure\\n'\nexit 19"
+    };
+    fs::write(
+        path,
+        format!(
+            "#!/bin/sh\noutput=''\nfor argument in \"$@\"; do\n\
+             \x20 case \"$argument\" in -Doutput=*) output=${{argument#-Doutput=}} ;; esac\n\
+             done\n: > \"$PWD/{marker}\"\n{behavior}\n"
+        ),
+    )
+    .expect("fake Maven");
+    let mut permissions = fs::metadata(path)
+        .expect("fake Maven metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).expect("executable fake Maven");
+}
+
 #[test]
 fn import_warns_about_plugins_without_translating_them() {
     let project = tempfile::tempdir().expect("temporary project");
@@ -550,6 +709,7 @@ fn import_warns_about_plugins_without_translating_them() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_jman"))
         .env("JMAN_CACHE_DIR", cache.path())
+        .env("PATH", project.path())
         .args([
             "--no-progress",
             "init",
@@ -637,6 +797,7 @@ fn json_sync_keeps_stderr_clean() {
     .expect("POM");
     let import = Command::new(env!("CARGO_BIN_EXE_jman"))
         .env("JMAN_CACHE_DIR", cache.path())
+        .env("PATH", project.path())
         .args([
             "init",
             "--import",
@@ -701,6 +862,7 @@ fn native_dependency_commands_work_without_maven_poms() {
     let binary = env!("CARGO_BIN_EXE_jman");
     let import = Command::new(binary)
         .env("JMAN_CACHE_DIR", cache.path())
+        .env("PATH", project.path())
         .args([
             "--quiet",
             "init",

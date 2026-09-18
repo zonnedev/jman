@@ -1,8 +1,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    ffi::OsStr,
     fmt::Write as _,
     io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use anyhow::{bail, Context, Result};
@@ -1602,17 +1604,159 @@ fn confirm_maven_import(target: &Path) -> Result<bool> {
     ))
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum MavenModelSource {
+    Wrapper(PathBuf),
+    System(PathBuf),
+    Native,
+}
+
+impl MavenModelSource {
+    fn description(&self) -> String {
+        match self {
+            Self::Wrapper(path) => format!("project wrapper {}", path.display()),
+            Self::System(path) => format!("system Maven {}", path.display()),
+            Self::Native => "JMAN native Maven importer".to_owned(),
+        }
+    }
+
+    fn executable(&self) -> Option<&Path> {
+        match self {
+            Self::Wrapper(path) | Self::System(path) => Some(path),
+            Self::Native => None,
+        }
+    }
+}
+
+fn select_maven_model_source(root: &Path, path: Option<&OsStr>) -> MavenModelSource {
+    let wrappers: &[&str] = if cfg!(windows) {
+        &["mvnw.cmd", "mvnw.bat", "mvnw"]
+    } else {
+        &["mvnw"]
+    };
+    if let Some(wrapper) = wrappers
+        .iter()
+        .map(|name| root.join(name))
+        .find(|candidate| candidate.is_file())
+    {
+        return MavenModelSource::Wrapper(wrapper);
+    }
+
+    let executables: &[&str] = if cfg!(windows) {
+        &["mvn.cmd", "mvn.bat", "mvn.exe", "mvn"]
+    } else {
+        &["mvn"]
+    };
+    if let Some(executable) = path
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .flat_map(|directory| executables.iter().map(move |name| directory.join(name)))
+        .find(|candidate| candidate.is_file())
+    {
+        MavenModelSource::System(executable)
+    } else {
+        MavenModelSource::Native
+    }
+}
+
+async fn export_effective_maven_model(executable: &Path, root: &Path) -> Result<String> {
+    static IMPORT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    let state = default_cache_dir().join("imports").join(format!(
+        "maven-{}-{}",
+        std::process::id(),
+        IMPORT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    tokio::fs::create_dir_all(&state)
+        .await
+        .with_context(|| format!("could not create Maven import state {}", state.display()))?;
+    let effective_pom = state.join("effective-pom.xml");
+    let mut command = if cfg!(windows)
+        && executable
+            .extension()
+            .and_then(OsStr::to_str)
+            .is_some_and(|extension| matches!(extension, "cmd" | "bat"))
+    {
+        let mut command = tokio::process::Command::new("cmd");
+        command.arg("/c").arg(executable);
+        command
+    } else {
+        tokio::process::Command::new(executable)
+    };
+    let output = command
+        .current_dir(root)
+        .kill_on_drop(true)
+        .args([
+            "--batch-mode",
+            "--no-transfer-progress",
+            "-q",
+            "-Dstyle.color=never",
+            "help:effective-pom",
+        ])
+        .arg(format!("-Doutput={}", effective_pom.display()))
+        .output()
+        .await
+        .with_context(|| format!("could not start Maven importer {}", executable.display()))?;
+    if !output.status.success() {
+        let _ = tokio::fs::remove_dir_all(&state).await;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let diagnostic = [stdout.trim(), stderr.trim()]
+            .into_iter()
+            .filter(|message| !message.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        bail!(
+            "Maven model export with {} failed with status {}: {}",
+            executable.display(),
+            output.status,
+            diagnostic
+        );
+    }
+    let model = tokio::fs::read_to_string(&effective_pom)
+        .await
+        .with_context(|| {
+            format!(
+                "Maven completed without producing effective model {}",
+                effective_pom.display()
+            )
+        });
+    let _ = tokio::fs::remove_dir_all(&state).await;
+    model
+}
+
 #[allow(clippy::too_many_lines)]
 async fn import_maven(pom_path: &Path, ui: &Ui) -> Result<()> {
-    let model_activity = ui.activity("Constructing effective Maven reactor");
+    let root_directory = pom_path
+        .parent()
+        .context("Maven reactor root POM has no parent directory")?;
+    let model_source =
+        select_maven_model_source(root_directory, std::env::var_os("PATH").as_deref());
+    let model_activity = ui.activity(format!(
+        "Constructing effective Maven reactor with {}",
+        model_source.description()
+    ));
     let bootstrap_repository = RepositoryClient::with_default_cache(Vec::new())
         .context("could not initialize Maven repository client")?;
     let bootstrap_resolver = DependencyResolver::new(bootstrap_repository);
-    let projects = bootstrap_resolver
-        .import_workspace(pom_path)
-        .await
-        .context("could not construct the Maven reactor")?;
-    model_activity.finish(format!("Loaded Maven reactor ({} modules)", projects.len()));
+    let maven_authoritative = model_source.executable().is_some();
+    let projects = if let Some(executable) = model_source.executable() {
+        let model = export_effective_maven_model(executable, root_directory).await?;
+        bootstrap_resolver
+            .import_effective_workspace(&model, root_directory)
+            .await
+            .context("could not translate Maven's effective reactor")?
+    } else {
+        bootstrap_resolver
+            .import_workspace(pom_path)
+            .await
+            .context("could not construct the Maven reactor with JMAN's native importer")?
+    };
+    model_activity.finish(format!(
+        "Loaded Maven reactor through {} ({} modules)",
+        model_source.description(),
+        projects.len()
+    ));
     let mut detected_plugins = BTreeSet::new();
     for project in &projects {
         let xml = tokio::fs::read_to_string(&project.source)
@@ -1634,7 +1778,7 @@ async fn import_maven(pom_path: &Path, ui: &Ui) -> Result<()> {
     let manifests = projects
         .iter()
         .map(|project| {
-            manifest_from_maven(&project.effective).and_then(|mut manifest| {
+            manifest_from_maven(&project.effective, maven_authoritative).and_then(|mut manifest| {
                 let directory = project
                     .source
                     .parent()
@@ -2352,17 +2496,23 @@ impl SyncReport {
 }
 
 #[allow(clippy::too_many_lines)]
-fn manifest_from_maven(effective: &EffectivePom) -> Result<Manifest> {
-    let java_release = ["maven.compiler.release", "release.version", "jdk.version"]
-        .iter()
-        .find_map(|key| effective.properties.get(*key))
-        .map(|value| {
-            value
-                .parse::<u16>()
-                .with_context(|| format!("Maven property for Java release is `{value}`"))
-        })
-        .transpose()?
-        .unwrap_or(17);
+fn manifest_from_maven(effective: &EffectivePom, maven_authoritative: bool) -> Result<Manifest> {
+    let java_release = [
+        "maven.compiler.release",
+        "maven.compiler.source",
+        "java.version",
+        "release.version",
+        "jdk.version",
+    ]
+    .iter()
+    .find_map(|key| effective.properties.get(*key))
+    .map(|value| {
+        value
+            .parse::<u16>()
+            .with_context(|| format!("Maven property for Java release is `{value}`"))
+    })
+    .transpose()?
+    .unwrap_or(17);
     let mut dependencies = Dependencies::default();
     let mut dependency_metadata = BTreeMap::new();
     for dependency in &effective.dependencies {
@@ -2410,7 +2560,14 @@ fn manifest_from_maven(effective: &EffectivePom) -> Result<Manifest> {
             java_release,
             packaging: effective.packaging.clone(),
             modules: effective.modules.clone(),
-            main_class: None,
+            main_class: if maven_authoritative {
+                ["exec.mainClass", "start-class", "main.class"]
+                    .iter()
+                    .find_map(|key| effective.properties.get(*key))
+                    .cloned()
+            } else {
+                None
+            },
         },
         toolchain: Some(ManifestToolchain {
             jdk: java_release.to_string(),
@@ -2452,7 +2609,7 @@ fn manifest_from_maven(effective: &EffectivePom) -> Result<Manifest> {
                 .get("project.build.sourceEncoding")
                 .cloned()
                 .unwrap_or_else(|| "UTF-8".to_owned()),
-            compiler_args: Vec::new(),
+            compiler_args: effective.compiler_args.clone(),
         }),
         repositories: effective
             .repositories
@@ -2464,7 +2621,20 @@ fn manifest_from_maven(effective: &EffectivePom) -> Result<Manifest> {
             })
             .collect(),
         dependencies,
-        annotation_processors: BTreeMap::new(),
+        annotation_processors: effective
+            .annotation_processors
+            .iter()
+            .map(|processor| {
+                let dependency = &processor.dependency;
+                let version = dependency.version.clone().with_context(|| {
+                    format!(
+                        "annotation processor {} has no effective version",
+                        dependency.ga()
+                    )
+                })?;
+                Ok((dependency.ga(), version))
+            })
+            .collect::<Result<_>>()?,
         path_dependencies: BTreeMap::new(),
     };
     manifest.validate()?;
@@ -2921,6 +3091,41 @@ mod tests {
             panic!("expected java list command");
         };
         assert!(all.scope.all);
+    }
+
+    #[test]
+    fn maven_model_source_prefers_wrapper_then_system_then_native() {
+        let project = tempfile::tempdir().expect("project");
+        let commands = tempfile::tempdir().expect("commands");
+        let system_maven = commands
+            .path()
+            .join(if cfg!(windows) { "mvn.cmd" } else { "mvn" });
+        fs::write(&system_maven, "fixture").expect("system Maven");
+
+        assert_eq!(
+            select_maven_model_source(project.path(), Some(commands.path().as_os_str())),
+            MavenModelSource::System(system_maven.clone())
+        );
+
+        let wrapper = project
+            .path()
+            .join(if cfg!(windows) { "mvnw.cmd" } else { "mvnw" });
+        fs::write(&wrapper, "fixture").expect("Maven wrapper");
+        assert_eq!(
+            select_maven_model_source(project.path(), Some(commands.path().as_os_str())),
+            MavenModelSource::Wrapper(wrapper)
+        );
+
+        fs::remove_file(
+            project
+                .path()
+                .join(if cfg!(windows) { "mvnw.cmd" } else { "mvnw" }),
+        )
+        .expect("remove wrapper");
+        assert_eq!(
+            select_maven_model_source(project.path(), Some(OsStr::new(""))),
+            MavenModelSource::Native
+        );
     }
 
     #[test]

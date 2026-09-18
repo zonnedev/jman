@@ -34,8 +34,13 @@ JMAN supports this declared Maven model subset:
 - active-by-default profiles plus environment property and OS activation;
 - nested reactors, local parents, and inter-module dependencies.
 
-Import preserves the effective dependency graph in deterministic `jman.toml` and
-`jman.lock` files. Normal JMAN operations do not invoke Maven or Gradle.
+Import asks the project Maven wrapper for its effective reactor, falling back to
+system Maven and then JMAN's native importer only when the preceding executable
+is absent. A selected Maven executable is authoritative: failures are reported
+instead of silently changing import semantics. JMAN translates the exported
+model, independently resolves its dependencies, and preserves the result in
+deterministic `jman.toml` and `jman.lock` files. Normal JMAN operations do not
+invoke Maven or Gradle.
 
 The following are explicitly outside the 0.1.x contract:
 

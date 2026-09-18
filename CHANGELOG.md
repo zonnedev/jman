@@ -7,6 +7,10 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ### Added
 
+- Maven imports now prefer the project wrapper, then system Maven, before
+  falling back to JMAN's native project importer. Maven-provided effective
+  models retain active model semantics, compiler arguments, processor paths,
+  Java release settings, and conventional application entry-point properties.
 - `jman java list` now discovers installable JDKs across audited Foojay
   distributions, supports `--vendor`, and translates provider metadata into a
   versioned JMAN catalog model so another provider can be added without changing
