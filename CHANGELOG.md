@@ -28,6 +28,10 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ### Fixed
 
+- Fat JAR packaging now merges line registries, property registries, and
+  list-valued property registries deterministically. This preserves service and
+  framework discovery metadata when dependencies contribute the same resource,
+  including Spring Boot auto-configuration and factory registrations.
 - Go to Declaration on an overriding method now follows its compiler-resolved
   override family to the workspace interface or superclass declaration, while
   Go to Definition continues to select the concrete method.

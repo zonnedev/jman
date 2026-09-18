@@ -88,6 +88,14 @@ struct FatArchive {
     warnings: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResourceMergeStrategy {
+    KeepFirst,
+    Lines,
+    Properties,
+    PropertyLists,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ArtifactOptions {
     pub fat: bool,
@@ -1591,7 +1599,7 @@ async fn add_directory_entries(
         if ignored_fat_entry(&name) {
             continue;
         }
-        insert_fat_entry(
+        merge_fat_entry(
             archive,
             name,
             fs::read(&file)
@@ -1612,13 +1620,7 @@ async fn merge_dependency_jar(
         .await
         .map_err(|error| BuildError::Invalid(format!("fat JAR merge task failed: {error}")))??;
     for (name, bytes, context) in entries {
-        if name.starts_with("META-INF/services/") {
-            merge_service_entry(archive, name, &bytes);
-        } else if name == "META-INF/io.netty.versions.properties" {
-            merge_properties_entry(archive, name, &bytes, &context)?;
-        } else {
-            insert_fat_entry(archive, name, bytes, &context)?;
-        }
+        merge_fat_entry(archive, name, bytes, &context)?;
     }
     Ok(())
 }
@@ -1703,20 +1705,66 @@ fn relocated_dependency_entry(name: &str, coordinate: &str) -> String {
     }
 }
 
-fn merge_service_entry(archive: &mut FatArchive, name: String, bytes: &[u8]) {
+fn resource_merge_strategy(name: &str) -> ResourceMergeStrategy {
+    if name.starts_with("META-INF/services/")
+        || (name.starts_with("META-INF/spring/")
+            && (name.ends_with(".imports") || name.ends_with(".includes")))
+    {
+        ResourceMergeStrategy::Lines
+    } else if matches!(
+        name,
+        "META-INF/spring.factories"
+            | "META-INF/spring/aot.factories"
+            | "META-INF/spring.components"
+    ) {
+        ResourceMergeStrategy::PropertyLists
+    } else if matches!(
+        name,
+        "META-INF/io.netty.versions.properties"
+            | "META-INF/spring.handlers"
+            | "META-INF/spring.schemas"
+            | "META-INF/spring.tooling"
+            | "META-INF/spring-autoconfigure-metadata.properties"
+    ) {
+        ResourceMergeStrategy::Properties
+    } else {
+        ResourceMergeStrategy::KeepFirst
+    }
+}
+
+fn merge_fat_entry(
+    archive: &mut FatArchive,
+    name: String,
+    bytes: Vec<u8>,
+    source: &str,
+) -> Result<(), BuildError> {
+    match resource_merge_strategy(&name) {
+        ResourceMergeStrategy::KeepFirst => insert_fat_entry(archive, name, bytes, source),
+        ResourceMergeStrategy::Lines => {
+            merge_line_entry(archive, name, &bytes);
+            Ok(())
+        }
+        ResourceMergeStrategy::Properties => merge_properties_entry(archive, name, &bytes, source),
+        ResourceMergeStrategy::PropertyLists => {
+            merge_property_list_entry(archive, name, &bytes, source)
+        }
+    }
+}
+
+fn merge_line_entry(archive: &mut FatArchive, name: String, bytes: &[u8]) {
     let existing = archive
         .entries
         .get(&name)
         .map(|entry| entry.bytes.as_slice())
         .unwrap_or_default();
-    let providers = String::from_utf8_lossy(existing)
+    let lines = String::from_utf8_lossy(existing)
         .lines()
         .chain(String::from_utf8_lossy(bytes).lines())
         .map(str::trim)
-        .filter(|line| !line.is_empty())
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
-    let mut merged = providers.into_iter().collect::<Vec<_>>().join("\n");
+    let mut merged = lines.into_iter().collect::<Vec<_>>().join("\n");
     if !merged.is_empty() {
         merged.push('\n');
     }
@@ -1724,7 +1772,7 @@ fn merge_service_entry(archive: &mut FatArchive, name: String, bytes: &[u8]) {
         name,
         FatEntry {
             bytes: merged.into_bytes(),
-            source: "merged service providers".to_owned(),
+            source: "merged line registry".to_owned(),
         },
     );
 }
@@ -1751,9 +1799,55 @@ fn merge_properties_entry(
         name,
         FatEntry {
             bytes: merged.into_bytes(),
-            source: "merged Netty version metadata".to_owned(),
+            source: "merged properties".to_owned(),
         },
     );
+    Ok(())
+}
+
+fn merge_property_list_entry(
+    archive: &mut FatArchive,
+    name: String,
+    bytes: &[u8],
+    source: &str,
+) -> Result<(), BuildError> {
+    let mut properties = BTreeMap::<String, BTreeSet<String>>::new();
+    if let Some(existing) = archive.entries.get(&name) {
+        parse_property_lists(&mut properties, &existing.bytes, &existing.source, &name)?;
+    }
+    parse_property_lists(&mut properties, bytes, source, &name)?;
+    let mut merged = String::from("# Merged by JMAN\n");
+    for (key, values) in properties {
+        merged.push_str(&key);
+        merged.push('=');
+        merged.push_str(&values.into_iter().collect::<Vec<_>>().join(","));
+        merged.push('\n');
+    }
+    archive.entries.insert(
+        name,
+        FatEntry {
+            bytes: merged.into_bytes(),
+            source: "merged property list registry".to_owned(),
+        },
+    );
+    Ok(())
+}
+
+fn parse_property_lists(
+    properties: &mut BTreeMap<String, BTreeSet<String>>,
+    bytes: &[u8],
+    source: &str,
+    name: &str,
+) -> Result<(), BuildError> {
+    for (key, value) in property_entries(bytes, source, name)? {
+        properties.entry(key).or_default().extend(
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
+        );
+    }
     Ok(())
 }
 
@@ -1763,30 +1857,98 @@ fn parse_properties(
     source: &str,
     name: &str,
 ) -> Result<(), BuildError> {
-    for line in String::from_utf8_lossy(bytes).lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
-            continue;
-        }
-        let (key, value) = line.split_once('=').ok_or_else(|| {
-            BuildError::Invalid(format!(
-                "unsupported property syntax in `{name}` from {source}: `{line}`"
-            ))
-        })?;
-        match properties.get(key.trim()) {
-            Some(existing) if existing != value.trim() => {
+    for (key, value) in property_entries(bytes, source, name)? {
+        match properties.get(&key) {
+            Some(existing) if existing != &value => {
                 return Err(BuildError::Invalid(format!(
-                    "conflicting property `{}` in `{name}` from {source}",
-                    key.trim()
+                    "conflicting property `{key}` in `{name}` from {source}"
                 )));
             }
             Some(_) => {}
             None => {
-                properties.insert(key.trim().to_owned(), value.trim().to_owned());
+                properties.insert(key, value);
             }
         }
     }
     Ok(())
+}
+
+fn property_entries(
+    bytes: &[u8],
+    source: &str,
+    name: &str,
+) -> Result<Vec<(String, String)>, BuildError> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut logical = String::new();
+    let mut entries = Vec::new();
+    for physical in text.lines() {
+        if logical.is_empty() {
+            logical.push_str(physical);
+        } else {
+            logical.push_str(physical.trim_start());
+        }
+        let trailing_slashes = logical
+            .chars()
+            .rev()
+            .take_while(|character| *character == '\\')
+            .count();
+        if trailing_slashes % 2 == 1 {
+            logical.pop();
+            continue;
+        }
+        if let Some(entry) = parse_property_entry(&logical, source, name)? {
+            entries.push(entry);
+        }
+        logical.clear();
+    }
+    if !logical.is_empty() {
+        return Err(BuildError::Invalid(format!(
+            "unterminated property continuation in `{name}` from {source}"
+        )));
+    }
+    Ok(entries)
+}
+
+fn parse_property_entry(
+    line: &str,
+    source: &str,
+    name: &str,
+) -> Result<Option<(String, String)>, BuildError> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') || line.starts_with('!') {
+        return Ok(None);
+    }
+    let mut escaped = false;
+    let separator = line.char_indices().find(|(_, character)| {
+        if escaped {
+            escaped = false;
+            false
+        } else if *character == '\\' {
+            escaped = true;
+            false
+        } else {
+            *character == '=' || *character == ':' || character.is_whitespace()
+        }
+    });
+    let Some((index, separator)) = separator else {
+        return Err(BuildError::Invalid(format!(
+            "unsupported property syntax in `{name}` from {source}: `{line}`"
+        )));
+    };
+    let key = line[..index].trim_end();
+    if key.is_empty() {
+        return Err(BuildError::Invalid(format!(
+            "empty property key in `{name}` from {source}"
+        )));
+    }
+    let mut value = &line[index + separator.len_utf8()..];
+    if separator.is_whitespace() {
+        value = value.trim_start();
+        if value.starts_with(['=', ':']) {
+            value = &value[1..];
+        }
+    }
+    Ok(Some((key.to_owned(), value.trim().to_owned())))
 }
 
 fn insert_fat_entry(
@@ -2269,16 +2431,20 @@ mod tests {
         assert!(safe_zip_name("/absolute.class").is_err());
 
         let mut archive = FatArchive::default();
-        merge_service_entry(
+        merge_fat_entry(
             &mut archive,
             "META-INF/services/example.Service".to_owned(),
-            b"example.B\nexample.A\n",
-        );
-        merge_service_entry(
+            b"example.B\nexample.A\n".to_vec(),
+            "first dependency",
+        )
+        .expect("first service registry");
+        merge_fat_entry(
             &mut archive,
             "META-INF/services/example.Service".to_owned(),
-            b"example.A\nexample.C\n",
-        );
+            b"# provider comment\nexample.A\nexample.C\n".to_vec(),
+            "second dependency",
+        )
+        .expect("second service registry");
         assert_eq!(
             archive.entries["META-INF/services/example.Service"].bytes,
             b"example.A\nexample.B\nexample.C\n"
@@ -2340,6 +2506,70 @@ mod tests {
         assert_eq!(
             archive.entries["META-INF/io.netty.versions.properties"].bytes,
             b"# Merged by JMAN\nnetty-buffer.version=4.1\nnetty-codec.version=4.1\n"
+        );
+    }
+
+    #[test]
+    fn fat_jar_merges_line_property_and_property_list_registries() {
+        let mut archive = FatArchive::default();
+        let imports =
+            "META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports";
+        merge_fat_entry(
+            &mut archive,
+            imports.to_owned(),
+            b"# first dependency\nexample.JpaAutoConfiguration\nexample.WebAutoConfiguration\n"
+                .to_vec(),
+            "spring-data-jpa",
+        )
+        .expect("first line registry");
+        merge_fat_entry(
+            &mut archive,
+            imports.to_owned(),
+            b"example.DevToolsAutoConfiguration\nexample.WebAutoConfiguration\n".to_vec(),
+            "spring-boot-devtools",
+        )
+        .expect("second line registry");
+        assert_eq!(
+            archive.entries[imports].bytes,
+            b"example.DevToolsAutoConfiguration\nexample.JpaAutoConfiguration\nexample.WebAutoConfiguration\n"
+        );
+
+        merge_fat_entry(
+            &mut archive,
+            "META-INF/spring.factories".to_owned(),
+            b"example.Factory=\\\n example.Second,\\\n example.First\n".to_vec(),
+            "first factory dependency",
+        )
+        .expect("first property list registry");
+        merge_fat_entry(
+            &mut archive,
+            "META-INF/spring.factories".to_owned(),
+            b"example.Factory=example.First,example.Third\nexample.Other=example.Value\n".to_vec(),
+            "second factory dependency",
+        )
+        .expect("second property list registry");
+        assert_eq!(
+            archive.entries["META-INF/spring.factories"].bytes,
+            b"# Merged by JMAN\nexample.Factory=example.First,example.Second,example.Third\nexample.Other=example.Value\n"
+        );
+
+        merge_fat_entry(
+            &mut archive,
+            "META-INF/spring.handlers".to_owned(),
+            b"http\\://example.org/schema/one=example.OneHandler\n".to_vec(),
+            "first handler dependency",
+        )
+        .expect("first property registry");
+        merge_fat_entry(
+            &mut archive,
+            "META-INF/spring.handlers".to_owned(),
+            b"http\\://example.org/schema/two=example.TwoHandler\n".to_vec(),
+            "second handler dependency",
+        )
+        .expect("second property registry");
+        assert_eq!(
+            archive.entries["META-INF/spring.handlers"].bytes,
+            b"# Merged by JMAN\nhttp\\://example.org/schema/one=example.OneHandler\nhttp\\://example.org/schema/two=example.TwoHandler\n"
         );
     }
 
