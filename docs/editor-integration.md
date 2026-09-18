@@ -40,8 +40,10 @@ settings, build, wrapper, version-catalog, and `buildSrc` files.
 
 The initialization result advertises these extensions under
 `capabilities.experimental.jmanJavaTesting`. Version 2 reports
-`streamingEvents: true`; per-test results use the versioned `jman-runner`
-protocol rather than being inferred from console text.
+`streamingEvents: true`; JMAN test processes emit protocol-version-3
+`test-case-started` and `test-case` records as each JUnit test runs. Editors use
+those records instead of inferring results from console text, while JUnit XML
+remains available for final reconciliation.
 
 Editor integrations own only process startup, initialization options, file
 watchers, command UI, and status presentation. Java analysis, workspace

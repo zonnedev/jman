@@ -341,6 +341,15 @@ async function main() {
     [classItem],
     "running a class must use its class selector instead of expanding methods",
   );
+  assert.equal(
+    extension.parseTestEventLine(JSON.stringify({
+      reason: "test-case-started",
+      module: "app",
+      selector: "dev.GreetingTest#greets",
+      displayName: "greets()",
+    })).selector,
+    "dev.GreetingTest#greets",
+  );
   assert.deepEqual(
     extension.selectTestItems(roots, [methodItem], []),
     [methodItem],

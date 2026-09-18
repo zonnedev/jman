@@ -465,29 +465,164 @@ async fn test_project(arguments: &TestCommand, ui: &Ui) -> Result<()> {
         },
         debug: arguments.debug,
     };
+    let (event_sender, mut event_receiver) = tokio::sync::mpsc::unbounded_channel();
     let tests = jman_build::test_workspace(
         &workspace_root,
         &cache_dir,
         jobs,
         arguments.offline,
         &test_options,
+        Some(event_sender),
     );
     tokio::pin!(tests);
-    let results = tokio::select! {
-        result = &mut tests => result.context("JUnit test execution failed")?,
-        signal = test_cancellation_signal() => {
-            signal.context("could not install the test cancellation handler")?;
-            bail!("test run cancelled; isolated JVM workers were terminated")
+    let cancellation = test_cancellation_signal();
+    tokio::pin!(cancellation);
+    let mut started_modules = BTreeSet::new();
+    let mut streamed_tests = BTreeSet::new();
+    let results = loop {
+        tokio::select! {
+            result = &mut tests => break result.context("JUnit test execution failed")?,
+            event = event_receiver.recv() => {
+                if let Some(event) = event {
+                    report_live_test_event(
+                        &event,
+                        arguments.report,
+                        ui,
+                        &mut started_modules,
+                        &mut streamed_tests,
+                    )?;
+                }
+            }
+            signal = &mut cancellation => {
+                signal.context("could not install the test cancellation handler")?;
+                bail!("test run cancelled; isolated JVM workers were terminated")
+            }
         }
     };
+    while let Ok(event) = event_receiver.try_recv() {
+        report_live_test_event(
+            &event,
+            arguments.report,
+            ui,
+            &mut started_modules,
+            &mut streamed_tests,
+        )?;
+    }
     if results.is_empty() {
         ui.success("No test sources found");
         return Ok(());
     }
     for result in &results {
-        report_test_module(result, arguments.report, ui)?;
+        report_test_module(
+            result,
+            arguments.report,
+            ui,
+            &mut started_modules,
+            &streamed_tests,
+        )?;
     }
     finish_test_results(arguments, ui, &results)
+}
+
+fn report_live_test_event(
+    event: &jman_build::TestEvent,
+    format: ReportFormat,
+    ui: &Ui,
+    started_modules: &mut BTreeSet<String>,
+    streamed_tests: &mut BTreeSet<(String, String, String)>,
+) -> Result<()> {
+    report_test_module_started(&event.module, format, started_modules)?;
+    let selector = event.selector.as_deref().unwrap_or(&event.id);
+    match event.reason {
+        jman_build::TestEventReason::TestStarted => {
+            if format == ReportFormat::Json {
+                print_test_json(&serde_json::json!({
+                    "protocolVersion": 3,
+                    "reason": "test-case-started",
+                    "module": event.module,
+                    "id": event.id,
+                    "selector": selector,
+                    "displayName": event.display_name,
+                }))?;
+            }
+        }
+        jman_build::TestEventReason::TestFinished => {
+            let status = event.status.unwrap_or(jman_build::TestCaseStatus::Errored);
+            let test_case = jman_build::TestCaseResult {
+                id: event.id.clone(),
+                selector: selector.to_owned(),
+                class_name: event.class_name.clone().unwrap_or_default(),
+                method_name: event.method_name.clone().unwrap_or_default(),
+                display_name: event.display_name.clone(),
+                invocation: None,
+                attempt: 1,
+                status,
+                duration_millis: event.duration_millis.unwrap_or_default(),
+                message: event.message.clone(),
+                details: event.details.clone(),
+            };
+            streamed_tests.insert((
+                event.module.clone(),
+                test_case.selector.clone(),
+                test_case.display_name.clone(),
+            ));
+            if format == ReportFormat::Json {
+                print_test_json(&serde_json::json!({
+                    "protocolVersion": 3,
+                    "reason": "test-case",
+                    "module": event.module,
+                    "test": test_case,
+                }))?;
+            } else {
+                report_live_human_test(&event.module, &test_case, ui);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn report_live_human_test(module: &str, test: &jman_build::TestCaseResult, ui: &Ui) {
+    let duration = ui::format_duration(std::time::Duration::from_millis(test.duration_millis));
+    let name = format!("{module} › {} ({duration})", test.display_name);
+    match test.status {
+        jman_build::TestCaseStatus::Passed => ui.success(format!("PASS {name}")),
+        jman_build::TestCaseStatus::Skipped => ui.status(format!("SKIP {name}")),
+        jman_build::TestCaseStatus::Failed | jman_build::TestCaseStatus::Errored => {
+            ui.warning(format!("FAIL {name}"));
+            if let Some(message) = &test.message {
+                ui.warning(format!("  {message}"));
+            }
+        }
+    }
+}
+
+fn report_test_module_started(
+    module: &str,
+    format: ReportFormat,
+    started_modules: &mut BTreeSet<String>,
+) -> Result<()> {
+    if format == ReportFormat::Json && started_modules.insert(module.to_owned()) {
+        print_test_json(&serde_json::json!({
+            "protocolVersion": 3,
+            "reason": "test-module-started",
+            "module": module,
+            "debug": {
+                "supported": true,
+                "transport": "java-debug-adapter",
+                "suspend": true
+            },
+            "coverage": {
+                "supported": false,
+                "reason": "Coverage collection is not bundled in the MVP runner"
+            }
+        }))?;
+    }
+    Ok(())
+}
+
+fn print_test_json(event: &serde_json::Value) -> Result<()> {
+    println!("{}", serde_json::to_string(event)?);
+    io::stdout().flush().context("could not flush test event")
 }
 
 async fn test_cancellation_signal() -> std::io::Result<()> {
@@ -510,46 +645,32 @@ fn report_test_module(
     result: &jman_build::TestModuleResult,
     format: ReportFormat,
     ui: &Ui,
+    started_modules: &mut BTreeSet<String>,
+    streamed_tests: &BTreeSet<(String, String, String)>,
 ) -> Result<()> {
     if format == ReportFormat::Json {
-        println!(
-            "{}",
-            serde_json::to_string(&serde_json::json!({
-                "protocolVersion": 2,
-                "reason": "test-module-started",
+        report_test_module_started(&result.module, format, started_modules)?;
+        for test_case in result.test_cases.iter().filter(|test_case| {
+            !streamed_tests.contains(&(
+                result.module.clone(),
+                test_case.selector.clone(),
+                test_case.display_name.clone(),
+            ))
+        }) {
+            print_test_json(&serde_json::json!({
+                "protocolVersion": 3,
+                "reason": "test-case",
                 "module": result.module,
-                "debug": {
-                    "supported": true,
-                    "transport": "java-debug-adapter",
-                    "suspend": true
-                },
-                "coverage": {
-                    "supported": false,
-                    "reason": "Coverage collection is not bundled in the MVP runner"
-                }
-            }))?
-        );
-        for test_case in &result.test_cases {
-            println!(
-                "{}",
-                serde_json::to_string(&serde_json::json!({
-                    "protocolVersion": 2,
-                    "reason": "test-case",
-                    "module": result.module,
-                    "test": test_case,
-                }))?
-            );
+                "test": test_case,
+            }))?;
         }
-        println!(
-            "{}",
-            serde_json::to_string(&serde_json::json!({
-                "protocolVersion": 2,
-                "reason": "test-module-finished",
-                "module": result.module,
-                "successful": result.status.success(),
-                "summary": result.summary
-            }))?
-        );
+        print_test_json(&serde_json::json!({
+            "protocolVersion": 3,
+            "reason": "test-module-finished",
+            "module": result.module,
+            "successful": result.status.success(),
+            "summary": result.summary
+        }))?;
         return Ok(());
     }
     if result.summary.is_some() && (!result.status.success() || ui.is_verbose()) {

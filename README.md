@@ -94,17 +94,19 @@ does not claim full Maven 3/4 model compatibility, arbitrary plugin behavior, or
 `jman test` compiles `src/test/java` and `src/integrationTest/java`, then runs each
 selected module in a separate JVM. `--source-set unit` or `--source-set
 integration` selects one source set; the default `all` runs both. Module JVMs
-are bounded by `--jobs`, while reporting is sorted by module for reproducible
-output.
+are bounded by `--jobs`. Individual results are reported as soon as JUnit
+finishes each test; final module summaries remain sorted for reproducible output.
 
 The cached `jman-runner.jar` is compiled from the repository-owned Java source
-with the selected project JDK. Rust and runner use protocol version 2. `--report
-json` emits newline-delimited `test-module-started`, `test-case`, and
-`test-module-finished` events. Test cases retain a stable selector plus a unique
-display/invocation identity, exact failure message/details, duration, and retry
-attempt. Reruns use exact class or `Class#method` selectors. The protocol exposes
-debug descriptors and an explicit unsupported coverage response instead of
-silently pretending coverage was collected.
+with the selected project JDK. Rust and runner use protocol version 3. A JUnit
+Platform listener emits framed events while the worker is running; `--report
+json` exposes them as flushed, newline-delimited `test-module-started`,
+`test-case-started`, `test-case`, and `test-module-finished` events. Test cases
+retain a stable selector plus a unique display/invocation identity, exact failure
+message/details, duration, and retry attempt. JUnit XML remains the authoritative
+reconciliation fallback. Reruns use exact class or `Class#method` selectors. The
+protocol exposes debug descriptors and an explicit unsupported coverage response
+instead of silently pretending coverage was collected.
 
 Tests receive `-Djman.test.port=0` by default. Applications that need an HTTP port
 must read `jman.test.port` and bind port zero so the operating system chooses an

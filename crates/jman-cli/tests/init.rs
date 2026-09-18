@@ -1,4 +1,8 @@
-use std::{fs, process::Command};
+use std::{
+    fs,
+    io::{BufRead, BufReader},
+    process::{Command, Stdio},
+};
 
 use sha2::{Digest, Sha256};
 
@@ -230,6 +234,24 @@ fn compiles_tests_and_launches_junit_platform_console() {
     let runner_source = runner
         .path()
         .join("src/org/junit/platform/console/ConsoleLauncher.java");
+    let listener_source = runner
+        .path()
+        .join("src/org/junit/platform/launcher/TestExecutionListener.java");
+    let identifier_source = runner
+        .path()
+        .join("src/org/junit/platform/launcher/TestIdentifier.java");
+    let result_source = runner
+        .path()
+        .join("src/org/junit/platform/engine/TestExecutionResult.java");
+    let test_source = runner
+        .path()
+        .join("src/org/junit/platform/engine/TestSource.java");
+    let method_source = runner
+        .path()
+        .join("src/org/junit/platform/engine/support/descriptor/MethodSource.java");
+    let class_source = runner
+        .path()
+        .join("src/org/junit/platform/engine/support/descriptor/ClassSource.java");
     let processor_source = runner.path().join("src/fixture/TestGenerator.java");
     fs::create_dir_all(runner_source.parent().expect("runner source parent"))
         .expect("runner sources");
@@ -241,6 +263,11 @@ fn compiles_tests_and_launches_junit_platform_console() {
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.ServiceLoader;
+import org.junit.platform.engine.TestExecutionResult;
+import org.junit.platform.engine.support.descriptor.MethodSource;
+import org.junit.platform.launcher.TestExecutionListener;
+import org.junit.platform.launcher.TestIdentifier;
 public final class ConsoleLauncher {
   public static void main(String[] args) throws Exception {
     if (!args[0].equals("execute")) System.exit(2);
@@ -253,6 +280,16 @@ public final class ConsoleLauncher {
     var report = arguments.stream()
         .filter(value -> value.startsWith("--reports-dir="))
         .findFirst().orElseThrow().substring("--reports-dir=".length());
+    var identifier = new TestIdentifier(
+        "[engine:fixture]/[class:com.example.AppTest]/[method:greets]",
+        "greets(String)[1]",
+        new MethodSource("com.example.AppTest", "greets"));
+    for (var listener : ServiceLoader.load(TestExecutionListener.class)) {
+      listener.executionStarted(identifier);
+      listener.executionFinished(identifier, TestExecutionResult.failed(
+          new AssertionError("expected Ada")));
+    }
+    Thread.sleep(350);
     Files.writeString(Path.of(report).resolve("TEST-fixture.xml"),
         "<testsuite><testcase name=\"greets(String)[1]\" classname=\"com.example.AppTest\" time=\"0.012\">"
         + "<failure message=\"expected Ada\">exact stack trace</failure></testcase></testsuite>");
@@ -261,6 +298,93 @@ public final class ConsoleLauncher {
 }"#,
     )
     .expect("runner source");
+    fs::create_dir_all(listener_source.parent().expect("listener source parent"))
+        .expect("listener sources");
+    fs::create_dir_all(result_source.parent().expect("result source parent"))
+        .expect("engine sources");
+    fs::create_dir_all(method_source.parent().expect("descriptor source parent"))
+        .expect("descriptor sources");
+    fs::write(
+        &listener_source,
+        r"package org.junit.platform.launcher;
+import org.junit.platform.engine.TestExecutionResult;
+public interface TestExecutionListener {
+  default void executionStarted(TestIdentifier identifier) {}
+  default void executionSkipped(TestIdentifier identifier, String reason) {}
+  default void executionFinished(TestIdentifier identifier, TestExecutionResult result) {}
+}",
+    )
+    .expect("listener API");
+    fs::write(
+        &identifier_source,
+        r"package org.junit.platform.launcher;
+import java.util.Optional;
+import org.junit.platform.engine.TestSource;
+public final class TestIdentifier {
+  private final String id;
+  private final String displayName;
+  private final TestSource source;
+  public TestIdentifier(String id, String displayName, TestSource source) {
+    this.id = id; this.displayName = displayName; this.source = source;
+  }
+  public boolean isTest() { return true; }
+  public String getUniqueId() { return id; }
+  public Optional<String> getParentId() { return Optional.empty(); }
+  public Optional<TestSource> getSource() { return Optional.ofNullable(source); }
+  public String getDisplayName() { return displayName; }
+}",
+    )
+    .expect("identifier API");
+    fs::write(
+        &test_source,
+        "package org.junit.platform.engine; public interface TestSource {}",
+    )
+    .expect("test source API");
+    fs::write(
+        &result_source,
+        r"package org.junit.platform.engine;
+import java.util.Optional;
+public final class TestExecutionResult {
+  public enum Status { SUCCESSFUL, FAILED, ABORTED }
+  private final Status status;
+  private final Throwable throwable;
+  private TestExecutionResult(Status status, Throwable throwable) {
+    this.status = status; this.throwable = throwable;
+  }
+  public static TestExecutionResult failed(Throwable throwable) {
+    return new TestExecutionResult(Status.FAILED, throwable);
+  }
+  public Status getStatus() { return status; }
+  public Optional<Throwable> getThrowable() { return Optional.ofNullable(throwable); }
+}",
+    )
+    .expect("result API");
+    fs::write(
+        &method_source,
+        r"package org.junit.platform.engine.support.descriptor;
+import org.junit.platform.engine.TestSource;
+public final class MethodSource implements TestSource {
+  private final String className;
+  private final String methodName;
+  public MethodSource(String className, String methodName) {
+    this.className = className; this.methodName = methodName;
+  }
+  public String getClassName() { return className; }
+  public String getMethodName() { return methodName; }
+}",
+    )
+    .expect("method source API");
+    fs::write(
+        &class_source,
+        r"package org.junit.platform.engine.support.descriptor;
+import org.junit.platform.engine.TestSource;
+public final class ClassSource implements TestSource {
+  private final String className;
+  public ClassSource(String className) { this.className = className; }
+  public String getClassName() { return className; }
+}",
+    )
+    .expect("class source API");
     fs::write(
         &processor_source,
         r#"package fixture;
@@ -299,6 +423,12 @@ public final class TestGenerator extends AbstractProcessor {
         .arg(&runner_classes)
         .arg(&runner_source)
         .arg(&processor_source)
+        .arg(&listener_source)
+        .arg(&identifier_source)
+        .arg(&result_source)
+        .arg(&test_source)
+        .arg(&method_source)
+        .arg(&class_source)
         .status()
         .expect("compile runner")
         .success());
@@ -439,7 +569,7 @@ processors = ["sha256:{digest}"]
         )
         .is_file());
 
-    let structured = Command::new(env!("CARGO_BIN_EXE_jman"))
+    let mut structured = Command::new(env!("CARGO_BIN_EXE_jman"))
         .env("JMAN_CACHE_DIR", cache.path())
         .env("TESTCONTAINERS_RYUK_DISABLED", "false")
         .args([
@@ -453,23 +583,48 @@ processors = ["sha256:{digest}"]
             "--tests",
             "com.example.AppTest#greets",
         ])
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .expect("structured test project");
-    assert!(structured.status.success());
-    let events = String::from_utf8(structured.stdout)
-        .expect("UTF-8 events")
-        .lines()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("test event"))
-        .collect::<Vec<_>>();
-    assert_eq!(events.len(), 3);
-    assert_eq!(events[0]["protocolVersion"], 2);
+    let stdout = structured.stdout.take().expect("structured stdout");
+    let mut events = Vec::new();
+    for line in BufReader::new(stdout).lines() {
+        let event =
+            serde_json::from_str::<serde_json::Value>(&line.expect("read structured test event"))
+                .expect("test event");
+        if event["reason"] == "test-case" {
+            assert!(
+                structured
+                    .try_wait()
+                    .expect("poll structured test")
+                    .is_none(),
+                "test result must be reported before the worker exits"
+            );
+        }
+        events.push(event);
+    }
+    let structured = structured
+        .wait_with_output()
+        .expect("finish structured test project");
+    assert!(
+        structured.status.success(),
+        "{}",
+        String::from_utf8_lossy(&structured.stderr)
+    );
+    assert_eq!(events.len(), 4);
+    assert_eq!(events[0]["protocolVersion"], 3);
     assert_eq!(events[0]["reason"], "test-module-started");
-    assert_eq!(events[1]["reason"], "test-case");
-    assert_eq!(events[1]["test"]["selector"], "com.example.AppTest#greets");
-    assert_eq!(events[1]["test"]["displayName"], "greets(String)[1]");
-    assert_eq!(events[1]["test"]["message"], "expected Ada");
-    assert_eq!(events[1]["test"]["details"], "exact stack trace");
-    assert_eq!(events[2]["reason"], "test-module-finished");
+    assert_eq!(events[1]["reason"], "test-case-started");
+    assert_eq!(events[2]["reason"], "test-case");
+    assert_eq!(events[2]["test"]["selector"], "com.example.AppTest#greets");
+    assert_eq!(events[2]["test"]["displayName"], "greets(String)[1]");
+    assert_eq!(events[2]["test"]["message"], "expected Ada");
+    assert!(events[2]["test"]["details"]
+        .as_str()
+        .expect("failure details")
+        .contains("AssertionError: expected Ada"));
+    assert_eq!(events[3]["reason"], "test-module-finished");
     assert!(!project
         .path()
         .join(".jman/output/test-classes/com/example/AppIntegrationTest.class")

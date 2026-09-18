@@ -6,7 +6,7 @@ import java.util.Arrays;
 
 /** Versioned, dependency-neutral entry point for isolated JUnit Platform runs. */
 public final class JmanRunner {
-    private static final String PROTOCOL_VERSION = "2";
+    private static final String PROTOCOL_VERSION = "3";
 
     private JmanRunner() {}
 
@@ -15,7 +15,7 @@ public final class JmanRunner {
                 || !"--protocol".equals(arguments[0])
                 || !PROTOCOL_VERSION.equals(arguments[1])
                 || !"--".equals(arguments[2])) {
-            System.err.println("jman-runner: expected --protocol 2 -- <JUnit Platform arguments>");
+            System.err.println("jman-runner: expected --protocol 3 -- <JUnit Platform arguments>");
             System.exit(2);
         }
 

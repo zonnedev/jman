@@ -62,6 +62,12 @@ impl Ui {
         }
     }
 
+    pub fn status(&self, message: impl AsRef<str>) {
+        if !self.quiet && !self.structured {
+            eprintln!("→ {}", message.as_ref());
+        }
+    }
+
     pub fn warning(&self, message: impl AsRef<str>) {
         if !self.quiet && !self.structured {
             eprintln!("! {}", message.as_ref());

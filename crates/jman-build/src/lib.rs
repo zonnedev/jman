@@ -15,7 +15,12 @@ use futures::{stream, StreamExt, TryStreamExt};
 use jman_config::{Lockfile, Manifest};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use tokio::{fs, process::Command, sync::Semaphore};
+use tokio::{
+    fs,
+    io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader},
+    process::Command,
+    sync::{mpsc, Semaphore},
+};
 
 pub mod toolchain;
 
@@ -121,7 +126,7 @@ pub struct TestModuleResult {
     pub output: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TestCaseResult {
     pub id: String,
@@ -137,13 +142,39 @@ pub struct TestCaseResult {
     pub details: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TestCaseStatus {
     Passed,
     Failed,
     Skipped,
     Errored,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TestEventReason {
+    TestStarted,
+    TestFinished,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestEvent {
+    pub protocol_version: u16,
+    pub reason: TestEventReason,
+    #[serde(default)]
+    pub module: String,
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub selector: Option<String>,
+    pub class_name: Option<String>,
+    pub method_name: Option<String>,
+    pub display_name: String,
+    pub status: Option<TestCaseStatus>,
+    pub duration_millis: Option<u64>,
+    pub message: Option<String>,
+    pub details: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -493,6 +524,7 @@ pub async fn test_workspace(
     jobs: usize,
     offline: bool,
     options: &TestOptions,
+    events: Option<mpsc::UnboundedSender<TestEvent>>,
 ) -> Result<Vec<TestModuleResult>, BuildError> {
     let modules = discover_modules(root).await?;
     validate_test_modules(&modules, &options.modules)?;
@@ -503,11 +535,18 @@ pub async fn test_workspace(
         || PathBuf::from(executable),
         |parent| parent.join(executable),
     );
-    let runner = ensure_test_runner(&build.toolchain, cache_dir).await?;
     let mut results = stream::iter(modules.iter().enumerate())
         .map(|(index, module)| {
             run_test_module(
-                index, module, &modules, &build, cache_dir, &java, &runner, &selection, options,
+                index,
+                module,
+                &modules,
+                &build,
+                cache_dir,
+                &java,
+                &selection,
+                options,
+                events.clone(),
             )
         })
         .buffer_unordered(jobs.max(1))
@@ -528,9 +567,9 @@ async fn run_test_module(
     build: &CheckResult,
     cache_dir: &Path,
     java: &Path,
-    runner: &Path,
     selection: &JunitSelection,
     options: &TestOptions,
+    events: Option<mpsc::UnboundedSender<TestEvent>>,
 ) -> Result<Option<TestModuleResult>, BuildError> {
     if module.manifest.project.packaging == "pom"
         || (!options.modules.is_empty() && !options.modules.contains(&module.manifest.project.name))
@@ -559,10 +598,11 @@ async fn run_test_module(
             .map(|dependency| build.modules[dependency].output.clone()),
     );
     classpath.extend(artifact_paths(&lock.classpath.test, &lock, cache_dir)?);
+    let runner = ensure_test_runner(&build.toolchain, cache_dir, &classpath).await?;
     let processors = artifact_paths(&lock.classpath.processors, &lock, cache_dir)?;
     let (test_output, rebuilt) =
         compile_test_sources(module, &build.toolchain, &sources, &classpath, &processors).await?;
-    let mut runtime = vec![runner.to_owned(), test_output.clone()];
+    let mut runtime = vec![runner, test_output.clone()];
     for resource_root in source_roots {
         let resources = module
             .directory
@@ -585,7 +625,7 @@ async fn run_test_module(
         .args([
             "io.github.zonnedev.jman.runner.JmanRunner",
             "--protocol",
-            "2",
+            "3",
             "--",
             "execute",
             "--disable-banner",
@@ -614,25 +654,89 @@ async fn run_test_module(
     if !options.patterns.is_empty() {
         command.arg("--fail-if-no-tests");
     }
-    let output = command
+    command
         .args(&options.console_arguments)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|source| BuildError::Javac {
+        path: java.to_owned(),
+        source,
+    })?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| BuildError::Invalid("JUnit worker stdout was not captured".to_owned()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| BuildError::Invalid("JUnit worker stderr was not captured".to_owned()))?;
+    let module_name = module.manifest.project.name.clone();
+    let stdout_task = tokio::spawn(read_test_stdout(stdout, module_name, events));
+    let stderr_task = tokio::spawn(read_test_stderr(stderr));
+    let status = child.wait().await.map_err(|source| BuildError::Javac {
+        path: java.to_owned(),
+        source,
+    })?;
+    let stdout = stdout_task
         .await
-        .map_err(|source| BuildError::Javac {
-            path: java.to_owned(),
-            source,
-        })?;
-    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-    text.push_str(&String::from_utf8_lossy(&output.stderr));
+        .map_err(|error| BuildError::Invalid(format!("JUnit stdout reader failed: {error}")))??;
+    let stderr = stderr_task
+        .await
+        .map_err(|error| BuildError::Invalid(format!("JUnit stderr reader failed: {error}")))??;
+    let mut text = String::from_utf8_lossy(&stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&stderr));
     Ok(Some(TestModuleResult {
         module: module.manifest.project.name.clone(),
         sources: sources.len(),
         rebuilt,
-        status: output.status,
+        status,
         summary: parse_junit_summary(&text),
         test_cases: parse_junit_reports(reports.path())?,
         output: text,
     }))
+}
+
+async fn read_test_stdout<R: AsyncRead + Unpin>(
+    reader: R,
+    module: String,
+    events: Option<mpsc::UnboundedSender<TestEvent>>,
+) -> Result<Vec<u8>, BuildError> {
+    let mut reader = BufReader::new(reader);
+    let mut output = Vec::new();
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let bytes = reader
+            .read_until(b'\n', &mut line)
+            .await
+            .map_err(|source| io_error(Path::new("JUnit worker stdout"), source))?;
+        if bytes == 0 {
+            break;
+        }
+        let event = line
+            .strip_prefix(&[0x1e])
+            .and_then(|json| serde_json::from_slice::<TestEvent>(json).ok());
+        if let Some(mut event) = event {
+            event.module.clone_from(&module);
+            if event.protocol_version == 3 {
+                if let Some(events) = &events {
+                    let _ = events.send(event);
+                }
+                continue;
+            }
+        }
+        output.extend_from_slice(&line);
+    }
+    Ok(output)
+}
+
+async fn read_test_stderr<R: AsyncRead + Unpin>(mut reader: R) -> Result<Vec<u8>, BuildError> {
+    let mut output = Vec::new();
+    reader
+        .read_to_end(&mut output)
+        .await
+        .map_err(|source| io_error(Path::new("JUnit worker stderr"), source))?;
+    Ok(output)
 }
 
 fn validate_test_modules(
@@ -738,15 +842,29 @@ fn parse_junit_reports(directory: &Path) -> Result<Vec<TestCaseResult>, BuildErr
     Ok(cases)
 }
 
+#[allow(clippy::too_many_lines)]
 async fn ensure_test_runner(
     toolchain: &Toolchain,
     cache_dir: &Path,
+    classpath: &[PathBuf],
 ) -> Result<PathBuf, BuildError> {
-    const SOURCE: &str = include_str!(
+    const RUNNER_SOURCE: &str = include_str!(
         "../../../tools/jman-runner/src/main/java/io/github/zonnedev/jman/runner/JmanRunner.java"
     );
+    const LISTENER_SOURCE: &str = include_str!(
+        "../../../tools/jman-runner/src/main/java/io/github/zonnedev/jman/runner/JmanExecutionListener.java"
+    );
+    let classpath_identity = classpath
+        .iter()
+        .map(|path| path.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("\n");
     let digest = hex::encode(Sha256::digest(
-        format!("jman-runner-v2\n{}\n{SOURCE}", toolchain.version).as_bytes(),
+        format!(
+            "jman-runner-v3\n{}\n{classpath_identity}\n{RUNNER_SOURCE}\n{LISTENER_SOURCE}",
+            toolchain.version
+        )
+        .as_bytes(),
     ));
     let directory = cache_dir.join("tools/jman-runner").join(digest);
     let artifact = directory.join("jman-runner.jar");
@@ -763,23 +881,30 @@ async fn ensure_test_runner(
             .await
             .map_err(|source| io_error(&staging, source))?;
     }
-    let source = staging.join("src/io/github/zonnedev/jman/runner/JmanRunner.java");
+    let source_directory = staging.join("src/io/github/zonnedev/jman/runner");
+    let runner_source = source_directory.join("JmanRunner.java");
+    let listener_source = source_directory.join("JmanExecutionListener.java");
     let classes = staging.join("classes");
-    if let Some(parent) = source.parent() {
-        fs::create_dir_all(parent)
-            .await
-            .map_err(|error| io_error(parent, error))?;
-    }
+    fs::create_dir_all(&source_directory)
+        .await
+        .map_err(|error| io_error(&source_directory, error))?;
     fs::create_dir_all(&classes)
         .await
         .map_err(|error| io_error(&classes, error))?;
-    fs::write(&source, SOURCE)
+    fs::write(&runner_source, RUNNER_SOURCE)
         .await
-        .map_err(|error| io_error(&source, error))?;
-    let result = Command::new(&toolchain.javac)
-        .args(["-Werror", "-Xlint:all", "-d"])
-        .arg(&classes)
-        .arg(&source)
+        .map_err(|error| io_error(&runner_source, error))?;
+    fs::write(&listener_source, LISTENER_SOURCE)
+        .await
+        .map_err(|error| io_error(&listener_source, error))?;
+    let mut compiler = Command::new(&toolchain.javac);
+    compiler.args(["-Werror", "-Xlint:all", "-d"]).arg(&classes);
+    if !classpath.is_empty() {
+        compiler.arg("-classpath").arg(join_paths(classpath)?);
+    }
+    let result = compiler
+        .arg(&runner_source)
+        .arg(&listener_source)
         .output()
         .await
         .map_err(|source| BuildError::Javac {
@@ -807,6 +932,10 @@ async fn ensure_test_runner(
                 .map_err(|error| io_error(&class, error))?,
         ));
     }
+    entries.push((
+        "META-INF/services/org.junit.platform.launcher.TestExecutionListener".to_owned(),
+        b"io.github.zonnedev.jman.runner.JmanExecutionListener\n".to_vec(),
+    ));
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     let staged_artifact = staging.join("jman-runner.jar");
     write_jar(staged_artifact.clone(), entries).await?;
@@ -2688,24 +2817,62 @@ Test run finished after 758 ms
     }
 
     #[tokio::test]
-    async fn builds_and_reuses_the_versioned_java_test_runner() {
-        let directory = tempfile::tempdir().expect("directory");
-        let toolchain = discover_toolchain(8).await.expect("JDK");
-        let first = ensure_test_runner(&toolchain, directory.path())
-            .await
-            .expect("build runner");
-        let bytes = std::fs::read(&first).expect("runner bytes");
-        let second = ensure_test_runner(&toolchain, directory.path())
-            .await
-            .expect("reuse runner");
-        assert_eq!(first, second);
-        assert_eq!(bytes, std::fs::read(second).expect("cached runner bytes"));
+    async fn streams_framed_test_events_and_preserves_ordinary_output() {
+        use tokio::io::AsyncWriteExt as _;
 
-        let file = std::fs::File::open(first).expect("open runner");
-        let mut archive = zip::ZipArchive::new(file).expect("runner JAR");
-        assert!(archive
-            .by_name("io/github/zonnedev/jman/runner/JmanRunner.class")
-            .is_ok());
+        let (mut writer, reader) = tokio::io::duplex(64);
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let read = tokio::spawn(read_test_stdout(
+            reader,
+            "application".to_owned(),
+            Some(sender),
+        ));
+        writer.write_all(b"\x1e{\"protocolVersion\":3,\"reason\":\"test-finished\",\"id\":\"test-1\",\"parentId\":null,\"selector\":\"example.AppTest#works\",\"className\":\"example.AppTest\",\"methodName\":\"works\",\"displayName\":\"works()\",\"status\":\"passed\",\"durationMillis\":12,\"message\":null,\"details\":null}\n")
+            .await
+            .expect("write stream");
+
+        let event = receiver.recv().await.expect("test event");
+        assert!(
+            !read.is_finished(),
+            "event must arrive before the stream closes"
+        );
+        assert_eq!(event.module, "application");
+        assert_eq!(event.reason, TestEventReason::TestFinished);
+        assert_eq!(event.status, Some(TestCaseStatus::Passed));
+        assert_eq!(event.duration_millis, Some(12));
+        writer
+            .write_all(b"ordinary output\n")
+            .await
+            .expect("write ordinary output");
+        drop(writer);
+        assert_eq!(
+            read.await.expect("reader task").expect("read output"),
+            b"ordinary output\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn preserves_malformed_and_unknown_test_event_frames() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let (mut writer, reader) = tokio::io::duplex(64);
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let read = tokio::spawn(read_test_stdout(
+            reader,
+            "application".to_owned(),
+            Some(sender),
+        ));
+        writer
+            .write_all(b"\x1enot-json\n\x1e{\"protocolVersion\":99}\n")
+            .await
+            .expect("write stream");
+        drop(writer);
+
+        assert_eq!(
+            read.await.expect("reader task").expect("read output"),
+            b"\x1enot-json\n\x1e{\"protocolVersion\":99}\n"
+        );
+        assert!(receiver.try_recv().is_err());
     }
 
     #[tokio::test]

@@ -167,7 +167,9 @@ function testItemsBySelector(roots) {
 function parseTestEventLine(line) {
   try {
     const event = JSON.parse(line);
-    return event.reason === "test-case" && event.test?.selector ? event : undefined;
+    if (event.reason === "test-case" && event.test?.selector) return event;
+    if (event.reason === "test-case-started" && event.selector) return event;
+    return undefined;
   } catch {
     return undefined;
   }
@@ -270,7 +272,6 @@ async function configureTesting(context, command, environment, outputChannel) {
       executionTests = leafTestItems(tests);
       executionTests.forEach((item) => {
         run.enqueued(item);
-        run.started(item);
       });
       if (tests.length === 0) {
         run.end();
@@ -283,6 +284,9 @@ async function configureTesting(context, command, environment, outputChannel) {
       });
       const folder = workspaceRoot(testUri);
       const args = prepared.arguments;
+      if (prepared.report !== "json-lines") {
+        executionTests.forEach((item) => run.started(item));
+      }
       const executable = executionCommand(
         prepared.program || "jman",
         command,
@@ -297,8 +301,15 @@ async function configureTesting(context, command, environment, outputChannel) {
       const reported = new Set();
       let stdoutBuffer = "";
       const report = (event) => {
-        const item = itemsBySelector.get(event.test.selector);
+        const selector = event.reason === "test-case-started"
+          ? event.selector
+          : event.test.selector;
+        const item = itemsBySelector.get(selector);
         if (!item) return;
+        if (event.reason === "test-case-started") {
+          run.started(item);
+          return;
+        }
         reported.add(item.id);
         const duration = event.test.durationMillis;
         if (event.test.status === "passed") run.passed(item, duration);
