@@ -95,7 +95,10 @@ does not claim full Maven 3/4 model compatibility, arbitrary plugin behavior, or
 selected module in a separate JVM. `--source-set unit` or `--source-set
 integration` selects one source set; the default `all` runs both. Module JVMs
 are bounded by `--jobs`. Individual results are reported as soon as JUnit
-finishes each test; final module summaries remain sorted for reproducible output.
+finishes each test. Human output grows as a module/suite/test tree above the
+active spinner, including nested suites and failure details; interleaved parallel
+suites reopen their branch explicitly instead of mixing unrelated children.
+Final module summaries remain sorted for reproducible output.
 
 The cached `jman-runner.jar` is compiled from the repository-owned Java source
 with the selected project JDK. Rust and runner use protocol version 3. A JUnit

@@ -102,24 +102,12 @@ impl Activity {
         }
     }
 
-    pub fn status(&self, message: impl AsRef<str>) {
-        self.print("→", message.as_ref());
-    }
-
-    pub fn success(&self, message: impl AsRef<str>) {
-        self.print("✓", message.as_ref());
-    }
-
-    pub fn warning(&self, message: impl AsRef<str>) {
-        self.print("!", message.as_ref());
-    }
-
-    fn print(&self, prefix: &str, message: &str) {
-        let line = format!("{prefix} {message}");
+    pub fn line(&self, message: impl AsRef<str>) {
+        let message = message.as_ref();
         if let Some(progress) = &self.progress {
-            progress.println(line);
+            progress.println(message);
         } else if self.plain {
-            eprintln!("{line}");
+            eprintln!("{message}");
         }
     }
 

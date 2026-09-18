@@ -574,6 +574,12 @@ processors = ["sha256:{digest}"]
         String::from_utf8(output.stdout).expect("UTF-8 output"),
         "JUnit Platform fixture passed"
     );
+    let human_report = String::from_utf8(output.stderr).expect("UTF-8 human report");
+    assert!(human_report.contains("\napp\n├─ AppTest\n"));
+    assert!(human_report.contains("│  ├─ ✗ greets(String)[1]"));
+    assert!(human_report.contains("│  └─ "));
+    assert!(human_report.contains(" total · "));
+    assert!(human_report.contains(" lifecycle"));
     assert!(project
         .path()
         .join(".jman/output/test-classes/com/example/AppTest.class")

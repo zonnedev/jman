@@ -480,6 +480,7 @@ async fn test_project(arguments: &TestCommand, ui: &Ui) -> Result<()> {
     tokio::pin!(cancellation);
     let mut started_modules = BTreeSet::new();
     let mut streamed_tests = BTreeSet::new();
+    let mut human_tree = HumanTestTree::default();
     let results = loop {
         tokio::select! {
             result = &mut tests => break result.context("JUnit test execution failed")?,
@@ -491,6 +492,7 @@ async fn test_project(arguments: &TestCommand, ui: &Ui) -> Result<()> {
                         &test_activity,
                         &mut started_modules,
                         &mut streamed_tests,
+                        &mut human_tree,
                     )?;
                 }
             }
@@ -507,13 +509,13 @@ async fn test_project(arguments: &TestCommand, ui: &Ui) -> Result<()> {
             &test_activity,
             &mut started_modules,
             &mut streamed_tests,
+            &mut human_tree,
         )?;
     }
     if results.is_empty() {
         test_activity.finish("No test sources found");
         return Ok(());
     }
-    test_activity.finish("Test execution finished");
     for result in &results {
         report_test_module(
             result,
@@ -521,9 +523,229 @@ async fn test_project(arguments: &TestCommand, ui: &Ui) -> Result<()> {
             ui,
             &mut started_modules,
             &streamed_tests,
+            &test_activity,
+            &mut human_tree,
         )?;
     }
+    test_activity.finish("Test execution finished");
     finish_test_results(arguments, ui, &results)
+}
+
+#[derive(Clone, Debug)]
+struct TestTreeContainer {
+    module: String,
+    parent_id: Option<String>,
+    display_name: String,
+    suite: bool,
+}
+
+#[derive(Debug, Default)]
+struct HumanTestTree {
+    containers: BTreeMap<String, TestTreeContainer>,
+    announced_suites: BTreeSet<String>,
+    announced_modules: BTreeSet<String>,
+    active_suites: BTreeMap<String, String>,
+    current_module: Option<String>,
+}
+
+impl HumanTestTree {
+    fn container_started(&mut self, event: &jman_build::TestEvent, activity: &ui::Activity) {
+        let suite = event.class_name.is_some() && event.method_name.is_none();
+        self.containers.insert(
+            event.id.clone(),
+            TestTreeContainer {
+                module: event.module.clone(),
+                parent_id: event.parent_id.clone(),
+                display_name: event.display_name.clone(),
+                suite,
+            },
+        );
+        if suite {
+            self.ensure_suite_context(&event.id, false, activity);
+        }
+    }
+
+    fn test_finished(&mut self, event: &jman_build::TestEvent, activity: &ui::Activity) {
+        let suite = event
+            .parent_id
+            .as_deref()
+            .and_then(|parent| self.nearest_suite(parent));
+        let depth = suite.as_deref().map_or(1, |suite| {
+            self.ensure_suite_context(suite, false, activity);
+            self.suite_depth(suite) + 1
+        });
+        self.ensure_module(&event.module, activity);
+        let status = event.status.unwrap_or(jman_build::TestCaseStatus::Errored);
+        let symbol = match status {
+            jman_build::TestCaseStatus::Passed => "✓",
+            jman_build::TestCaseStatus::Skipped => "○",
+            jman_build::TestCaseStatus::Failed | jman_build::TestCaseStatus::Errored => "✗",
+        };
+        let duration = format_event_duration(event.duration_nanos, event.duration_millis);
+        activity.line(tree_line(
+            depth,
+            false,
+            &format!("{symbol} {} ({duration})", event.display_name),
+        ));
+        if matches!(
+            status,
+            jman_build::TestCaseStatus::Failed | jman_build::TestCaseStatus::Errored
+        ) {
+            Self::failure_details(event, depth + 1, activity);
+        }
+    }
+
+    fn container_finished(&mut self, event: &jman_build::TestEvent, activity: &ui::Activity) {
+        let Some(container) = self.containers.get(&event.id).cloned() else {
+            return;
+        };
+        if !container.suite {
+            return;
+        }
+        self.ensure_suite_context(&event.id, false, activity);
+        let depth = self.suite_depth(&event.id) + 1;
+        let total = format_event_duration(event.duration_nanos, event.duration_millis);
+        let lifecycle = format_event_duration(event.lifecycle_nanos, event.lifecycle_millis);
+        let timing = if event.lifecycle_nanos.unwrap_or_default() == 0
+            && event.lifecycle_millis.unwrap_or_default() == 0
+        {
+            format!("{total} total")
+        } else {
+            format!("{total} total · {lifecycle} lifecycle")
+        };
+        activity.line(tree_line(depth, true, &timing));
+        if let Some(parent) = container
+            .parent_id
+            .as_deref()
+            .and_then(|parent| self.nearest_suite(parent))
+        {
+            self.active_suites.insert(event.module.clone(), parent);
+        } else {
+            self.active_suites.remove(&event.module);
+        }
+    }
+
+    fn module_finished(
+        &mut self,
+        module: &str,
+        summary: &jman_build::TestSummary,
+        activity: &ui::Activity,
+    ) {
+        self.ensure_module(module, activity);
+        activity.line(tree_line(
+            0,
+            true,
+            &format!(
+                "{} passed · {} failed · {} skipped · {}",
+                summary.tests_successful,
+                summary.tests_failed,
+                summary.tests_skipped,
+                ui::format_duration(std::time::Duration::from_millis(summary.duration_millis))
+            ),
+        ));
+        self.active_suites.remove(module);
+    }
+
+    fn ensure_suite_context(&mut self, suite: &str, force: bool, activity: &ui::Activity) {
+        let Some(container) = self.containers.get(suite).cloned() else {
+            return;
+        };
+        let switched_module = self.ensure_module(&container.module, activity);
+        let active = self
+            .active_suites
+            .get(&container.module)
+            .map(String::as_str);
+        let announced = self.announced_suites.contains(suite);
+        if force || switched_module || active != Some(suite) || !announced {
+            let continued = announced;
+            let suffix = if continued { " (continued)" } else { "" };
+            activity.line(tree_line(
+                self.suite_depth(suite),
+                false,
+                &format!("{}{}", container.display_name, suffix),
+            ));
+            self.announced_suites.insert(suite.to_owned());
+        }
+        self.active_suites
+            .insert(container.module.clone(), suite.to_owned());
+    }
+
+    fn ensure_module(&mut self, module: &str, activity: &ui::Activity) -> bool {
+        if self.current_module.as_deref() == Some(module) {
+            return false;
+        }
+        let continued = self.announced_modules.contains(module);
+        activity.line(if continued {
+            format!("{module} (continued)")
+        } else {
+            module.to_owned()
+        });
+        self.announced_modules.insert(module.to_owned());
+        self.current_module = Some(module.to_owned());
+        true
+    }
+
+    fn nearest_suite(&self, identifier: &str) -> Option<String> {
+        let mut current = Some(identifier);
+        while let Some(identifier) = current {
+            let container = self.containers.get(identifier)?;
+            if container.suite {
+                return Some(identifier.to_owned());
+            }
+            current = container.parent_id.as_deref();
+        }
+        None
+    }
+
+    fn suite_depth(&self, suite: &str) -> usize {
+        let mut depth = 0;
+        let mut current = self
+            .containers
+            .get(suite)
+            .and_then(|container| container.parent_id.as_deref());
+        while let Some(identifier) = current {
+            let Some(container) = self.containers.get(identifier) else {
+                break;
+            };
+            if container.suite {
+                depth += 1;
+            }
+            current = container.parent_id.as_deref();
+        }
+        depth
+    }
+
+    fn failure_details(event: &jman_build::TestEvent, depth: usize, activity: &ui::Activity) {
+        if let Some(message) = &event.message {
+            activity.line(tree_detail(depth, message));
+        }
+        if let Some(details) = &event.details {
+            for line in details.lines() {
+                if event.message.as_deref() != Some(line.trim()) {
+                    activity.line(tree_detail(depth, line));
+                }
+            }
+        }
+    }
+}
+
+fn tree_line(depth: usize, last: bool, content: &str) -> String {
+    format!(
+        "{}{} {content}",
+        "│  ".repeat(depth),
+        if last { "└─" } else { "├─" }
+    )
+}
+
+fn tree_detail(depth: usize, content: &str) -> String {
+    format!("{}   {content}", "│  ".repeat(depth))
+}
+
+fn format_event_duration(nanos: Option<u64>, millis: Option<u64>) -> String {
+    nanos.map_or_else(
+        || ui::format_duration(std::time::Duration::from_millis(millis.unwrap_or_default())),
+        |nanos| ui::format_duration(std::time::Duration::from_nanos(nanos)),
+    )
 }
 
 fn report_live_test_event(
@@ -532,11 +754,15 @@ fn report_live_test_event(
     activity: &ui::Activity,
     started_modules: &mut BTreeSet<String>,
     streamed_tests: &mut BTreeSet<(String, String, String)>,
+    human_tree: &mut HumanTestTree,
 ) -> Result<()> {
     report_test_module_started(&event.module, format, started_modules)?;
     let selector = event.selector.as_deref().unwrap_or(&event.id);
     match event.reason {
         jman_build::TestEventReason::ContainerStarted => {
+            if format == ReportFormat::Human {
+                human_tree.container_started(event, activity);
+            }
             if event.class_name.is_some() && event.method_name.is_none() {
                 activity.set_message(format!(
                     "Preparing {} › {}",
@@ -555,8 +781,10 @@ fn report_live_test_event(
             }
         }
         jman_build::TestEventReason::ContainerFinished => {
-            if event.class_name.is_some() && event.method_name.is_none() {
-                report_live_test_suite(event, selector, format, activity)?;
+            if format == ReportFormat::Human {
+                human_tree.container_finished(event, activity);
+            } else if event.class_name.is_some() && event.method_name.is_none() {
+                report_live_test_suite(event, selector)?;
             }
         }
         jman_build::TestEventReason::TestStarted => {
@@ -601,87 +829,36 @@ fn report_live_test_event(
                     "test": test_case,
                 }))?;
             } else {
-                report_live_human_test(&event.module, &test_case, activity);
+                human_tree.test_finished(event, activity);
             }
         }
     }
     Ok(())
 }
 
-fn report_live_test_suite(
-    event: &jman_build::TestEvent,
-    selector: &str,
-    format: ReportFormat,
-    activity: &ui::Activity,
-) -> Result<()> {
+fn report_live_test_suite(event: &jman_build::TestEvent, selector: &str) -> Result<()> {
     let status = event.status.unwrap_or(jman_build::TestCaseStatus::Errored);
     let duration_millis = event.duration_millis.unwrap_or_default();
     let lifecycle_millis = event.lifecycle_millis.unwrap_or_default();
-    if format == ReportFormat::Json {
-        print_test_json(&serde_json::json!({
-            "protocolVersion": 3,
-            "reason": "test-suite",
-            "module": event.module,
-            "suite": {
-                "id": event.id,
-                "selector": selector,
-                "className": event.class_name,
-                "displayName": event.display_name,
-                "status": status,
-                "durationNanos": event.duration_nanos,
-                "durationMillis": duration_millis,
-                "lifecycleNanos": event.lifecycle_nanos,
-                "lifecycleMillis": lifecycle_millis,
-                "message": event.message,
-                "details": event.details,
-            }
-        }))?;
-        return Ok(());
-    }
-    let total = event.duration_nanos.map_or_else(
-        || ui::format_duration(std::time::Duration::from_millis(duration_millis)),
-        |nanos| ui::format_duration(std::time::Duration::from_nanos(nanos)),
-    );
-    let timing = if event.lifecycle_nanos.unwrap_or_default() == 0 && lifecycle_millis == 0 {
-        format!("{total} total")
-    } else {
-        let lifecycle = event.lifecycle_nanos.map_or_else(
-            || ui::format_duration(std::time::Duration::from_millis(lifecycle_millis)),
-            |nanos| ui::format_duration(std::time::Duration::from_nanos(nanos)),
-        );
-        format!("{total} total, {lifecycle} lifecycle")
-    };
-    let name = format!("{} › {} ({timing})", event.module, event.display_name);
-    match status {
-        jman_build::TestCaseStatus::Passed => activity.status(format!("SUITE {name}")),
-        jman_build::TestCaseStatus::Skipped => activity.status(format!("SKIP SUITE {name}")),
-        jman_build::TestCaseStatus::Failed | jman_build::TestCaseStatus::Errored => {
-            activity.warning(format!("FAIL SUITE {name}"));
+    print_test_json(&serde_json::json!({
+        "protocolVersion": 3,
+        "reason": "test-suite",
+        "module": event.module,
+        "suite": {
+            "id": event.id,
+            "selector": selector,
+            "className": event.class_name,
+            "displayName": event.display_name,
+            "status": status,
+            "durationNanos": event.duration_nanos,
+            "durationMillis": duration_millis,
+            "lifecycleNanos": event.lifecycle_nanos,
+            "lifecycleMillis": lifecycle_millis,
+            "message": event.message,
+            "details": event.details,
         }
-    }
+    }))?;
     Ok(())
-}
-
-fn report_live_human_test(
-    module: &str,
-    test: &jman_build::TestCaseResult,
-    activity: &ui::Activity,
-) {
-    let duration = test.duration_nanos.map_or_else(
-        || ui::format_duration(std::time::Duration::from_millis(test.duration_millis)),
-        |nanos| ui::format_duration(std::time::Duration::from_nanos(nanos)),
-    );
-    let name = format!("{module} › {} ({duration})", test.display_name);
-    match test.status {
-        jman_build::TestCaseStatus::Passed => activity.success(format!("PASS {name}")),
-        jman_build::TestCaseStatus::Skipped => activity.status(format!("SKIP {name}")),
-        jman_build::TestCaseStatus::Failed | jman_build::TestCaseStatus::Errored => {
-            activity.warning(format!("FAIL {name}"));
-            if let Some(message) = &test.message {
-                activity.warning(format!("  {message}"));
-            }
-        }
-    }
 }
 
 fn report_test_module_started(
@@ -735,6 +912,8 @@ fn report_test_module(
     ui: &Ui,
     started_modules: &mut BTreeSet<String>,
     streamed_tests: &BTreeSet<(String, String, String)>,
+    activity: &ui::Activity,
+    human_tree: &mut HumanTestTree,
 ) -> Result<()> {
     if format == ReportFormat::Json {
         report_test_module_started(&result.module, format, started_modules)?;
@@ -789,19 +968,7 @@ fn report_test_module(
                 summary.containers_failed
             ));
         }
-        let report = format!(
-            "{}: {} passed / {} failed / {} skipped ({})",
-            result.module,
-            summary.tests_successful,
-            summary.tests_failed,
-            summary.tests_skipped,
-            ui::format_duration(std::time::Duration::from_millis(summary.duration_millis))
-        );
-        if result.status.success() {
-            ui.success(report);
-        } else {
-            ui.warning(report);
-        }
+        human_tree.module_finished(&result.module, summary, activity);
     }
     Ok(())
 }
