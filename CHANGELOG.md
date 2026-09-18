@@ -5,6 +5,12 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ## [Unreleased]
 
+### Fixed
+
+- Go to Declaration on an overriding method now follows its compiler-resolved
+  override family to the workspace interface or superclass declaration, while
+  Go to Definition continues to select the concrete method.
+
 ## [0.3.0-rc.3] - 2026-09-18
 
 ### Added

@@ -148,6 +148,10 @@ impl SymbolIndex {
         related
     }
 
+    pub fn override_family(&self, symbol_id: &str) -> Option<&str> {
+        self.override_families.get(symbol_id).map(String::as_str)
+    }
+
     pub fn incoming_calls(&self, symbol_id: &str) -> Vec<SymbolLocation> {
         self.documents
             .values()

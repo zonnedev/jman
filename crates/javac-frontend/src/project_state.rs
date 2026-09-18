@@ -45,6 +45,10 @@ impl ProjectState {
         self.symbols.related_symbol_ids(symbol_id)
     }
 
+    pub fn override_family(&self, symbol_id: &str) -> Option<&str> {
+        self.symbols.override_family(symbol_id)
+    }
+
     pub fn incoming_calls(&self, symbol_id: &str) -> Vec<SymbolLocation> {
         self.symbols.incoming_calls(symbol_id)
     }

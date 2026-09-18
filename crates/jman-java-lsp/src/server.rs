@@ -1064,8 +1064,20 @@ impl<'backend> Server<'backend> {
             .or_else(|| self.structural_project.symbol_at(uri, offset))
             .cloned();
         if let Some(symbol) = symbol {
-            let mut declarations = self.all_definitions(location_symbol_id(&symbol));
-            if declarations.is_empty() && symbol.role == "declaration" {
+            let selected_id = location_symbol_id(&symbol);
+            let override_family = self
+                .project
+                .override_family(selected_id)
+                .or_else(|| self.structural_project.override_family(selected_id));
+            let declaration_id = override_family.unwrap_or(selected_id);
+            let mut declarations = self.all_definitions(declaration_id);
+            if declarations.is_empty()
+                && let Some(structural_id) = structural_method_identity(declaration_id)
+            {
+                declarations = self.all_definitions(&structural_id);
+            }
+            if declarations.is_empty() && override_family.is_none() && symbol.role == "declaration"
+            {
                 declarations.push(symbol);
             }
             let locations: Vec<_> = declarations
@@ -3845,6 +3857,15 @@ fn location_symbol_id(location: &javac_frontend::SymbolLocation) -> &str {
     }
 }
 
+fn structural_method_identity(symbol_id: &str) -> Option<String> {
+    let (_, member) = symbol_id.split_once('|')?;
+    let descriptor = member.find('(')?;
+    let method = &member[..descriptor];
+    method
+        .contains('#')
+        .then(|| method.replace(['/', '$'], "."))
+}
+
 const JUNIT_ANNOTATIONS: [&str; 5] = [
     "Test",
     "ParameterizedTest",
@@ -5756,6 +5777,111 @@ mod tests {
     }
 
     #[test]
+    fn maps_canonical_method_ids_to_structural_workspace_ids() {
+        assert_eq!(
+            structural_method_identity(
+                "<unnamed>|com/example/TransactionManagementPort#executeWrite(Ljava/util/function/Supplier;)Ljava/lang/Object;"
+            ),
+            Some("com.example.TransactionManagementPort#executeWrite".to_owned())
+        );
+        assert_eq!(
+            structural_method_identity("demo.module|com/example/Outer$Inner#run()V"),
+            Some("com.example.Outer.Inner#run".to_owned())
+        );
+        assert_eq!(
+            structural_method_identity("<unnamed>|Lcom/example/TransactionManagementPort;"),
+            None
+        );
+    }
+
+    #[test]
+    fn declaration_of_semantic_override_finds_structural_interface_method() {
+        let interface_uri = "file:///TransactionManagementPort.java";
+        let implementation_uri = "file:///JdbcTransactionManagementAdapter.java";
+        let interface_source = "package com.example; interface TransactionManagementPort { <T> T executeWrite(java.util.function.Supplier<T> action); }";
+        let implementation_source = "package com.example; class JdbcTransactionManagementAdapter implements TransactionManagementPort { public <T> T executeWrite(java.util.function.Supplier<T> action) { return action.get(); } }";
+        let interface_method = "com.example.TransactionManagementPort#executeWrite";
+        let canonical_interface_method = "<unnamed>|com/example/TransactionManagementPort#executeWrite(Ljava/util/function/Supplier;)Ljava/lang/Object;";
+        let implementation_method = "<unnamed>|com/example/JdbcTransactionManagementAdapter#executeWrite(Ljava/util/function/Supplier;)Ljava/lang/Object;";
+        let interface_start = interface_source.find("executeWrite").unwrap() as u64;
+        let implementation_start = implementation_source.find("executeWrite").unwrap() as u64;
+        let mut server = Server::with_backend(FakeBackend);
+        server.dispatch(json!({"jsonrpc":"2.0","id":1,"method":"initialize"}));
+        for (uri, source) in [
+            (interface_uri, interface_source),
+            (implementation_uri, implementation_source),
+        ] {
+            server.dispatch(json!({
+                "jsonrpc":"2.0","method":"textDocument/didOpen",
+                "params":{"textDocument":{"uri":uri,"version":1,"text":source}}
+            }));
+        }
+        server.structural_project.update_document(
+            interface_uri,
+            &SemanticResult {
+                package_name: "com.example".to_owned(),
+                diagnostics: Vec::new(),
+                symbols: vec![SemanticSymbol {
+                    role: "declaration".to_owned(),
+                    kind: "method".to_owned(),
+                    name: "executeWrite".to_owned(),
+                    qualified_name: interface_method.to_owned(),
+                    symbol_id: interface_method.to_owned(),
+                    start: interface_start,
+                    end: interface_start + "executeWrite".len() as u64,
+                }],
+            },
+        );
+        server.project.update_document(
+            implementation_uri,
+            &SemanticResult {
+                package_name: "com.example".to_owned(),
+                diagnostics: Vec::new(),
+                symbols: vec![
+                    SemanticSymbol {
+                        role: "declaration".to_owned(),
+                        kind: "method".to_owned(),
+                        name: "executeWrite".to_owned(),
+                        qualified_name: "com.example.JdbcTransactionManagementAdapter#executeWrite"
+                            .to_owned(),
+                        symbol_id: implementation_method.to_owned(),
+                        start: implementation_start,
+                        end: implementation_start + "executeWrite".len() as u64,
+                    },
+                    SemanticSymbol {
+                        role: "override_family".to_owned(),
+                        kind: "method".to_owned(),
+                        name: "executeWrite".to_owned(),
+                        qualified_name: canonical_interface_method.to_owned(),
+                        symbol_id: implementation_method.to_owned(),
+                        start: implementation_start,
+                        end: implementation_start + "executeWrite".len() as u64,
+                    },
+                ],
+            },
+        );
+
+        let position = implementation_source.find("executeWrite").unwrap() + 1;
+        let definition = server.dispatch(json!({
+            "jsonrpc":"2.0","id":2,"method":"textDocument/definition",
+            "params":{
+                "textDocument":{"uri":implementation_uri},
+                "position":{"line":0,"character":position}
+            }
+        }));
+        assert_eq!(reply(&definition)["result"][0]["uri"], implementation_uri);
+
+        let declaration = server.dispatch(json!({
+            "jsonrpc":"2.0","id":3,"method":"textDocument/declaration",
+            "params":{
+                "textDocument":{"uri":implementation_uri},
+                "position":{"line":0,"character":position}
+            }
+        }));
+        assert_eq!(reply(&declaration)["result"][0]["uri"], interface_uri);
+    }
+
+    #[test]
     fn change_signature_rewrites_override_family_declarations_and_calls() {
         let service_uri = "file:///Service.java";
         let impl_uri = "file:///Impl.java";
@@ -5856,6 +5982,24 @@ mod tests {
                 ],
             },
         );
+        let definition = server.dispatch(json!({
+            "jsonrpc":"2.0","id":8,"method":"textDocument/definition",
+            "params":{
+                "textDocument":{"uri":impl_uri},
+                "position":{"line":0,"character":impl_source.find("run").unwrap() + 1}
+            }
+        }));
+        assert_eq!(reply(&definition)["result"][0]["uri"], impl_uri);
+
+        let declaration = server.dispatch(json!({
+            "jsonrpc":"2.0","id":9,"method":"textDocument/declaration",
+            "params":{
+                "textDocument":{"uri":impl_uri},
+                "position":{"line":0,"character":impl_source.find("run").unwrap() + 1}
+            }
+        }));
+        assert_eq!(reply(&declaration)["result"][0]["uri"], service_uri);
+
         let implementation = server.dispatch(json!({
             "jsonrpc":"2.0","id":10,"method":"textDocument/implementation",
             "params":{
