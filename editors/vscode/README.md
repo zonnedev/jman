@@ -71,6 +71,10 @@ metadata for more than one build tool.
 | `jman.java.buildSync` | `prompt` | Choose `manual`, `prompt`, or `automatic` synchronization. |
 | `jman.java.server.extraEnv` | `{}` | Add environment variables to the language-server process. |
 
+The selected build JDK is also used for Gradle and Maven Test Explorer runs and
+for the extension's check, build, test, and run commands. This keeps older build
+tool versions isolated from the Java 25 runtime used by JMAN's native frontend.
+
 ## Commands
 
 | Command | Purpose |

@@ -6,7 +6,7 @@ verifiable CLI behavior.
 
 Status: `[ ]` pending, `[/]` in progress, `[x]` completed.
 
-Current focus: ship JMAN 0.3.0-rc.2, then expand the real-world resolver corpus
+Current focus: ship JMAN 0.3.0-rc.3, then expand the real-world resolver corpus
 to satisfy the stable-release Maven metadata threshold.
 
 ## Milestone 0 — Architecture Agreement

@@ -31,6 +31,8 @@ async function main() {
   let testingController;
   const testStates = new Map();
   const testRunSelectors = [];
+  const testRunUris = [];
+  const spawnedProcesses = [];
   const collection = () => {
     const values = new Map();
     return {
@@ -66,16 +68,23 @@ async function main() {
     async sendRequest(method, params) {
       if (method === "jman.java/tests/discover") {
         return { items: [
-          { id: "class:run", label: "GreetingTest", selector: "dev.GreetingTest" },
+          {
+            id: "class:run", label: "GreetingTest",
+            uri: "file:///workspace/GreetingTest.java", selector: "dev.GreetingTest",
+          },
           {
             id: "test:run", parentId: "class:run", label: "greets",
-            selector: "dev.GreetingTest#greets",
+            uri: "file:///workspace/GreetingTest.java", selector: "dev.GreetingTest#greets",
           },
         ] };
       }
       if (method === "jman.java/tests/run") {
         testRunSelectors.push(params.selectors);
-        return { arguments: ["--no-progress", "test", "--report", "json"] };
+        testRunUris.push(params.uri);
+        return {
+          arguments: ["--no-progress", "test", "--report", "json"],
+          buildJavaHome: "/build-jdk",
+        };
       }
       assert.equal(method, "workspace/executeCommand");
       requests.push(params.command);
@@ -87,6 +96,7 @@ async function main() {
             nativeOperations: true,
             buildRuntime: {
               buildToolVersion: "8.7",
+              javaHome: "/build-jdk",
               javaMajor: 21,
             },
           },
@@ -150,6 +160,9 @@ async function main() {
     },
     workspace: {
       workspaceFolders: [{ uri: { fsPath: "/workspace" } }],
+      getWorkspaceFolder() {
+        return this.workspaceFolders[0];
+      },
       getConfiguration() {
         return {
           get(key, fallback) {
@@ -231,7 +244,8 @@ async function main() {
     }
     if (request === "child_process") {
       return {
-        spawn(_command, args) {
+        spawn(command, args, options) {
+          spawnedProcesses.push({ command, args, options });
           const process = new EventEmitter();
           process.stdout = new EventEmitter();
           process.stderr = new EventEmitter();
@@ -374,6 +388,12 @@ async function main() {
   assert.deepEqual(extension.operationArguments("gradle", "build"), ["build"]);
   assert.deepEqual(extension.operationArguments("maven", "build"), ["package"]);
   assert.deepEqual(extension.operationArguments("maven", "test"), ["test"]);
+  const buildEnvironment = extension.buildToolEnvironment(
+    { JAVA_HOME: "/graalvm", PATH: "/usr/bin" },
+    "/build-jdk",
+  );
+  assert.equal(buildEnvironment.JAVA_HOME, "/build-jdk");
+  assert.equal(buildEnvironment.PATH, `/build-jdk/bin${path.delimiter}/usr/bin`);
   assert.equal(
     extension.executionCommand("gradle", "/server/jman", "/missing"),
     "gradle",
@@ -424,6 +444,12 @@ async function main() {
   assert.equal(testStates.get("test:run"), "failed:expected Ada but was Bob");
   assert.equal(testStates.get("run"), "ended");
   assert.deepEqual(testRunSelectors[0], ["dev.GreetingTest"]);
+  assert.equal(testRunUris[0], "file:///workspace/GreetingTest.java");
+  assert.equal(spawnedProcesses[0].options.env.JAVA_HOME, "/build-jdk");
+  assert.equal(
+    spawnedProcesses[0].options.env.PATH.startsWith(`/build-jdk/bin${path.delimiter}`),
+    true,
+  );
   testStates.clear();
   await commands.get("jman.java.test")("dev.GreetingTest#greets");
   await new Promise((resolve) => setImmediate(resolve));

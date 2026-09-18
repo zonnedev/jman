@@ -4,6 +4,13 @@ All notable changes to the JMAN Java extension are documented here.
 
 ## Unreleased
 
+## 0.3.2 - 2026-09-18
+
+### Fixed
+
+- Run Gradle and Maven Test Explorer sessions and project commands with the
+  compatible build-tool JDK selected by JMAN instead of GraalVM Java 25.
+
 ## 0.3.1 - 2026-09-18
 
 ### Fixed

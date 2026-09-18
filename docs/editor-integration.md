@@ -30,9 +30,11 @@ settings, build, wrapper, version-catalog, and `buildSrc` files.
   change-signature operation.
 - Request `jman.java/tests/discover` returns protocol version 2 test items with
   stable IDs, parent IDs, source ranges, JUnit tags, and exact JMAN selectors.
-- Request `jman.java/tests/run` validates selectors and returns a versioned JMAN
-  invocation descriptor. The editor launches its configured `jman` executable,
-  streams output into its native test UI, and owns cancellation.
+- Request `jman.java/tests/run` validates selectors and returns a versioned
+  invocation descriptor for JMAN, Gradle, or Maven. Clients should include the
+  selected test item's `uri`, launch the command from its owning workspace, and
+  apply the returned `buildJavaHome` to `JAVA_HOME` and `PATH`. The editor
+  streams output into its native test UI and owns cancellation.
 - Command `jman.java.test` is used by standard `textDocument/codeLens` entries
   to run the exact test method selected by the user.
 

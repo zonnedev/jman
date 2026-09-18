@@ -95,6 +95,10 @@ pub trait AnalysisBackend {
         self.build_system()
     }
 
+    fn build_java_home_for(&self, _uri: Option<&str>) -> Option<String> {
+        self.cache_status().build_java_home
+    }
+
     fn jpms_catalog(&self, _uri: &str) -> JpmsCatalog {
         JpmsCatalog::default()
     }
@@ -2802,6 +2806,7 @@ impl<'backend> Server<'backend> {
     }
 
     fn prepare_test_run(&self, id: Value, params: Option<&Value>) -> Dispatch {
+        let uri = params.and_then(|value| value["uri"].as_str());
         let selectors: Vec<_> = params
             .and_then(|value| value["selectors"].as_array())
             .into_iter()
@@ -2815,8 +2820,15 @@ impl<'backend> Server<'backend> {
         let build_system = self
             .backend
             .as_ref()
-            .and_then(|backend| backend.build_system())
+            .and_then(|backend| {
+                uri.and_then(|uri| backend.build_system_for(uri))
+                    .or_else(|| backend.build_system())
+            })
             .unwrap_or_else(|| "jman".to_owned());
+        let build_java_home = self
+            .backend
+            .as_ref()
+            .and_then(|backend| backend.build_java_home_for(uri));
         let (program, args, report) = match build_system.as_str() {
             "gradle" => {
                 let mut args = vec!["test".to_owned()];
@@ -2859,6 +2871,7 @@ impl<'backend> Server<'backend> {
                 "protocolVersion": 2,
                 "runId": format!("jman-test-{}", std::process::id()),
                 "buildSystem": build_system,
+                "buildJavaHome": build_java_home,
                 "program": program,
                 "arguments": args,
                 "report": report,
@@ -6982,9 +6995,13 @@ class Example {
             server.dispatch(json!({"jsonrpc":"2.0","id":1,"method":"initialize"}));
             let run = server.dispatch(json!({
                 "jsonrpc":"2.0","id":2,"method":"jman.java/tests/run",
-                "params":{"selectors":["com.example.GreetingTest#greets"]}
+                "params":{
+                    "selectors":["com.example.GreetingTest#greets"],
+                    "uri":"file:///workspace/src/test/java/com/example/GreetingTest.java"
+                }
             }));
             assert_eq!(reply(&run)["result"]["buildSystem"], build_system);
+            assert_eq!(reply(&run)["result"]["buildJavaHome"], "/jdks/21");
             assert_eq!(reply(&run)["result"]["arguments"], expected);
             assert_eq!(reply(&run)["result"]["report"], "junit-xml");
         }
@@ -7247,6 +7264,14 @@ class Example {
     impl AnalysisBackend for ExternalTestDiscoveryBackend {
         fn build_system(&self) -> Option<String> {
             Some(self.0.to_owned())
+        }
+
+        fn cache_status(&self) -> CacheStatus {
+            CacheStatus {
+                build_java_home: Some("/jdks/21".to_owned()),
+                build_java_major: Some(21),
+                ..CacheStatus::default()
+            }
         }
 
         fn analyze(

@@ -12,8 +12,7 @@ const {
 
 let client;
 
-function workspaceRoot() {
-  const uri = vscode.window.activeTextEditor?.document.uri;
+function workspaceRoot(uri = vscode.window.activeTextEditor?.document.uri) {
   return (uri && vscode.workspace.getWorkspaceFolder(uri)) || vscode.workspace.workspaceFolders?.[0];
 }
 
@@ -34,6 +33,17 @@ function operationArguments(buildSystem, operation) {
   return operations[buildSystem]?.[operation];
 }
 
+function buildToolEnvironment(environment, javaHome) {
+  if (!javaHome) return environment;
+  const result = { ...environment, JAVA_HOME: javaHome };
+  const pathKey = Object.keys(result).find((key) => key.toLowerCase() === "path") || "PATH";
+  const javaBin = path.join(javaHome, "bin");
+  result[pathKey] = result[pathKey]
+    ? `${javaBin}${path.delimiter}${result[pathKey]}`
+    : javaBin;
+  return result;
+}
+
 async function prepareProjectOperation(operation, jmanCommand) {
   const activeUri = vscode.window.activeTextEditor?.document.uri.toString();
   const status = await client?.sendRequest("workspace/executeCommand", {
@@ -49,6 +59,7 @@ async function prepareProjectOperation(operation, jmanCommand) {
     command: executionCommand(buildSystem, jmanCommand, folder.uri.fsPath),
     args,
     buildSystem,
+    buildJavaHome: status?.workspace?.buildRuntime?.javaHome,
   };
 }
 
@@ -265,10 +276,12 @@ async function configureTesting(context, command, environment, outputChannel) {
         run.end();
         return;
       }
+      const testUri = executionTests.find((item) => item.uri)?.uri;
       const prepared = await client.sendRequest("jman.java/tests/run", {
         selectors: tests.map((item) => item.jmanSelector),
+        uri: testUri?.toString(),
       });
-      const folder = workspaceRoot();
+      const folder = workspaceRoot(testUri);
       const args = prepared.arguments;
       const executable = executionCommand(
         prepared.program || "jman",
@@ -278,7 +291,7 @@ async function configureTesting(context, command, environment, outputChannel) {
       const startedAt = Date.now();
       const process = childProcess.spawn(executable, args, {
         cwd: folder.uri.fsPath,
-        env: environment,
+        env: buildToolEnvironment(environment, prepared.buildJavaHome),
       });
       const itemsBySelector = testItemsBySelector(controller.items);
       const reported = new Set();
@@ -518,7 +531,7 @@ async function activate(context) {
     return executeJmanProcess(
       prepared.command,
       prepared.args,
-      environment,
+      buildToolEnvironment(environment, prepared.buildJavaHome),
       outputChannel,
     );
   };
@@ -747,6 +760,7 @@ module.exports = {
   leafTestItems,
   parseTestEventLine,
   operationArguments,
+  buildToolEnvironment,
   testEventsFromXml,
   refreshTestController,
   selectTestItems,

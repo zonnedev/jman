@@ -5,6 +5,14 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ## [Unreleased]
 
+## [0.3.0-rc.3] - 2026-09-18
+
+### Fixed
+
+- Gradle and Maven tests and project operations launched from editor clients now
+  inherit the compatible build-tool JDK selected during project import instead
+  of the Java 25 native-frontend runtime.
+
 ## [0.3.0-rc.2] - 2026-09-18
 
 ### Fixed

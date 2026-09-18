@@ -172,6 +172,15 @@ impl AnalysisBackend for WorkspaceBackend {
         self.owning(uri).and_then(AnalysisBackend::build_system)
     }
 
+    fn build_java_home_for(&self, uri: Option<&str>) -> Option<String> {
+        match uri {
+            Some(uri) => self
+                .owning(uri)
+                .and_then(|backend| backend.build_java_home_for(Some(uri))),
+            None => self.cache_status().build_java_home,
+        }
+    }
+
     fn jpms_catalog(&self, uri: &str) -> JpmsCatalog {
         self.owning(uri)
             .map(|backend| backend.jpms_catalog(uri))

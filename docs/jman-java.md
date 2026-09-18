@@ -267,7 +267,7 @@ Build and install the development extension:
 
 ```bash
 make package-vscode
-code --install-extension target/vscode/jman-java-0.3.1-linux-x64.vsix
+code --install-extension target/vscode/jman-java-0.3.2-linux-x64.vsix
 ```
 
 Set `jman.java.javaHome` to the SDKMAN Oracle GraalVM 25 installation. Leave
@@ -279,7 +279,9 @@ startup and protocol failures.
 Gradle imports select a compatible installed JDK from the wrapper version,
 project daemon criteria, JMAN-managed installations, SDKMAN installations, and
 the environment. Set `jman.java.buildJavaHome` only when an explicit build-tool
-runtime is required. JMAN does not download a JDK during project import.
+runtime is required. Test Explorer and external Gradle/Maven project commands
+reuse the selected build runtime. JMAN does not download a JDK during project
+import.
 Annotation processors run in isolated workers using the compile unit's Gradle
 toolchain when available, otherwise the selected build JDK. This keeps
 compiler-coupled processors such as Lombok aligned with the project's javac
