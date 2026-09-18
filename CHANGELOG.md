@@ -10,6 +10,9 @@ Versioning while it approaches a stable 0.3.0 release.
 - Go to Declaration on an overriding method now follows its compiler-resolved
   override family to the workspace interface or superclass declaration, while
   Go to Definition continues to select the concrete method.
+- Find References on an interface or superclass method now includes calls
+  resolved to every compiler-linked overriding implementation, including when
+  the selected declaration is available only in the structural workspace index.
 
 ## [0.3.0-rc.3] - 2026-09-18
 

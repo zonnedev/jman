@@ -16,6 +16,10 @@ pub struct ProjectChange {
 }
 
 impl ProjectState {
+    pub fn contains_document(&self, document: &str) -> bool {
+        self.symbols.contains_document(document)
+    }
+
     pub fn update_document(
         &mut self,
         document: impl Into<String>,

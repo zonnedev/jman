@@ -39,6 +39,10 @@ pub struct SymbolIndex {
 }
 
 impl SymbolIndex {
+    pub fn contains_document(&self, document: &str) -> bool {
+        self.documents.contains_key(document)
+    }
+
     pub fn update_document(&mut self, document: impl Into<String>, result: &SemanticResult) {
         let document = document.into();
         self.remove_document(&document);
@@ -133,9 +137,11 @@ impl SymbolIndex {
     }
 
     pub fn related_symbol_ids(&self, symbol_id: &str) -> Vec<String> {
-        let Some(family) = self.override_families.get(symbol_id) else {
-            return vec![symbol_id.to_owned()];
-        };
+        let family = self
+            .override_families
+            .get(symbol_id)
+            .map(String::as_str)
+            .unwrap_or(symbol_id);
         let mut related: Vec<_> = self
             .override_families
             .iter()
@@ -143,6 +149,7 @@ impl SymbolIndex {
                 (candidate_family == family).then_some(candidate.clone())
             })
             .collect();
+        related.push(family.to_owned());
         related.sort();
         related.dedup();
         related
@@ -638,6 +645,34 @@ mod tests {
                 "<unnamed>|demo/Child#value()Ljava/lang/String;".to_owned(),
                 family.to_owned()
             ]
+        );
+    }
+
+    #[test]
+    fn override_family_root_finds_children_without_its_own_relationship() {
+        let mut index = SymbolIndex::default();
+        let family = "<unnamed>|demo/Service#value()Ljava/lang/String;";
+        let child = "<unnamed>|demo/Child#value()Ljava/lang/String;";
+        index.update_document(
+            "file:///Child.java",
+            &SemanticResult {
+                package_name: "demo".to_owned(),
+                diagnostics: Vec::new(),
+                symbols: vec![SemanticSymbol {
+                    role: "override_family".to_owned(),
+                    kind: "method".to_owned(),
+                    name: "value".to_owned(),
+                    qualified_name: family.to_owned(),
+                    symbol_id: child.to_owned(),
+                    start: 0,
+                    end: 5,
+                }],
+            },
+        );
+
+        assert_eq!(
+            index.related_symbol_ids(family),
+            vec![child.to_owned(), family.to_owned()]
         );
     }
 }

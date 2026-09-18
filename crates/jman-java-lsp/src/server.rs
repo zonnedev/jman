@@ -1420,30 +1420,54 @@ impl<'backend> Server<'backend> {
             let locations = identity
                 .map(|definition| definition_identity(&definition))
                 .map(|identity| {
-                    self.all_references(&identity)
+                    self.related_symbol_ids(&identity)
                         .iter()
-                        .filter_map(|location| self.location(location))
+                        .flat_map(|symbol_id| self.all_references(symbol_id))
+                        .filter_map(|location| self.location(&location))
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
             return Dispatch::Reply(success(id, json!(locations)));
         }
-        let Some(symbol) = self.project.symbol_at(uri, offset) else {
+        let Some(symbol_name) = self
+            .project
+            .symbol_at(uri, offset)
+            .or_else(|| self.structural_project.symbol_at(uri, offset))
+            .map(|symbol| symbol.name.clone())
+        else {
+            return Dispatch::Reply(success(id, json!([])));
+        };
+        self.ensure_workspace_symbol_semantics(&symbol_name);
+        let Some(symbol) = self
+            .project
+            .symbol_at(uri, offset)
+            .or_else(|| self.structural_project.symbol_at(uri, offset))
+        else {
             return Dispatch::Reply(success(id, json!([])));
         };
         let symbol_id = location_symbol_id(symbol);
+        let related = self.related_symbol_ids(symbol_id);
         let include_declaration = params
             .and_then(|value| value["context"]["includeDeclaration"].as_bool())
             .unwrap_or(false);
-        let definitions = if include_declaration {
-            self.all_definitions(symbol_id)
-        } else {
-            Vec::new()
-        };
-        let references = self.all_references(symbol_id);
-        let locations: Vec<_> = definitions
+        let mut matches = Vec::new();
+        for related_id in related {
+            if include_declaration {
+                matches.extend(self.all_definitions(&related_id));
+            }
+            matches.extend(self.all_references(&related_id));
+        }
+        matches.sort_by(|left, right| {
+            left.document
+                .cmp(&right.document)
+                .then_with(|| left.start.cmp(&right.start))
+                .then_with(|| left.end.cmp(&right.end))
+        });
+        matches.dedup_by(|left, right| {
+            left.document == right.document && left.start == right.start && left.end == right.end
+        });
+        let locations: Vec<_> = matches
             .iter()
-            .chain(&references)
             .filter_map(|location| self.location(location))
             .collect();
         Dispatch::Reply(success(id, json!(locations)))
@@ -3153,7 +3177,7 @@ impl<'backend> Server<'backend> {
         let Some(symbol_name) = symbol_name else {
             return Dispatch::Reply(error(id, -32803, "No symbol at rename position"));
         };
-        self.ensure_rename_semantics(&symbol_name);
+        self.ensure_workspace_symbol_semantics(&symbol_name);
         let Some(symbol) = self.project.symbol_at(uri, offset) else {
             return Dispatch::Reply(error(id, -32803, "No symbol at rename position"));
         };
@@ -3222,18 +3246,17 @@ impl<'backend> Server<'backend> {
         Dispatch::Reply(success(id, json!({"changes": changes})))
     }
 
-    fn ensure_rename_semantics(&mut self, name: &str) {
+    fn ensure_workspace_symbol_semantics(&mut self, name: &str) {
         let mut documents: Vec<_> = self
-            .structural_project
-            .completion_symbols(name, usize::MAX)
-            .into_iter()
-            .filter(|symbol| symbol.name == name)
-            .map(|symbol| symbol.document)
+            .indexed_sources
+            .iter()
+            .filter(|(_, source)| contains_java_identifier(source, name))
+            .map(|(document, _)| document.clone())
             .collect();
         documents.sort();
         documents.dedup();
         for document in documents {
-            if self.analyses.contains_key(&document) {
+            if self.project.contains_document(&document) {
                 continue;
             }
             let Some(source) = self.indexed_sources.get(&document).cloned() else {
@@ -3254,7 +3277,7 @@ impl<'backend> Server<'backend> {
         let Some(symbol_name) = symbol_name else {
             return Dispatch::Reply(error(id, -32803, "No method at change-signature position"));
         };
-        self.ensure_rename_semantics(&symbol_name);
+        self.ensure_workspace_symbol_semantics(&symbol_name);
         let Some(symbol) = self.project.symbol_at(uri, offset) else {
             return Dispatch::Reply(error(id, -32803, "No method at change-signature position"));
         };
@@ -3509,6 +3532,23 @@ impl<'backend> Server<'backend> {
     fn related_symbol_ids(&self, symbol_id: &str) -> Vec<String> {
         let mut related = self.project.related_symbol_ids(symbol_id);
         related.extend(self.structural_project.related_symbol_ids(symbol_id));
+        if symbol_id.contains('#') && !symbol_id.contains('|') {
+            let method_name = symbol_id
+                .rsplit_once('#')
+                .map(|(_, name)| name)
+                .unwrap_or("");
+            for candidate in self.project.declarations_named(method_name) {
+                let candidate_id = location_symbol_id(&candidate);
+                let Some(family) = self.project.override_family(candidate_id) else {
+                    continue;
+                };
+                if structural_method_identity(family).as_deref() != Some(symbol_id) {
+                    continue;
+                }
+                related.extend(self.project.related_symbol_ids(candidate_id));
+                related.push(family.to_owned());
+            }
+        }
         related.sort();
         related.dedup();
         if related.is_empty() {
@@ -3864,6 +3904,21 @@ fn structural_method_identity(symbol_id: &str) -> Option<String> {
     method
         .contains('#')
         .then(|| method.replace(['/', '$'], "."))
+}
+
+fn contains_java_identifier(source: &str, identifier: &str) -> bool {
+    source.match_indices(identifier).any(|(start, _)| {
+        let end = start + identifier.len();
+        let bounded_start = source[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|character| !CharacterExt::java_identifier_part(character));
+        let bounded_end = source[end..]
+            .chars()
+            .next()
+            .is_none_or(|character| !CharacterExt::java_identifier_part(character));
+        bounded_start && bounded_end
+    })
 }
 
 const JUNIT_ANNOTATIONS: [&str; 5] = [
@@ -5795,11 +5850,134 @@ mod tests {
     }
 
     #[test]
+    fn on_demand_semantics_select_exact_identifier_candidates() {
+        assert!(contains_java_identifier(
+            "port::executeWrite",
+            "executeWrite"
+        ));
+        assert!(contains_java_identifier(
+            "port.executeWrite(action)",
+            "executeWrite"
+        ));
+        assert!(!contains_java_identifier(
+            "port.executeWriter(action)",
+            "executeWrite"
+        ));
+        assert!(!contains_java_identifier(
+            "port.myexecuteWrite(action)",
+            "executeWrite"
+        ));
+
+        let mut server = Server::with_backend(FakeBackend);
+        server.indexed_sources.insert(
+            "file:///Call.java".to_owned(),
+            "class Call { void run() { port.executeWrite(action); } }".to_owned(),
+        );
+        server.indexed_sources.insert(
+            "file:///MethodReference.java".to_owned(),
+            "class MethodReference { Object call = port::executeWrite; }".to_owned(),
+        );
+        server.indexed_sources.insert(
+            "file:///Different.java".to_owned(),
+            "class Different { void executeWriter() {} }".to_owned(),
+        );
+        for document in ["file:///Call.java", "file:///MethodReference.java"] {
+            server.analyses.insert(
+                document.to_owned(),
+                SemanticResult {
+                    package_name: String::new(),
+                    diagnostics: Vec::new(),
+                    symbols: Vec::new(),
+                },
+            );
+        }
+
+        server.ensure_workspace_symbol_semantics("executeWrite");
+
+        assert!(server.analyses.contains_key("file:///Call.java"));
+        assert!(server.analyses.contains_key("file:///MethodReference.java"));
+        assert!(!server.analyses.contains_key("file:///Different.java"));
+        assert!(server.project.contains_document("file:///Call.java"));
+        assert!(
+            server
+                .project
+                .contains_document("file:///MethodReference.java")
+        );
+        assert!(!server.project.contains_document("file:///Different.java"));
+    }
+
+    #[test]
+    fn references_refine_closed_candidates_and_follow_override_families() {
+        let mut server = Server::with_backend(OverrideReferencesBackend);
+        server.dispatch(json!({"jsonrpc":"2.0","id":1,"method":"initialize"}));
+        server.dispatch(json!({
+            "jsonrpc":"2.0","method":"textDocument/didOpen",
+            "params":{"textDocument":{
+                "uri":OVERRIDE_INTERFACE_URI,
+                "languageId":"java",
+                "version":1,
+                "text":OVERRIDE_INTERFACE_SOURCE
+            }}
+        }));
+
+        assert!(!server.project.contains_document(OVERRIDE_CALLER_URI));
+        let references = server.dispatch(json!({
+            "jsonrpc":"2.0","id":2,"method":"textDocument/references",
+            "params":{
+                "textDocument":{"uri":OVERRIDE_INTERFACE_URI},
+                "position":{
+                    "line":0,
+                    "character":OVERRIDE_INTERFACE_SOURCE.find("executeWrite").unwrap() + 1
+                },
+                "context":{"includeDeclaration":false}
+            }
+        }));
+
+        assert!(
+            server
+                .project
+                .contains_document(OVERRIDE_IMPLEMENTATION_URI)
+        );
+        assert!(server.project.contains_document(OVERRIDE_CALLER_URI));
+        assert_eq!(reply(&references)["result"].as_array().unwrap().len(), 1);
+        assert_eq!(reply(&references)["result"][0]["uri"], OVERRIDE_CALLER_URI);
+
+        let with_declarations = server.dispatch(json!({
+            "jsonrpc":"2.0","id":3,"method":"textDocument/references",
+            "params":{
+                "textDocument":{"uri":OVERRIDE_INTERFACE_URI},
+                "position":{
+                    "line":0,
+                    "character":OVERRIDE_INTERFACE_SOURCE.find("executeWrite").unwrap() + 1
+                },
+                "context":{"includeDeclaration":true}
+            }
+        }));
+        let locations = reply(&with_declarations)["result"].as_array().unwrap();
+        assert_eq!(locations.len(), 3);
+        assert!(
+            locations
+                .iter()
+                .any(|location| location["uri"] == OVERRIDE_INTERFACE_URI)
+        );
+        assert!(
+            locations
+                .iter()
+                .any(|location| location["uri"] == OVERRIDE_IMPLEMENTATION_URI)
+        );
+        assert!(
+            locations
+                .iter()
+                .any(|location| location["uri"] == OVERRIDE_CALLER_URI)
+        );
+    }
+
+    #[test]
     fn declaration_of_semantic_override_finds_structural_interface_method() {
         let interface_uri = "file:///TransactionManagementPort.java";
         let implementation_uri = "file:///JdbcTransactionManagementAdapter.java";
         let interface_source = "package com.example; interface TransactionManagementPort { <T> T executeWrite(java.util.function.Supplier<T> action); }";
-        let implementation_source = "package com.example; class JdbcTransactionManagementAdapter implements TransactionManagementPort { public <T> T executeWrite(java.util.function.Supplier<T> action) { return action.get(); } }";
+        let implementation_source = "package com.example; class JdbcTransactionManagementAdapter implements TransactionManagementPort { public <T> T executeWrite(java.util.function.Supplier<T> action) { return action.get(); } void use() { executeWrite(() -> \"x\"); } }";
         let interface_method = "com.example.TransactionManagementPort#executeWrite";
         let canonical_interface_method = "<unnamed>|com/example/TransactionManagementPort#executeWrite(Ljava/util/function/Supplier;)Ljava/lang/Object;";
         let implementation_method = "<unnamed>|com/example/JdbcTransactionManagementAdapter#executeWrite(Ljava/util/function/Supplier;)Ljava/lang/Object;";
@@ -5857,6 +6035,25 @@ mod tests {
                         start: implementation_start,
                         end: implementation_start + "executeWrite".len() as u64,
                     },
+                    SemanticSymbol {
+                        role: "reference".to_owned(),
+                        kind: "method".to_owned(),
+                        name: "executeWrite".to_owned(),
+                        qualified_name: "com.example.JdbcTransactionManagementAdapter#executeWrite"
+                            .to_owned(),
+                        symbol_id: implementation_method.to_owned(),
+                        start: implementation_source
+                            .match_indices("executeWrite")
+                            .nth(1)
+                            .unwrap()
+                            .0 as u64,
+                        end: implementation_source
+                            .match_indices("executeWrite")
+                            .nth(1)
+                            .unwrap()
+                            .0 as u64
+                            + "executeWrite".len() as u64,
+                    },
                 ],
             },
         );
@@ -5879,6 +6076,17 @@ mod tests {
             }
         }));
         assert_eq!(reply(&declaration)["result"][0]["uri"], interface_uri);
+
+        let references = server.dispatch(json!({
+            "jsonrpc":"2.0","id":4,"method":"textDocument/references",
+            "params":{
+                "textDocument":{"uri":interface_uri},
+                "position":{"line":0,"character":interface_source.find("executeWrite").unwrap() + 1},
+                "context":{"includeDeclaration":false}
+            }
+        }));
+        assert_eq!(reply(&references)["result"].as_array().unwrap().len(), 1);
+        assert_eq!(reply(&references)["result"][0]["uri"], implementation_uri);
     }
 
     #[test]
@@ -5999,6 +6207,17 @@ mod tests {
             }
         }));
         assert_eq!(reply(&declaration)["result"][0]["uri"], service_uri);
+
+        let references = server.dispatch(json!({
+            "jsonrpc":"2.0","id":91,"method":"textDocument/references",
+            "params":{
+                "textDocument":{"uri":service_uri},
+                "position":{"line":0,"character":service_source.find("run").unwrap() + 1},
+                "context":{"includeDeclaration":false}
+            }
+        }));
+        assert_eq!(reply(&references)["result"].as_array().unwrap().len(), 1);
+        assert_eq!(reply(&references)["result"][0]["uri"], impl_uri);
 
         let implementation = server.dispatch(json!({
             "jsonrpc":"2.0","id":10,"method":"textDocument/implementation",
@@ -7141,6 +7360,15 @@ mod tests {
         sources: Vec<PathBuf>,
     }
 
+    struct OverrideReferencesBackend;
+
+    const OVERRIDE_INTERFACE_URI: &str = "file:///TransactionManagementPort.java";
+    const OVERRIDE_IMPLEMENTATION_URI: &str = "file:///JdbcTransactionManagementAdapter.java";
+    const OVERRIDE_CALLER_URI: &str = "file:///UserService.java";
+    const OVERRIDE_INTERFACE_SOURCE: &str = "package com.example; interface TransactionManagementPort { <T> T executeWrite(java.util.function.Supplier<T> action); }";
+    const OVERRIDE_IMPLEMENTATION_SOURCE: &str = "package com.example; class JdbcTransactionManagementAdapter implements TransactionManagementPort { public <T> T executeWrite(java.util.function.Supplier<T> action) { return action.get(); } }";
+    const OVERRIDE_CALLER_SOURCE: &str = "package com.example; class UserService { TransactionManagementPort transactions; Object save() { return transactions.executeWrite(() -> new Object()); } }";
+
     struct EditorBackend;
 
     struct TestDiscoveryBackend;
@@ -7530,6 +7758,102 @@ mod tests {
                     end: if declaration { 12 } else { 18 },
                 }],
                 diagnostics: Vec::new(),
+            })
+        }
+    }
+
+    impl AnalysisBackend for OverrideReferencesBackend {
+        fn workspace_structural_documents(&self) -> Vec<(String, String, SemanticResult)> {
+            [
+                (
+                    OVERRIDE_INTERFACE_URI,
+                    OVERRIDE_INTERFACE_SOURCE,
+                    "com.example.TransactionManagementPort#executeWrite",
+                    "declaration",
+                ),
+                (
+                    OVERRIDE_IMPLEMENTATION_URI,
+                    OVERRIDE_IMPLEMENTATION_SOURCE,
+                    "com.example.JdbcTransactionManagementAdapter#executeWrite",
+                    "declaration",
+                ),
+                (
+                    OVERRIDE_CALLER_URI,
+                    OVERRIDE_CALLER_SOURCE,
+                    "executeWrite",
+                    "reference",
+                ),
+            ]
+            .into_iter()
+            .map(|(uri, source, identity, role)| {
+                let start = source.find("executeWrite").unwrap() as u64;
+                (
+                    uri.to_owned(),
+                    source.to_owned(),
+                    SemanticResult {
+                        package_name: "com.example".to_owned(),
+                        diagnostics: Vec::new(),
+                        symbols: vec![SemanticSymbol {
+                            role: role.to_owned(),
+                            kind: "method".to_owned(),
+                            name: "executeWrite".to_owned(),
+                            qualified_name: identity.to_owned(),
+                            symbol_id: identity.to_owned(),
+                            start,
+                            end: start + "executeWrite".len() as u64,
+                        }],
+                    },
+                )
+            })
+            .collect()
+        }
+
+        fn analyze(
+            &mut self,
+            uri: &str,
+            _file_name: &str,
+            source: &str,
+        ) -> Result<SemanticResult, String> {
+            let family = "<unnamed>|com/example/TransactionManagementPort#executeWrite(Ljava/util/function/Supplier;)Ljava/lang/Object;";
+            let implementation = "<unnamed>|com/example/JdbcTransactionManagementAdapter#executeWrite(Ljava/util/function/Supplier;)Ljava/lang/Object;";
+            let start = source.find("executeWrite").unwrap() as u64;
+            let symbol = |role: &str, symbol_id: &str, qualified_name: &str| SemanticSymbol {
+                role: role.to_owned(),
+                kind: "method".to_owned(),
+                name: "executeWrite".to_owned(),
+                qualified_name: qualified_name.to_owned(),
+                symbol_id: symbol_id.to_owned(),
+                start,
+                end: start + "executeWrite".len() as u64,
+            };
+            let symbols = match uri {
+                OVERRIDE_INTERFACE_URI => vec![
+                    symbol(
+                        "declaration",
+                        family,
+                        "com.example.TransactionManagementPort#executeWrite",
+                    ),
+                    symbol("override_family", family, family),
+                ],
+                OVERRIDE_IMPLEMENTATION_URI => vec![
+                    symbol(
+                        "declaration",
+                        implementation,
+                        "com.example.JdbcTransactionManagementAdapter#executeWrite",
+                    ),
+                    symbol("override_family", implementation, family),
+                ],
+                OVERRIDE_CALLER_URI => vec![symbol(
+                    "reference",
+                    family,
+                    "com.example.TransactionManagementPort#executeWrite",
+                )],
+                _ => Vec::new(),
+            };
+            Ok(SemanticResult {
+                package_name: "com.example".to_owned(),
+                diagnostics: Vec::new(),
+                symbols,
             })
         }
     }
