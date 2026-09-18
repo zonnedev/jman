@@ -13,6 +13,9 @@ Versioning while it approaches a stable 0.3.0 release.
   CLI, cache, manifest, or installer contracts.
 - Java install, use, and remove commands now accept `--vendor`, while preserving
   Temurin as the default distribution.
+- Human-readable Java listings now merge local and remote releases into a table
+  with an installed marker. The default shows the latest release per vendor,
+  while `--all` exposes the complete matching catalog.
 
 ### Security
 

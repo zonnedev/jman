@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
     io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
 };
@@ -260,7 +261,7 @@ struct Java {
 
 #[derive(Debug, Subcommand)]
 enum JavaCommand {
-    /// Download and install a verified JDK distribution.
+    /// Download and install a verified JDK from a vendor.
     Install(JavaVersion),
     /// List installed and remotely available JDKs.
     List(JavaList),
@@ -274,16 +275,15 @@ enum JavaCommand {
 
 #[derive(Debug, Args)]
 struct JavaList {
-    /// List only JDKs installed by JMAN without contacting the remote catalog.
-    #[arg(long)]
-    local: bool,
+    #[command(flatten)]
+    scope: JavaListScope,
     /// List only versions from this Java feature release.
     #[arg(long)]
     major: Option<u16>,
     /// List only long-term-support releases.
     #[arg(long)]
     lts: bool,
-    /// List only this JDK distribution.
+    /// List only this JDK vendor.
     #[arg(long)]
     vendor: Option<String>,
     /// Revalidate the remote catalog even when the cache is still fresh.
@@ -295,10 +295,20 @@ struct JavaList {
 }
 
 #[derive(Debug, Args)]
+struct JavaListScope {
+    /// List only JDKs installed by JMAN without contacting the remote catalog.
+    #[arg(long)]
+    local: bool,
+    /// Show every catalog release instead of one latest release per vendor.
+    #[arg(long, conflicts_with = "local")]
+    all: bool,
+}
+
+#[derive(Debug, Args)]
 struct JavaVersion {
     /// JDK major or exact version, such as 17 or 17.0.20+8.
     version: String,
-    /// JDK distribution to install.
+    /// JDK vendor to install.
     #[arg(long, default_value = "temurin")]
     vendor: String,
     /// Resolve only from installed JDKs.
@@ -310,7 +320,7 @@ struct JavaVersion {
 struct JavaUse {
     /// JDK major or exact version, such as 17 or 17.0.20+8.
     version: String,
-    /// JDK distribution to pin.
+    /// JDK vendor to pin.
     #[arg(long, default_value = "temurin")]
     vendor: String,
     /// Project directory.
@@ -322,7 +332,7 @@ struct JavaUse {
 struct JavaRemove {
     /// JDK major or exact installed version.
     version: String,
-    /// JDK distribution to remove.
+    /// JDK vendor to remove.
     #[arg(long, default_value = "temurin")]
     vendor: String,
     /// Remove every installed version of the requested major.
@@ -992,7 +1002,7 @@ async fn list_java(
         .filter(|jdk| !arguments.lts || jman_build::toolchain::is_lts_major(jdk.major))
         .collect::<Vec<_>>();
 
-    if arguments.local {
+    if arguments.scope.local {
         if arguments.format == ReportFormat::Json {
             print_java_list_json(&installed, &[], None)?;
             return Ok(());
@@ -1000,16 +1010,7 @@ async fn list_java(
         if installed.is_empty() {
             println!("No matching JMAN-managed JDKs installed.");
         } else {
-            for jdk in installed {
-                println!(
-                    "{} {} {}-{} {}",
-                    jdk.vendor,
-                    jdk.version,
-                    jdk.os,
-                    jdk.architecture,
-                    jdk.home.display()
-                );
-            }
+            print_java_table(&installed, &[], true);
         }
         return Ok(());
     }
@@ -1022,11 +1023,15 @@ async fn list_java(
         .available(arguments.major, arguments.lts, arguments.refresh)
         .await
         .context("could not load remote JDK catalog; use `jman java list --local` to list installed JDKs only")?;
-    let available = catalog
+    let remote = catalog
         .jdks
         .into_iter()
         .filter(|jdk| vendor.as_ref().is_none_or(|vendor| jdk.vendor == *vendor))
+        .collect::<Vec<_>>();
+    let available = remote
+        .iter()
         .filter(|jdk| !installed_versions.contains(&(jdk.vendor.as_str(), jdk.version.as_str())))
+        .cloned()
         .collect::<Vec<_>>();
 
     if arguments.format == ReportFormat::Json {
@@ -1037,40 +1042,162 @@ async fn list_java(
         ui.warning(warning);
     }
 
-    println!("Installed:");
-    if installed.is_empty() {
-        println!("  none");
-    } else {
-        for jdk in &installed {
-            let lts = if jman_build::toolchain::is_lts_major(jdk.major) {
-                " LTS"
-            } else {
-                ""
-            };
-            println!(
-                "  {} {} {}-{}{} {}",
-                jdk.vendor,
-                jdk.version,
-                jdk.os,
-                jdk.architecture,
-                lts,
-                jdk.home.display()
-            );
-        }
+    if installed.is_empty() && remote.is_empty() {
+        println!("No matching JDKs found.");
+        return Ok(());
     }
-    println!("Available:");
-    if available.is_empty() {
-        println!("  none");
-    } else {
-        for jdk in available {
-            let lts = if jdk.lts { " LTS" } else { "" };
-            println!(
-                "  {} {} {}-{}{}",
-                jdk.vendor, jdk.version, jdk.os, jdk.architecture, lts
-            );
-        }
+    print_java_table(&installed, &remote, arguments.scope.all);
+    if !arguments.scope.all {
+        println!();
+        println!("Showing the latest matching release per vendor; use --all for every release.");
     }
     Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct JavaTableRow {
+    installed: bool,
+    vendor: String,
+    major: u16,
+    version: String,
+    support: &'static str,
+    platform: String,
+}
+
+fn print_java_table(
+    installed: &[jman_build::toolchain::ManagedJdk],
+    remote: &[jman_build::toolchain::AvailableJdk],
+    detailed: bool,
+) {
+    print!("{}", java_table(installed, remote, detailed));
+}
+
+fn java_table(
+    installed: &[jman_build::toolchain::ManagedJdk],
+    remote: &[jman_build::toolchain::AvailableJdk],
+    detailed: bool,
+) -> String {
+    let rows = java_table_rows(installed, remote, detailed);
+    let mut output = String::new();
+    writeln!(
+        output,
+        "{:<9}  {:<21}  {:>4}  {:<22}  {:<7}  PLATFORM",
+        "INSTALLED", "VENDOR", "JAVA", "VERSION", "SUPPORT"
+    )
+    .expect("writing a String cannot fail");
+    writeln!(
+        output,
+        "{:-<9}  {:-<21}  {:-<4}  {:-<22}  {:-<7}  {:-<15}",
+        "", "", "", "", "", ""
+    )
+    .expect("writing a String cannot fail");
+    for row in rows {
+        writeln!(
+            output,
+            "{:<9}  {:<21}  {:>4}  {:<22}  {:<7}  {}",
+            if row.installed { "yes" } else { "no" },
+            row.vendor,
+            row.major,
+            row.version,
+            row.support,
+            row.platform
+        )
+        .expect("writing a String cannot fail");
+    }
+    output
+}
+
+fn java_table_rows(
+    installed: &[jman_build::toolchain::ManagedJdk],
+    remote: &[jman_build::toolchain::AvailableJdk],
+    detailed: bool,
+) -> Vec<JavaTableRow> {
+    let installed_by_release = installed
+        .iter()
+        .map(|jdk| ((jdk.vendor.as_str(), jdk.version.as_str()), jdk))
+        .collect::<std::collections::HashMap<_, _>>();
+    let selected_remote = if detailed {
+        remote.iter().collect::<Vec<_>>()
+    } else {
+        let mut latest_by_vendor = std::collections::HashMap::new();
+        for jdk in remote {
+            latest_by_vendor
+                .entry(jdk.vendor.as_str())
+                .and_modify(|current: &mut &jman_build::toolchain::AvailableJdk| {
+                    if java_release_key(jdk.major, &jdk.version)
+                        > java_release_key(current.major, &current.version)
+                    {
+                        *current = jdk;
+                    }
+                })
+                .or_insert(jdk);
+        }
+        latest_by_vendor.into_values().collect::<Vec<_>>()
+    };
+
+    let mut represented = std::collections::HashSet::new();
+    let mut rows = selected_remote
+        .into_iter()
+        .map(|jdk| {
+            let installed = installed_by_release
+                .get(&(jdk.vendor.as_str(), jdk.version.as_str()))
+                .copied();
+            represented.insert((jdk.vendor.as_str(), jdk.version.as_str()));
+            JavaTableRow {
+                installed: installed.is_some(),
+                vendor: jdk.vendor.clone(),
+                major: jdk.major,
+                version: jdk.version.clone(),
+                support: if jdk.lts { "LTS" } else { "STS" },
+                platform: format!("{}-{}", jdk.os, jdk.architecture),
+            }
+        })
+        .collect::<Vec<_>>();
+    rows.extend(
+        installed
+            .iter()
+            .filter(|jdk| !represented.contains(&(jdk.vendor.as_str(), jdk.version.as_str())))
+            .map(|jdk| JavaTableRow {
+                installed: true,
+                vendor: jdk.vendor.clone(),
+                major: jdk.major,
+                version: jdk.version.clone(),
+                support: if jman_build::toolchain::is_lts_major(jdk.major) {
+                    "LTS"
+                } else {
+                    "STS"
+                },
+                platform: format!("{}-{}", jdk.os, jdk.architecture),
+            }),
+    );
+    rows.sort_by(|left, right| {
+        right
+            .installed
+            .cmp(&left.installed)
+            .then_with(|| left.vendor.cmp(&right.vendor))
+            .then_with(|| {
+                java_release_key(right.major, &right.version)
+                    .cmp(&java_release_key(left.major, &left.version))
+            })
+    });
+    rows
+}
+
+fn java_release_key(major: u16, version: &str) -> (u16, Vec<u32>) {
+    let (core, suffix) = version.split_once('+').unwrap_or((version, ""));
+    let mut key = core
+        .split(|character: char| !character.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse().ok())
+        .collect::<Vec<_>>();
+    key.resize(4, 0);
+    key.extend(
+        suffix
+            .split(|character: char| !character.is_ascii_digit())
+            .filter(|part| !part.is_empty())
+            .filter_map(|part| part.parse::<u32>().ok()),
+    );
+    (major, key)
 }
 
 #[derive(Serialize)]
@@ -2774,7 +2901,8 @@ mod tests {
         else {
             panic!("expected java list command");
         };
-        assert!(!arguments.local);
+        assert!(!arguments.scope.local);
+        assert!(!arguments.scope.all);
         assert_eq!(arguments.major, Some(21));
         assert!(arguments.lts);
         assert_eq!(arguments.vendor.as_deref(), Some("open"));
@@ -2782,6 +2910,17 @@ mod tests {
         assert_eq!(arguments.format, ReportFormat::Json);
 
         assert!(Cli::try_parse_from(["jman", "java", "list", "--local", "--refresh"]).is_err());
+        assert!(Cli::try_parse_from(["jman", "java", "list", "--local", "--all"]).is_err());
+
+        let all = Cli::try_parse_from(["jman", "java", "list", "--all"])
+            .expect("complete catalog arguments");
+        let Command::Java(Java {
+            command: JavaCommand::List(all),
+        }) = all.command
+        else {
+            panic!("expected java list command");
+        };
+        assert!(all.scope.all);
     }
 
     #[test]
@@ -2841,6 +2980,87 @@ mod tests {
         assert_eq!(value["catalog"]["fetchedAt"], 123);
         assert_eq!(value["installed"][0]["home"], "/cache/jdks/21");
         assert_eq!(value["available"][0]["version"], "25.0.1+8");
+    }
+
+    #[test]
+    fn java_table_merges_installed_releases_and_summarizes_each_vendor() {
+        let installed = vec![managed_jdk("temurin", 21, "21.0.12+7", "/jdks/temurin-21")];
+        let remote = vec![
+            available_jdk("temurin", 17, "17.0.16+8"),
+            available_jdk("zulu", 21, "21.0.9+10"),
+            available_jdk("temurin", 21, "21.0.12+7"),
+            available_jdk("zulu", 21, "21.0.10+7"),
+        ];
+
+        let rows = java_table_rows(&installed, &remote, false);
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].vendor, "temurin");
+        assert!(rows[0].installed);
+        assert_eq!(rows[1].vendor, "zulu");
+        assert_eq!(rows[1].version, "21.0.10+7");
+        assert!(!rows[1].installed);
+
+        let table = java_table(&installed, &remote, false);
+        assert!(table.starts_with("INSTALLED  VENDOR"));
+        assert!(table.contains("yes        temurin"));
+        assert!(table.contains("no         zulu"));
+        assert!(!table.contains("LOCATION"));
+        assert!(!table.contains("/jdks/temurin-21"));
+    }
+
+    #[test]
+    fn detailed_java_table_keeps_every_remote_release_and_local_only_install() {
+        let installed = vec![managed_jdk(
+            "corretto",
+            11,
+            "11.0.28+6",
+            "/jdks/corretto-11",
+        )];
+        let remote = vec![
+            available_jdk("temurin", 21, "21.0.12+7"),
+            available_jdk("temurin", 17, "17.0.16+8"),
+        ];
+
+        let rows = java_table_rows(&installed, &remote, true);
+
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows.iter().filter(|row| row.installed).count(), 1);
+        assert!(rows.iter().any(|row| row.vendor == "corretto"));
+        assert!(rows.iter().any(|row| row.version == "21.0.12+7"));
+        assert!(rows.iter().any(|row| row.version == "17.0.16+8"));
+    }
+
+    fn managed_jdk(
+        vendor: &str,
+        major: u16,
+        version: &str,
+        home: &str,
+    ) -> jman_build::toolchain::ManagedJdk {
+        jman_build::toolchain::ManagedJdk {
+            vendor: vendor.to_owned(),
+            version: version.to_owned(),
+            major,
+            os: "linux".to_owned(),
+            architecture: "x64".to_owned(),
+            checksum: "sha256:test".to_owned(),
+            home: PathBuf::from(home),
+        }
+    }
+
+    fn available_jdk(
+        vendor: &str,
+        major: u16,
+        version: &str,
+    ) -> jman_build::toolchain::AvailableJdk {
+        jman_build::toolchain::AvailableJdk {
+            vendor: vendor.to_owned(),
+            version: version.to_owned(),
+            major,
+            lts: jman_build::toolchain::is_lts_major(major),
+            os: "linux".to_owned(),
+            architecture: "x64".to_owned(),
+        }
     }
 
     #[test]

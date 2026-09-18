@@ -32,16 +32,17 @@ after dependency changes, `jman build --all` for all reproducible archives, and
 Manage Java toolchains directly through JMAN:
 
 ```bash
-jman java list                   # installed first, then remotely available JDKs
+jman java list                   # compact table: latest release per vendor
 jman java list --local           # installed JDKs only; no network access
+jman java list --all             # every matching release in the remote catalog
 jman java list --major 21        # filter one Java feature release
 jman java list --lts             # show only LTS release lines
-jman java list --vendor corretto # filter one distribution
+jman java list --vendor corretto # filter one vendor
 jman java list --refresh         # revalidate the cached remote catalog
 jman java list --format json     # stable structured output for integrations
-jman java install 21             # install Temurin (the default distribution)
+jman java install 21             # install Temurin (the default vendor)
 jman java install 21 --vendor zulu
-jman java use 21 --vendor zulu   # pin the project to a distribution and version
+jman java use 21 --vendor zulu   # pin the project to a vendor and version
 ```
 
 The platform-specific multi-distribution catalog is discovered through the
@@ -53,7 +54,10 @@ catalog. `--refresh` bypasses the freshness window while retaining conditional
 requests; `--local` never contacts the network. Installation resolves the
 vendor archive and SHA-256 digest through the provider, then requires HTTPS and
 checks every download and redirect host against a distribution-scoped allowlist
-before accepting checksum-verified bytes. Temurin remains the default.
+before accepting checksum-verified bytes. Human-readable listings merge local
+and remote releases into one table with an `INSTALLED` column. Filters narrow
+the compact table, `--all` expands it to every matching release, and JSON always
+retains the complete matching catalog. Temurin remains the default.
 
 The precise supported metadata boundary and release gates are defined in
 [the product contract](docs/product-contract.md). Changes are recorded in the
