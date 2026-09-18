@@ -9,7 +9,9 @@ mod structural;
 mod symbol_index;
 
 #[cfg(feature = "native-ffi")]
-pub use native::{Frontend, FrontendError, ProjectSession};
+pub use native::{
+    Frontend, FrontendError, ProjectSession, decode_editor_query_result, decode_semantic_result,
+};
 pub use project_state::{ProjectChange, ProjectState};
 pub use semantic::{DependencyGraph, SemanticDiagnostic, SemanticResult, SemanticSymbol};
 pub use structural::{StructuralFile, WorkspaceParseResult, WorkspaceSource};

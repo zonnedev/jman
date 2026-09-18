@@ -26,5 +26,6 @@ mapfile -t test_sources < <(
 
 javac -Werror -Xlint:all -d "${classes_dir}" "${main_sources[@]}" "${test_sources[@]}"
 java -ea -cp "${classes_dir}" io.github.zonnedev.jman.javac.JavacFrontendTest
+java -ea -cp "${classes_dir}" io.github.zonnedev.jman.javac.ProcessedSemanticWorkerTest
 java -ea -cp "${classes_dir}" io.github.zonnedev.jman.maven.importer.MavenModelImporterTest
 java -ea -cp "${classes_dir}" io.github.zonnedev.jman.processor.worker.ProcessorWorkerTest

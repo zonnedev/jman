@@ -7,6 +7,23 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ## [0.3.0-rc.3] - 2026-09-18
 
+### Added
+
+- Processor-enabled compile units now use a persistent, project-JDK javac lane
+  for diagnostics, completion, hover, and navigation. It runs the exact
+  annotation-processor path and options exported by Maven or Gradle, so Lombok,
+  MapStruct, Micronaut, and custom JSR 269 processors share one generic path.
+- End-to-end Lombok coverage now exercises generated getters, setters, builders,
+  logging fields, completion, hover, local-source navigation, honest unrelated
+  diagnostics, and unsaved editor overlays.
+
+### Changed
+
+- The processor worker artifact now also carries the Java 17-compatible semantic
+  bridge. Native `-proc:none` attribution remains the fast path only for compile
+  units without processors; processor-specific diagnostic heuristics were
+  removed.
+
 ### Fixed
 
 - Gradle and Maven tests and project operations launched from editor clients now
@@ -27,8 +44,7 @@ Versioning while it approaches a stable 0.3.0 release.
   processors such as Lombok are not forced onto JMAN's Java 25 runtime.
 - Annotation processing now runs dependency modules first and retains useful
   partial generated classes when unrelated project errors prevent a complete
-  compile; false missing-`log` diagnostics are suppressed for Lombok logging
-  annotations while a workspace is temporarily broken.
+  compile.
 - Go to Definition and Go to Type Definition now prefer matching workspace
   source files over decompiled classpath copies while background indexing is
   still pending.

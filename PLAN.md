@@ -441,6 +441,10 @@ Completed `jman check` vertical slice:
 - [x] Distinguish Java declaration, definition, and implementation semantics.
 - [x] Resolve Javadoc links and `@see` targets through document links.
 - [x] Identify generated sources and expose their origin/read-only status.
+- [x] Make processor-enabled javac attribution authoritative for diagnostics and
+      editor queries through a generic project-JDK worker, removing Lombok-only
+      suppression and covering accessors, builders, logging, local navigation,
+      real errors, and unsaved overlays end to end.
 
 ## Milestone 7 — Test Runner Hardening
 

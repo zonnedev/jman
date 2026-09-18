@@ -14,7 +14,9 @@ use crate::{
     SourceMetadata,
     build_runtime::BuildRuntime,
     cache::{FileLock, cache_root, directory_size, project_cache_directory, stable_project_id},
-    file_uri_to_path, load_project, select_compile_model,
+    file_uri_to_path, load_project,
+    processed_semantics::{ProcessedSemanticRequest, ProcessedSemanticWorker},
+    select_compile_model,
 };
 use javac_frontend::{
     ABI_VERSION, EditorQueryResult, Frontend, ProjectSession, SemanticResult, WorkspaceSource,
@@ -31,6 +33,7 @@ pub struct NativeBackend {
     preferred_build_system: Option<String>,
     build_runtime: Option<BuildRuntime>,
     processor_workers: HashMap<PathBuf, ProcessorWorker>,
+    processed_semantic_workers: HashMap<PathBuf, ProcessedSemanticWorker>,
     structural_documents: Vec<(String, String, SemanticResult)>,
     structural_revision: u64,
     cancellation_generation: Arc<AtomicU64>,
@@ -39,7 +42,7 @@ pub struct NativeBackend {
 }
 
 const STRUCTURAL_CACHE_VERSION: u32 = 3;
-const SEMANTIC_CACHE_VERSION: u32 = 3;
+const SEMANTIC_CACHE_VERSION: u32 = 4;
 const PARSE_BATCH_FILES: usize = 128;
 const PARSE_BATCH_BYTES: usize = 4 * 1024 * 1024;
 const EDITOR_QUERY_CACHE_CAPACITY: usize = 512;
@@ -143,6 +146,7 @@ impl NativeBackend {
             preferred_build_system: None,
             build_runtime: None,
             processor_workers: HashMap::new(),
+            processed_semantic_workers: HashMap::new(),
             structural_documents: Vec::new(),
             structural_revision: 0,
             cancellation_generation,
@@ -213,6 +217,108 @@ impl NativeBackend {
             self.sessions.insert(key.clone(), session);
         }
         Ok(self.sessions.get(&key).unwrap())
+    }
+
+    fn processed_request(
+        &self,
+        model: &CompileModel,
+        file_name: &str,
+        source: &str,
+    ) -> Result<ProcessedSemanticRequest, String> {
+        let release = model.java_release().ok_or_else(|| {
+            format!(
+                "compile unit {}:{} has no Java release",
+                model.project_path, model.task_path
+            )
+        })?;
+        let mut source_path = model.source_path();
+        if module_info_file(model).is_none() {
+            for root in dependency_source_roots(model, &self.models) {
+                if !source_path.contains(&root) {
+                    source_path.push(root);
+                }
+            }
+        }
+        for attachment in source_attachments(&model.classpath) {
+            if !source_path.contains(&attachment) {
+                source_path.push(attachment);
+            }
+        }
+        Ok(ProcessedSemanticRequest {
+            file_name: file_name.to_owned(),
+            source: source.to_owned(),
+            release,
+            classpath: semantic_classpath(model, &self.models),
+            module_path: semantic_module_path(model, &self.models),
+            source_path,
+            processor_path: model.annotation_processor_path.clone(),
+            processor_options: model.annotation_processor_options.clone(),
+            compiler_options: jpms_compiler_options(model, &self.models),
+        })
+    }
+
+    fn processed_request_file(&self, model: &CompileModel) -> PathBuf {
+        self.root
+            .as_deref()
+            .map(project_cache_directory)
+            .unwrap_or_else(cache_root)
+            .join("processed-semantics")
+            .join(safe_key(&compile_model_key(model)))
+            .join(format!("request-{}.properties", std::process::id()))
+    }
+
+    fn ensure_processed_worker(&mut self, java: &Path) -> Result<(), String> {
+        if self.processed_semantic_workers.contains_key(java) {
+            return Ok(());
+        }
+        let classpath = processor_worker_classpath()?;
+        let worker = ProcessedSemanticWorker::start(java, &classpath)?;
+        self.processed_semantic_workers
+            .insert(java.to_path_buf(), worker);
+        Ok(())
+    }
+
+    fn analyze_processed(
+        &mut self,
+        model: &CompileModel,
+        file_name: &str,
+        source: &str,
+    ) -> Result<SemanticResult, String> {
+        let java = processor_java(model, self.build_runtime.as_ref())?;
+        let request = self.processed_request(model, file_name, source)?;
+        let request_file = self.processed_request_file(model);
+        self.ensure_processed_worker(&java)?;
+        let result = self
+            .processed_semantic_workers
+            .get_mut(&java)
+            .expect("processed semantic worker was started")
+            .analyze(&request, &request_file);
+        if result.is_err() {
+            self.processed_semantic_workers.remove(&java);
+        }
+        result
+    }
+
+    fn query_processed(
+        &mut self,
+        model: &CompileModel,
+        file_name: &str,
+        source: &str,
+        cursor: u32,
+    ) -> Result<EditorQueryResult, String> {
+        let java = processor_java(model, self.build_runtime.as_ref())?;
+        let request = self.processed_request(model, file_name, source)?;
+        let request_file = self.processed_request_file(model);
+        self.ensure_processed_worker(&java)?;
+        let result = self
+            .processed_semantic_workers
+            .get_mut(&java)
+            .expect("processed semantic worker was started")
+            .editor_query(&request, cursor, &request_file);
+        if result.is_err() {
+            self.processed_semantic_workers.remove(&java);
+        }
+        result
     }
 
     fn run_annotation_processors(&mut self) -> Result<(), String> {
@@ -531,9 +637,9 @@ impl NativeBackend {
         let generation = self.cancellation_generation.load(Ordering::Acquire);
         let root = self
             .root
-            .as_deref()
+            .clone()
             .ok_or_else(|| "project has not been initialized".to_owned())?;
-        let cache_path = semantic_cache_path(root);
+        let cache_path = semantic_cache_path(&root);
         let previous = read_semantic_cache(&cache_path);
         let structural = self.structural_documents.clone();
         let mut refined = Vec::with_capacity(structural.len());
@@ -582,14 +688,33 @@ impl NativeBackend {
                 continue;
             }
             cache_misses += 1;
-            pending.push(PendingSemanticDocument {
+            let document = PendingSemanticDocument {
                 uri,
                 key,
                 source,
                 fingerprint,
                 fallback,
                 model: model.clone(),
-            });
+            };
+            if !model.annotation_processor_path.is_empty()
+                && std::env::var_os("JAVA_LSP_DISABLE_ANNOTATION_PROCESSING").is_none()
+            {
+                // Running an open-world processor once per closed file is both
+                // incorrect for aggregating processors and prohibitively
+                // expensive. Keep the processor-neutral structural index for
+                // closed files; open documents use the authoritative processed
+                // javac lane below through AnalysisBackend::analyze/query.
+                next.documents.insert(
+                    document.key,
+                    CachedSemanticDocument {
+                        fingerprint: document.fingerprint,
+                        result: document.fallback.clone(),
+                    },
+                );
+                refined.push((document.uri, document.source, document.fallback));
+            } else {
+                pending.push(document);
+            }
         }
         let semantic_workers = semantic_worker_count(pending.len());
         for document in analyze_semantic_parallel(
@@ -1271,9 +1396,10 @@ fn jpms_compiler_options(model: &CompileModel, _models: &[CompileModel]) -> Vec<
     let mut index = 0;
     while index < model.compiler_args.len() {
         let argument = &model.compiler_args[index];
-        if OPTIONS_WITH_VALUE
-            .iter()
-            .any(|option| argument.starts_with(&format!("{option}=")))
+        if argument == "--enable-preview"
+            || OPTIONS_WITH_VALUE
+                .iter()
+                .any(|option| argument.starts_with(&format!("{option}=")))
         {
             selected.push(argument.clone());
         } else if OPTIONS_WITH_VALUE.contains(&argument.as_str())
@@ -2256,6 +2382,7 @@ impl AnalysisBackend for NativeBackend {
         self.build_runtime = loaded.build_runtime;
         self.models = loaded.models;
         self.sessions.clear();
+        self.processed_semantic_workers.clear();
         self.editor_queries.clear();
         self.run_annotation_processors()?;
         self.rebuild_structural_index()?;
@@ -2268,6 +2395,17 @@ impl AnalysisBackend for NativeBackend {
         file_name: &str,
         source: &str,
     ) -> Result<SemanticResult, String> {
+        let source_file =
+            file_uri_to_path(uri).ok_or_else(|| "URI is not a file URI".to_owned())?;
+        let model = select_compile_model(&self.models, &source_file).cloned();
+        if let Some(model) = model
+            && !model.annotation_processor_path.is_empty()
+            && std::env::var_os("JAVA_LSP_DISABLE_ANNOTATION_PROCESSING").is_none()
+        {
+            return self
+                .analyze_processed(&model, file_name, source)
+                .map_err(|error| format!("processed javac semantic analysis failed: {error}"));
+        }
         self.session_for(uri)?
             .analyze(file_name, source)
             .map_err(|error| format!("native semantic analysis failed: {error:?}"))
@@ -2286,8 +2424,9 @@ impl AnalysisBackend for NativeBackend {
         }
         let source_file =
             file_uri_to_path(uri).ok_or_else(|| "URI is not a file URI".to_owned())?;
-        let selected_model = select_compile_model(&self.models, &source_file);
+        let selected_model = select_compile_model(&self.models, &source_file).cloned();
         let classpath = selected_model
+            .as_ref()
             .map(|model| {
                 model
                     .classpath
@@ -2298,12 +2437,20 @@ impl AnalysisBackend for NativeBackend {
             })
             .unwrap_or_default();
         let release = selected_model
+            .as_ref()
             .and_then(CompileModel::java_release)
             .unwrap_or(8);
-        let mut result = self
-            .session_for(uri)?
-            .editor_query(file_name, source, cursor)
-            .map_err(|error| format!("native editor query failed: {error:?}"))?;
+        let mut result = if let Some(model) = selected_model.as_ref()
+            && !model.annotation_processor_path.is_empty()
+            && std::env::var_os("JAVA_LSP_DISABLE_ANNOTATION_PROCESSING").is_none()
+        {
+            self.query_processed(model, file_name, source, cursor)
+                .map_err(|error| format!("processed javac editor query failed: {error}"))?
+        } else {
+            self.session_for(uri)?
+                .editor_query(file_name, source, cursor)
+                .map_err(|error| format!("native editor query failed: {error:?}"))?
+        };
         if let Some(definition) = result.definition.as_mut()
             && definition.source.is_empty()
         {
@@ -2434,6 +2581,7 @@ impl AnalysisBackend for NativeBackend {
             return Err(message);
         }
         self.sessions.retain(|key, _| !changed.contains(key));
+        self.processed_semantic_workers.clear();
         self.editor_queries.entries.retain(|key, _| {
             file_uri_to_path(&key.uri)
                 .and_then(|path| select_compile_model(&previous_models, &path))
@@ -2454,6 +2602,7 @@ impl AnalysisBackend for NativeBackend {
         }
         self.run_annotation_processors()?;
         self.sessions.clear();
+        self.processed_semantic_workers.clear();
         self.editor_queries.clear();
         self.rebuild_structural_index()?;
         Ok(true)
@@ -2480,6 +2629,7 @@ impl AnalysisBackend for NativeBackend {
             }
         }
         self.sessions.clear();
+        self.processed_semantic_workers.clear();
         self.editor_queries.clear();
         self.run_annotation_processors()?;
         self.rebuild_structural_index()?;
@@ -2498,6 +2648,7 @@ impl AnalysisBackend for NativeBackend {
                 .map_err(|error| format!("cannot clear {}: {error}", directory.display()))?;
         }
         self.sessions.clear();
+        self.processed_semantic_workers.clear();
         self.editor_queries.clear();
         self.structural_documents.clear();
         self.cache_status.structural_entries = 0;

@@ -105,6 +105,7 @@ fn main() {
             "{response}"
         );
     }
+    verify_lombok_semantics(&mut input, &mut output, &root);
     let disk_source = std::fs::read_to_string(&source).unwrap();
     let without_annotation = disk_source
         .replace("@GenerateGreeting\n", "")
@@ -117,7 +118,7 @@ fn main() {
             "params":{"textDocument":{"uri":uri}}
         }),
     );
-    let regenerated = receive(&mut output);
+    let regenerated = receive_diagnostics_for(&mut output, &uri);
     assert_eq!(regenerated["method"], "textDocument/publishDiagnostics");
     assert!(
         !generated.exists(),
@@ -132,7 +133,7 @@ fn main() {
             "params":{"textDocument":{"uri":uri}}
         }),
     );
-    let regenerated = receive(&mut output);
+    let regenerated = receive_diagnostics_for(&mut output, &uri);
     assert_eq!(regenerated["method"], "textDocument/publishDiagnostics");
     assert!(
         generated.is_file(),
@@ -153,6 +154,168 @@ fn main() {
     );
 }
 
+fn verify_lombok_semantics(
+    input: &mut impl std::io::Write,
+    output: &mut impl std::io::BufRead,
+    root: &std::path::Path,
+) {
+    let source = root.join("app/src/main/java/io/github/zonnedev/jman/tests/fixture/Person.java");
+    let uri = format!("file://{}", source.display());
+    let text = std::fs::read_to_string(&source).expect("read Person.java");
+    send(
+        input,
+        json!({
+            "jsonrpc":"2.0","method":"textDocument/didOpen",
+            "params":{"textDocument":{
+                "uri":uri,"languageId":"java","version":1,"text":text
+            }}
+        }),
+    );
+    let diagnostics = receive(output);
+    assert!(
+        diagnostics["params"]["diagnostics"]
+            .as_array()
+            .is_some_and(|items| items.iter().all(|item| item["severity"] != 1)),
+        "Lombok-processed source has errors: {diagnostics}"
+    );
+
+    let getter = text.find("getName").expect("getter call");
+    send(
+        input,
+        json!({
+            "jsonrpc":"2.0","id":20,"method":"textDocument/hover",
+            "params":{
+                "textDocument":{"uri":uri},
+                "position":offset_to_position(
+                    &text,
+                    text[..getter + 3].encode_utf16().count() as u64
+                )
+            }
+        }),
+    );
+    let hover = receive(output);
+    assert!(
+        hover["result"]["contents"]["value"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("String")),
+        "Lombok-generated getter has no semantic hover: {hover}"
+    );
+
+    let log = text.find("log.debug").expect("log field");
+    send(
+        input,
+        json!({
+            "jsonrpc":"2.0","id":21,"method":"textDocument/hover",
+            "params":{
+                "textDocument":{"uri":uri},
+                "position":offset_to_position(
+                    &text,
+                    text[..log + 1].encode_utf16().count() as u64
+                )
+            }
+        }),
+    );
+    let hover = receive(output);
+    assert!(
+        hover["result"]["contents"]["value"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("org.slf4j.Logger")),
+        "Lombok-generated log field has no semantic hover: {hover}"
+    );
+
+    send(
+        input,
+        json!({
+            "jsonrpc":"2.0","id":22,"method":"textDocument/completion",
+            "params":{
+                "textDocument":{"uri":uri},
+                "position":offset_to_position(
+                    &text,
+                    text[..getter + "getN".len()].encode_utf16().count() as u64
+                )
+            }
+        }),
+    );
+    let completion = receive(output);
+    assert!(
+        completion["result"]["items"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item["label"] == "getName")),
+        "Lombok-generated getter has no completion: {completion}"
+    );
+
+    send(
+        input,
+        json!({
+            "jsonrpc":"2.0","id":23,"method":"textDocument/definition",
+            "params":{
+                "textDocument":{"uri":uri},
+                "position":offset_to_position(
+                    &text,
+                    text[..getter + 3].encode_utf16().count() as u64
+                )
+            }
+        }),
+    );
+    let definition = receive(output);
+    assert!(
+        definition["result"]
+            .as_array()
+            .is_some_and(|locations| locations.iter().any(|location| location["uri"] == uri)),
+        "Lombok-generated getter did not navigate to its local source: {definition}"
+    );
+
+    let broken = text.replacen(
+        "public String describe() {",
+        "public String describe() {\n    MissingType mustRemainAnError = null;",
+        1,
+    );
+    send(
+        input,
+        json!({
+            "jsonrpc":"2.0","method":"textDocument/didChange",
+            "params":{
+                "textDocument":{"uri":uri,"version":2},
+                "contentChanges":[{"text":broken}]
+            }
+        }),
+    );
+    let diagnostics = receive_diagnostics_for(output, &uri);
+    assert!(
+        diagnostics["params"]["diagnostics"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| {
+                item["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("MissingType"))
+            })),
+        "real compiler errors must not be hidden by processor support: {diagnostics}"
+    );
+
+    let changed = text.replacen(
+        "public String describe() {",
+        "public String describe() {\n    log.debug(\"unsaved {}\", this.getName());",
+        1,
+    );
+    send(
+        input,
+        json!({
+            "jsonrpc":"2.0","method":"textDocument/didChange",
+            "params":{
+                "textDocument":{"uri":uri,"version":3},
+                "contentChanges":[{"text":changed}]
+            }
+        }),
+    );
+    let diagnostics = receive_diagnostics_for(output, &uri);
+    assert!(
+        diagnostics["params"]["diagnostics"]
+            .as_array()
+            .is_some_and(|items| items.iter().all(|item| item["severity"] != 1)),
+        "unsaved Lombok-aware overlay has errors: {diagnostics}"
+    );
+}
+
 fn send(writer: &mut impl std::io::Write, message: Value) {
     write_message(writer, &message).expect("write LSP message");
 }
@@ -161,4 +324,14 @@ fn receive(reader: &mut impl std::io::BufRead) -> Value {
     read_message(reader)
         .expect("read LSP message")
         .expect("server closed")
+}
+
+fn receive_diagnostics_for(reader: &mut impl std::io::BufRead, uri: &str) -> Value {
+    loop {
+        let message = receive(reader);
+        if message["method"] == "textDocument/publishDiagnostics" && message["params"]["uri"] == uri
+        {
+            return message;
+        }
+    }
 }

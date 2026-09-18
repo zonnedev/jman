@@ -8,6 +8,8 @@ mod documents;
 mod metrics;
 #[cfg(feature = "native-ffi")]
 mod native_backend;
+#[cfg(feature = "native-ffi")]
+mod processed_semantics;
 mod processor_worker;
 mod project;
 mod protocol;

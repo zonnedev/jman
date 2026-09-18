@@ -122,8 +122,16 @@ length-prefixed result before asking the native library to free it.
   outside the native image. Its Rust controller fingerprints source and
   processor inputs, reuses unchanged output, reruns after source changes, and
   promotes generated output transactionally so a failed run preserves the
-  last good tree. Processor failures do not abort LSP startup. Gates cover the custom processor, Lombok
-  1.18.46, and MapStruct 1.6.3.
+  last good tree. Processor failures do not abort LSP startup. Gates cover the
+  custom processor, Lombok 1.18.46, and MapStruct 1.6.3.
+- Processor-enabled compile units also use a persistent semantic worker on the
+  compile unit's own JDK. The worker runs the build's exact processor path and
+  options, then extracts diagnostics, symbols, completion, hover, and definition
+  data from that same post-processing javac task. This is a generic JSR 269
+  path: JMAN contains no Lombok annotation or generated-member emulation.
+- Lombok regression coverage includes generated accessors, builders, and
+  `@Slf4j` fields; completion and hover for generated members; navigation back
+  to the local source; unrelated real errors; and unsaved document overlays.
 - Native LSP initialization now runs configured processors before workspace
   indexing. Saving an owned Java source triggers fingerprinted regeneration
   and generated-symbol reindexing. The VS Code package ships the worker JAR
@@ -244,15 +252,22 @@ length-prefixed result before asking the native library to free it.
 The native library is the latency-sensitive compiler frontend. It must not
 load arbitrary build plugins or annotation processors: Native Image has a
 closed world, while real project extensions are open-ended. Maven and Gradle
-therefore remain isolated build-model/processor workers. Their normalized
-compile-unit output feeds the Rust core, which can use generated sources and
-processor results without allowing third-party build code into the LSP
-process.
+therefore remain isolated build-model workers. Annotation processing has two
+isolated JVM roles: a transactional compile worker materializes generated
+sources/classes for indexing, and a semantic worker obtains editor answers from
+the processor-mutated javac model. Both consume the same normalized compile
+unit and run on its selected compiler JDK; third-party processor code never
+enters the Rust process or GraalVM native image.
 
-Project sessions still create a fresh attributed javac task when an open
-document version changes. The persistent Rust structural index handles
-workspace-scale search and closed-file navigation; javac attribution remains
-the correctness path for diagnostics and precise open-document semantics.
+Compile units without processors still use the low-latency native session.
+Processor-enabled documents create fresh attributed tasks inside a persistent
+per-JDK JVM when an open document version changes, preserving unsaved overlays
+while ensuring processors and editor semantics share a task. The persistent
+Rust structural index handles workspace-scale search and closed-file
+navigation. Closed processor-enabled sources stay on the processor-neutral
+structural index instead of rerunning an aggregating processor once per file;
+javac attribution remains the correctness path for diagnostics and precise
+open-document semantics.
 Further latency work should concentrate on dependency classification beyond
 direct symbol edges and batched background re-attribution.
 
@@ -290,8 +305,9 @@ instead of JMAN's Java 25 native-frontend runtime.
 Processor workers execute dependency modules before their consumers. If javac
 reports unrelated source errors after processors have emitted usable classes,
 JMAN retains those partial outputs in a separate cache generation without
-overwriting the last complete result. Lombok logging annotations also remain
-diagnostic-tolerant while the surrounding module is temporarily uncompilable.
+overwriting the last complete result. Open documents are attributed by a
+separate post-processing javac task, so generated Lombok members resolve without
+hiding unrelated compiler errors.
 
 Definition navigation always gives workspace source precedence over classpath
 and decompiled copies. During initial background indexing, JMAN matches javac's

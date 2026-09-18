@@ -439,7 +439,7 @@ fn encode_wire_string(output: &mut Vec<u8>, value: &str) -> Result<(), FrontendE
     Ok(())
 }
 
-fn decode_semantic_result(payload: &[u8]) -> Result<SemanticResult, FrontendError> {
+pub fn decode_semantic_result(payload: &[u8]) -> Result<SemanticResult, FrontendError> {
     let mut input = WireReader::new(payload);
     if input.take(4)? != b"JFS1" {
         return Err(FrontendError::InvalidResult(
@@ -483,7 +483,7 @@ fn decode_semantic_result(payload: &[u8]) -> Result<SemanticResult, FrontendErro
     })
 }
 
-fn decode_editor_query_result(payload: &[u8]) -> Result<EditorQueryResult, FrontendError> {
+pub fn decode_editor_query_result(payload: &[u8]) -> Result<EditorQueryResult, FrontendError> {
     let mut input = WireReader::new(payload);
     let version = input.take(4)?;
     if version != b"JFQ1" && version != b"JFQ2" {

@@ -21,7 +21,21 @@ final class JavacFrontendTest {
     supportsTransitiveServicesQualifiedAccessAndCompilerOverrides();
     selectsMultiReleaseJarApisByProjectRelease();
     sessionUsesTheLatestUnsavedBuffer();
+    selectsProcessingModeFromCallerOptions();
     wireFormatIsVersionedAndDeterministic();
+  }
+
+  private static void selectsProcessingModeFromCallerOptions() {
+    java.util.List<String> nativeOptions = JavacFrontend.analysisOptions(21, java.util.List.of());
+    assertTrue(nativeOptions.contains("-proc:none"), "native analysis must disable processors");
+    java.util.List<String> processedOptions =
+        JavacFrontend.analysisOptions(21, java.util.List.of("-proc:full", "-Amode=strict"));
+    assertTrue(
+        processedOptions.contains("-proc:full"), "processed analysis lost its processing mode");
+    assertTrue(
+        !processedOptions.contains("-proc:none"),
+        "processed analysis was accidentally overridden with -proc:none");
+    assertTrue(processedOptions.contains("-Amode=strict"), "processor options were not preserved");
   }
 
   private static void readsJdkJavadocWhenSourceArchiveIsAvailable() {

@@ -389,9 +389,7 @@ final class EditorQueries {
       int release,
       List<String> compilerOptions) {
     DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-    List<String> options =
-        new ArrayList<>(List.of("-proc:none", "--release", Integer.toString(release)));
-    options.addAll(compilerOptions);
+    List<String> options = JavacFrontend.analysisOptions(release, compilerOptions);
     JavacTask task = (JavacTask) compiler.getTask(
         null, files, diagnostics,
         options,

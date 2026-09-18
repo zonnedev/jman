@@ -130,7 +130,9 @@ final class JavacFrontend {
         Deque<String> owners = new ArrayDeque<>();
         new TreeScanner<Void, Void>() {
           private String owner() {
-            String nested = String.join(".", owners.reversed());
+            List<String> outerToInner = new ArrayList<>(owners.size());
+            owners.descendingIterator().forEachRemaining(outerToInner::add);
+            String nested = String.join(".", outerToInner);
             return packageName.isEmpty() ? nested : packageName + (nested.isEmpty() ? "" : "." + nested);
           }
 
@@ -357,9 +359,7 @@ final class JavacFrontend {
     List<JavaFileObject> compilationUnits = new ArrayList<>(1 + companionSources.size());
     compilationUnits.add(sourceFile);
     compilationUnits.addAll(companionSources);
-    List<String> options =
-        new ArrayList<>(List.of("-proc:none", "--release", Integer.toString(release)));
-    options.addAll(compilerOptions);
+    List<String> options = analysisOptions(release, compilerOptions);
     JavacTask task =
         (JavacTask)
             compiler.getTask(
@@ -380,9 +380,9 @@ final class JavacFrontend {
     Trees trees = Trees.instance(task);
     List<SemanticSymbol> symbols = new ArrayList<>();
     String packageName =
-        units.isEmpty() || units.getFirst().getPackageName() == null
+        units.isEmpty() || units.get(0).getPackageName() == null
             ? ""
-            : units.getFirst().getPackageName().toString();
+            : units.get(0).getPackageName().toString();
     for (CompilationUnitTree unit : units.stream().limit(1).toList()) {
       SourcePositions positions = trees.getSourcePositions();
       if (unit.getPackageName() != null) {
@@ -610,6 +610,17 @@ final class JavacFrontend {
                     diagnostic.getColumnNumber(),
                     diagnostic.getMessage(Locale.ROOT)))
         .toList();
+  }
+
+  static List<String> analysisOptions(int release, List<String> compilerOptions) {
+    List<String> options = new ArrayList<>();
+    if (compilerOptions.stream().noneMatch(option -> option.startsWith("-proc:"))) {
+      options.add("-proc:none");
+    }
+    options.add("--release");
+    options.add(Integer.toString(release));
+    options.addAll(compilerOptions);
+    return options;
   }
 
   private static String kindName(Tree.Kind kind) {

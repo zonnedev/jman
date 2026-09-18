@@ -53,7 +53,7 @@ public final class ProcessorWorker {
 
   static Result process(Path requestFile) throws IOException {
     Properties request = new Properties();
-    try (var input = Files.newInputStream(requestFile)) {
+    try (var input = Files.newBufferedReader(requestFile, StandardCharsets.UTF_8)) {
       request.load(input);
     }
     int version = Integer.parseInt(required(request, "protocol.version"));
