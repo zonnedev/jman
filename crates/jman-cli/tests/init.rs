@@ -1127,6 +1127,8 @@ packaging = "jar"
             "java",
             "use",
             "17",
+            "--vendor",
+            "zulu",
             "--path",
             project.path().to_str().expect("UTF-8 path"),
         ])
@@ -1140,6 +1142,7 @@ packaging = "jar"
     let manifest = fs::read_to_string(project.path().join("jman.toml")).expect("manifest");
     assert!(manifest.contains("[toolchain]"));
     assert!(manifest.contains("jdk = \"17\""));
+    assert!(manifest.contains("vendor = \"zulu\""));
 
     let which = Command::new(env!("CARGO_BIN_EXE_jman"))
         .env("JMAN_CACHE_DIR", cache.path())
@@ -1151,7 +1154,7 @@ packaging = "jar"
         .output()
         .expect("find Java");
     assert!(!which.status.success());
-    assert!(String::from_utf8_lossy(&which.stderr).contains("jman java install 17"));
+    assert!(String::from_utf8_lossy(&which.stderr).contains("jman java install 17 --vendor zulu"));
 }
 
 #[test]

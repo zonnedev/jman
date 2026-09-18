@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeSet,
     fs::File,
     io,
     path::{Component, Path, PathBuf},
@@ -9,17 +8,22 @@ use std::{
 use flate2::read::GzDecoder;
 use fs2::FileExt;
 use futures::StreamExt;
-use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::{fs, io::AsyncWriteExt};
 
 use crate::{io_error, probe_javac, BuildError, Toolchain};
 
-const API_ROOT: &str = "https://api.adoptium.net/v3";
+mod catalog;
+
+use catalog::{
+    validate_initial_download_url, validate_redirect_download_url, CatalogRelease,
+    CatalogValidators, FoojayProvider, JdkCatalogProvider, Platform, ProviderCatalog,
+    ResolvedArtifact,
+};
+
 const METADATA: &str = ".jman-toolchain.json";
-const REMOTE_PAGE_SIZE: usize = 20;
-const CATALOG_CACHE_SCHEMA: u32 = 1;
+const CATALOG_CACHE_SCHEMA: u32 = 2;
 const CATALOG_CACHE_TTL: Duration = Duration::from_mins(15);
 const KNOWN_LTS_MAJORS: &[u16] = &[8, 11, 17, 21, 25];
 
@@ -51,12 +55,49 @@ impl ToolchainRequest {
             .chars()
             .all(|character| character.is_ascii_digit())
     }
+
+    fn validate_vendor(&self) -> Result<(), BuildError> {
+        if !self.vendor.is_empty()
+            && self
+                .vendor
+                .bytes()
+                .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || value == b'-')
+            && !self.vendor.starts_with('-')
+            && !self.vendor.ends_with('-')
+        {
+            Ok(())
+        } else {
+            Err(BuildError::Invalid(format!(
+                "invalid JDK distribution `{}`",
+                self.vendor
+            )))
+        }
+    }
 }
 
 #[must_use]
 /// Return whether a Java feature release is a currently known LTS line.
 pub fn is_lts_major(major: u16) -> bool {
     KNOWN_LTS_MAJORS.contains(&major)
+}
+
+/// Normalize user-facing distribution aliases into JMAN's stable identifiers.
+#[must_use]
+pub fn normalize_vendor(vendor: &str) -> String {
+    match vendor
+        .trim()
+        .to_ascii_lowercase()
+        .replace('_', "-")
+        .as_str()
+    {
+        "amzn" | "amazon" | "cor" | "corretto" => "corretto".to_owned(),
+        "lib" | "liberica" => "liberica".to_owned(),
+        "ms" | "microsoft" => "microsoft".to_owned(),
+        "open" | "ojdk" | "openjdk" | "oracle-open-jdk" => "openjdk".to_owned(),
+        "sap" | "sap-machine" | "sapmachine" => "sapmachine".to_owned(),
+        "tem" | "temurin" => "temurin".to_owned(),
+        other => other.to_owned(),
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -92,6 +133,7 @@ pub enum CatalogSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogStatus {
+    pub provider: String,
     pub source: CatalogSource,
     pub fetched_at: u64,
     pub warning: Option<String>,
@@ -109,79 +151,23 @@ pub struct RemovalResult {
     pub reclaimed_bytes: u64,
 }
 
-#[derive(Debug, Deserialize)]
-struct AvailableReleases {
-    available_lts_releases: Vec<u16>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ReleaseNames {
-    releases: Vec<String>,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CatalogCache {
     schema: u32,
     fetched_at: u64,
-    vendor: String,
+    provider: String,
     os: String,
     architecture: String,
-    lts_etag: Option<String>,
-    lts_majors: Vec<u16>,
-    pages: Vec<CatalogPage>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct CatalogPage {
-    index: usize,
-    etag: Option<String>,
-    releases: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct LatestAsset {
-    binary: Binary,
-    release_name: String,
-    version: Version,
-}
-
-#[derive(Debug, Deserialize)]
-struct ReleaseAsset {
-    binaries: Vec<Binary>,
-    release_name: String,
-    version_data: Version,
-}
-
-#[derive(Debug, Deserialize)]
-struct Binary {
-    package: Package,
-}
-
-#[derive(Debug, Deserialize)]
-struct Package {
-    checksum: String,
-    link: String,
-    name: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Version {
-    major: u16,
-}
-
-#[derive(Debug)]
-struct ResolvedAsset {
-    package: Package,
-    version: String,
-    major: u16,
+    validators: CatalogValidators,
+    releases: Vec<CatalogRelease>,
 }
 
 pub struct ToolchainManager {
     root: PathBuf,
     catalog_root: PathBuf,
     client: reqwest::Client,
-    api_root: Url,
+    provider: Box<dyn JdkCatalogProvider>,
 }
 
 impl ToolchainManager {
@@ -191,24 +177,35 @@ impl ToolchainManager {
     ///
     /// Returns an error when the HTTP client cannot be initialized.
     pub fn new(cache_dir: &Path) -> Result<Self, BuildError> {
-        Self::with_api_root(cache_dir, API_ROOT)
+        Self::with_provider(cache_dir, Box::new(FoojayProvider::new()?))
     }
 
+    #[cfg(test)]
     fn with_api_root(cache_dir: &Path, api_root: &str) -> Result<Self, BuildError> {
+        Self::with_provider(
+            cache_dir,
+            Box::new(FoojayProvider::with_api_root(api_root)?),
+        )
+    }
+
+    fn with_provider(
+        cache_dir: &Path,
+        provider: Box<dyn JdkCatalogProvider>,
+    ) -> Result<Self, BuildError> {
         let client = reqwest::Client::builder()
             .user_agent(concat!("jman/", env!("CARGO_PKG_VERSION")))
-            .redirect(reqwest::redirect::Policy::limited(10))
+            // Redirects are followed manually so every hop crosses the same
+            // distribution-scoped domain trust policy.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| {
                 BuildError::Invalid(format!("could not create JDK client: {error}"))
             })?;
-        let api_root = Url::parse(api_root)
-            .map_err(|error| BuildError::Invalid(format!("invalid JDK API URL: {error}")))?;
         Ok(Self {
             root: cache_dir.join("jdks"),
             catalog_root: cache_dir.join("catalog"),
             client,
-            api_root,
+            provider,
         })
     }
 
@@ -254,15 +251,15 @@ impl ToolchainManager {
         Ok(jdks)
     }
 
-    /// List remotely installable Temurin JDK releases for this platform.
+    /// List remotely installable JDK releases for this platform.
     ///
     /// Results are newest-first. A major filter limits the catalog to one Java
-    /// feature release, while `lts_only` limits it to Adoptium's advertised LTS
-    /// feature releases.
+    /// feature release, while `lts_only` limits it to provider-advertised LTS
+    /// releases.
     ///
     /// # Errors
     ///
-    /// Returns an error when the Adoptium catalog cannot be queried or decoded.
+    /// Returns an error when the configured catalog cannot be queried or decoded.
     pub async fn available(
         &self,
         major: Option<u16>,
@@ -331,115 +328,36 @@ impl ToolchainManager {
         cached: Option<&CatalogCache>,
         now: u64,
     ) -> Result<CatalogCache, BuildError> {
-        let mut info_url = self.api_root.clone();
-        info_url
-            .path_segments_mut()
-            .map_err(|()| BuildError::Invalid("invalid JDK API root".to_owned()))?
-            .extend(["info", "available_releases"]);
-        let mut info_request = self.client.get(info_url);
-        if let Some(etag) = cached.and_then(|cache| cache.lts_etag.as_deref()) {
-            info_request = info_request.header(reqwest::header::IF_NONE_MATCH, etag);
-        }
-        let info_response = info_request.send().await.map_err(metadata_request_error)?;
-        let (lts_etag, lts_majors) = if info_response.status() == reqwest::StatusCode::NOT_MODIFIED
+        match self
+            .provider
+            .fetch_catalog(
+                &self.client,
+                current_platform(),
+                cached.map(|cache| &cache.validators),
+            )
+            .await?
         {
-            let cache = cached.ok_or_else(|| {
-                BuildError::Invalid("JDK catalog returned 304 without cached metadata".to_owned())
-            })?;
-            (cache.lts_etag.clone(), cache.lts_majors.clone())
-        } else {
-            let info_response = info_response
-                .error_for_status()
-                .map_err(metadata_request_error)?;
-            let etag = response_etag(&info_response);
-            let info = info_response
-                .json::<AvailableReleases>()
-                .await
-                .map_err(|error| BuildError::Invalid(format!("invalid JDK metadata: {error}")))?;
-            (etag, info.available_lts_releases)
-        };
-
-        let mut pages = Vec::new();
-        for page in 0_usize.. {
-            let cached_page = cached.and_then(|cache| {
-                cache
-                    .pages
-                    .iter()
-                    .find(|cached_page| cached_page.index == page)
-            });
-            let Some(page) = self.release_names_page(page, cached_page).await? else {
-                break;
-            };
-            pages.push(page);
-        }
-        Ok(CatalogCache {
-            schema: CATALOG_CACHE_SCHEMA,
-            fetched_at: now,
-            vendor: "temurin".to_owned(),
-            os: platform_os().to_owned(),
-            architecture: platform_arch().to_owned(),
-            lts_etag,
-            lts_majors,
-            pages,
-        })
-    }
-
-    async fn release_names_page(
-        &self,
-        page: usize,
-        cached: Option<&CatalogPage>,
-    ) -> Result<Option<CatalogPage>, BuildError> {
-        let mut url = self.api_root.clone();
-        url.path_segments_mut()
-            .map_err(|()| BuildError::Invalid("invalid JDK API root".to_owned()))?
-            .extend(["info", "release_names"]);
-        let page_string = page.to_string();
-        let page_size = REMOTE_PAGE_SIZE.to_string();
-        let mut request = self.client.get(url).query(&[
-            ("architecture", platform_arch()),
-            ("heap_size", "normal"),
-            ("image_type", "jdk"),
-            ("jvm_impl", "hotspot"),
-            ("os", platform_os()),
-            ("page", page_string.as_str()),
-            ("page_size", page_size.as_str()),
-            ("project", "jdk"),
-            ("release_type", "ga"),
-            ("sort_method", "DATE"),
-            ("sort_order", "DESC"),
-            ("vendor", "eclipse"),
-        ]);
-        if let Some(etag) = cached.and_then(|page| page.etag.as_deref()) {
-            request = request.header(reqwest::header::IF_NONE_MATCH, etag);
-        }
-        let response = request.send().await.map_err(metadata_request_error)?;
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        if response.status() == reqwest::StatusCode::NOT_MODIFIED {
-            return cached.cloned().map(Some).ok_or_else(|| {
-                BuildError::Invalid(format!(
-                    "JDK catalog page {page} returned 304 without cached data"
-                ))
-            });
-        }
-        let response = response
-            .error_for_status()
-            .map_err(metadata_request_error)?;
-        let etag = response_etag(&response);
-        let releases = response
-            .json::<ReleaseNames>()
-            .await
-            .map(|response| response.releases)
-            .map_err(|error| BuildError::Invalid(format!("invalid JDK metadata: {error}")))?;
-        if releases.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(CatalogPage {
-                index: page,
-                etag,
+            ProviderCatalog::NotModified => {
+                let mut cache = cached.cloned().ok_or_else(|| {
+                    BuildError::Invalid(
+                        "JDK catalog returned 304 without cached metadata".to_owned(),
+                    )
+                })?;
+                cache.fetched_at = now;
+                Ok(cache)
+            }
+            ProviderCatalog::Modified {
+                validators,
                 releases,
-            }))
+            } => Ok(CatalogCache {
+                schema: CATALOG_CACHE_SCHEMA,
+                fetched_at: now,
+                provider: self.provider.id().to_owned(),
+                os: platform_os().to_owned(),
+                architecture: platform_arch().to_owned(),
+                validators,
+                releases,
+            }),
         }
     }
 
@@ -454,7 +372,7 @@ impl ToolchainManager {
             return Ok(None);
         };
         if cache.schema != CATALOG_CACHE_SCHEMA
-            || cache.vendor != "temurin"
+            || cache.provider != self.provider.id()
             || cache.os != platform_os()
             || cache.architecture != platform_arch()
         {
@@ -494,7 +412,8 @@ impl ToolchainManager {
 
     fn catalog_cache_path(&self) -> PathBuf {
         self.catalog_root.join(format!(
-            "temurin-{}-{}.json",
+            "{}-{}-{}.json",
+            self.provider.id(),
             platform_os(),
             platform_arch()
         ))
@@ -506,6 +425,7 @@ impl ToolchainManager {
     ///
     /// Returns an error for an invalid version or unreadable store.
     pub async fn find(&self, request: &ToolchainRequest) -> Result<Option<ManagedJdk>, BuildError> {
+        request.validate_vendor()?;
         let major = request.major()?;
         Ok(self.list().await?.into_iter().rev().find(|jdk| {
             jdk.vendor == request.vendor
@@ -527,6 +447,7 @@ impl ToolchainManager {
         request: &ToolchainRequest,
         all: bool,
     ) -> Result<Vec<ManagedJdk>, BuildError> {
+        request.validate_vendor()?;
         let major = request.major()?;
         let mut candidates = self
             .list()
@@ -610,7 +531,7 @@ impl ToolchainManager {
         })
     }
 
-    /// Install the latest or exact requested Temurin JDK.
+    /// Install the latest or exact requested JDK distribution.
     ///
     /// # Errors
     ///
@@ -635,12 +556,6 @@ impl ToolchainManager {
         offline: bool,
         progress: Option<&(dyn Fn(u64, Option<u64>) + Send + Sync)>,
     ) -> Result<ManagedJdk, BuildError> {
-        if request.vendor != "temurin" {
-            return Err(BuildError::Invalid(format!(
-                "unsupported JDK vendor `{}`",
-                request.vendor
-            )));
-        }
         if let Some(jdk) = self.find(request).await? {
             return Ok(jdk);
         }
@@ -658,21 +573,29 @@ impl ToolchainManager {
         if let Some(jdk) = self.find(request).await? {
             return Ok(jdk);
         }
-        let asset = self.resolve_asset(request).await?;
+        let artifact = self.resolve_asset(request).await?;
         let install_name = format!(
             "{}-{}-{}-{}",
             request.vendor,
-            sanitize(&asset.version),
+            sanitize(&artifact.release.version),
             platform_os(),
             platform_arch()
         );
         let destination = self.root.join(install_name);
-        let archive = self.root.join(format!(".download-{}", asset.package.name));
-        self.download_verified(&asset.package, &archive, progress)
+        let archive = self.root.join(format!(
+            ".download-{}-{}-{}",
+            artifact.release.vendor,
+            sanitize(&artifact.release.source_id),
+            sanitize(&artifact.release.filename)
+        ));
+        self.download_verified(&artifact, &archive, progress)
             .await?;
-        let extraction = self
-            .root
-            .join(format!(".extract-{}-{}", std::process::id(), asset.major));
+        let extraction = self.root.join(format!(
+            ".extract-{}-{}-{}",
+            std::process::id(),
+            artifact.release.vendor,
+            artifact.release.major
+        ));
         if extraction.exists() {
             fs::remove_dir_all(&extraction)
                 .await
@@ -704,11 +627,11 @@ impl ToolchainManager {
         let _ = fs::remove_file(&archive).await;
         let jdk = ManagedJdk {
             vendor: request.vendor.clone(),
-            version: asset.version,
-            major: asset.major,
+            version: artifact.release.version,
+            major: artifact.release.major,
             os: platform_os().to_owned(),
             architecture: platform_arch().to_owned(),
-            checksum: format!("sha256:{}", asset.package.checksum),
+            checksum: format!("sha256:{}", artifact.checksum_sha256),
             home: destination,
         };
         let metadata = serde_json::to_vec_pretty(&jdk)
@@ -728,96 +651,58 @@ impl ToolchainManager {
         )))
     }
 
-    async fn resolve_asset(&self, request: &ToolchainRequest) -> Result<ResolvedAsset, BuildError> {
-        let mut endpoint = self.api_root.clone();
-        if request.exact() {
-            endpoint
-                .path_segments_mut()
-                .map_err(|()| BuildError::Invalid("invalid JDK API root".to_owned()))?
-                .extend(["assets", "version", &request.version]);
-        } else {
-            let major = request.major()?.to_string();
-            endpoint
-                .path_segments_mut()
-                .map_err(|()| BuildError::Invalid("invalid JDK API root".to_owned()))?
-                .extend(["assets", "latest", &major, "hotspot"]);
-        }
-        let response = self
-            .client
-            .get(endpoint)
-            .query(&[
-                ("architecture", platform_arch()),
-                ("image_type", "jdk"),
-                ("os", platform_os()),
-                ("vendor", "eclipse"),
-            ])
-            .send()
+    async fn resolve_asset(
+        &self,
+        request: &ToolchainRequest,
+    ) -> Result<ResolvedArtifact, BuildError> {
+        self.provider
+            .resolve(
+                &self.client,
+                current_platform(),
+                &request.vendor,
+                &request.version,
+                request.exact(),
+            )
             .await
-            .map_err(metadata_request_error)?
-            .error_for_status()
-            .map_err(metadata_request_error)?;
-        if request.exact() {
-            let releases = response
-                .json::<Vec<ReleaseAsset>>()
-                .await
-                .map_err(|error| BuildError::Invalid(format!("invalid JDK metadata: {error}")))?;
-            let release = releases.into_iter().next().ok_or_else(|| {
-                BuildError::Invalid(format!("no Temurin JDK found for {}", request.version))
-            })?;
-            let package = release.binaries.into_iter().next().ok_or_else(|| {
-                BuildError::Invalid(format!("no Temurin JDK found for {}", request.version))
-            })?;
-            let (version, major) =
-                normalize_release_name(&release.release_name).ok_or_else(|| {
-                    BuildError::Invalid(format!(
-                        "invalid JDK release name `{}`",
-                        release.release_name
-                    ))
-                })?;
-            debug_assert_eq!(major, release.version_data.major);
-            Ok(ResolvedAsset {
-                package: package.package,
-                version,
-                major,
-            })
-        } else {
-            let assets = response
-                .json::<Vec<LatestAsset>>()
-                .await
-                .map_err(|error| BuildError::Invalid(format!("invalid JDK metadata: {error}")))?;
-            let asset = assets.into_iter().next().ok_or_else(|| {
-                BuildError::Invalid(format!("no Temurin JDK found for {}", request.version))
-            })?;
-            let (version, major) =
-                normalize_release_name(&asset.release_name).ok_or_else(|| {
-                    BuildError::Invalid(format!(
-                        "invalid JDK release name `{}`",
-                        asset.release_name
-                    ))
-                })?;
-            debug_assert_eq!(major, asset.version.major);
-            Ok(ResolvedAsset {
-                package: asset.binary.package,
-                version,
-                major,
-            })
-        }
     }
 
     async fn download_verified(
         &self,
-        package: &Package,
+        artifact: &ResolvedArtifact,
         destination: &Path,
         progress: Option<&(dyn Fn(u64, Option<u64>) + Send + Sync)>,
     ) -> Result<(), BuildError> {
-        let response = self
-            .client
-            .get(&package.link)
-            .send()
-            .await
-            .map_err(|error| BuildError::Invalid(format!("JDK download failed: {error}")))?
-            .error_for_status()
-            .map_err(|error| BuildError::Invalid(format!("JDK download failed: {error}")))?;
+        let mut url = artifact.download_url.clone();
+        validate_initial_download_url(&artifact.release.vendor, &url)?;
+        let mut redirects = 0_u8;
+        let response = loop {
+            let response =
+                self.client.get(url.clone()).send().await.map_err(|error| {
+                    BuildError::Invalid(format!("JDK download failed: {error}"))
+                })?;
+            if !response.status().is_redirection() {
+                break response.error_for_status().map_err(|error| {
+                    BuildError::Invalid(format!("JDK download failed: {error}"))
+                })?;
+            }
+            redirects = redirects.saturating_add(1);
+            if redirects > 10 {
+                return Err(BuildError::Invalid(
+                    "JDK download exceeded 10 redirects".to_owned(),
+                ));
+            }
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| {
+                    BuildError::Invalid("JDK download redirect had no valid location".to_owned())
+                })?;
+            url = url.join(location).map_err(|error| {
+                BuildError::Invalid(format!("invalid JDK download redirect: {error}"))
+            })?;
+            validate_redirect_download_url(&artifact.release.vendor, &url)?;
+        };
         let total = response.content_length();
         if let Some(progress) = progress {
             progress(0, total);
@@ -844,11 +729,11 @@ impl ToolchainManager {
             .await
             .map_err(|source| io_error(destination, source))?;
         let actual = hex::encode(hash.finalize());
-        if actual != package.checksum {
+        if actual != artifact.checksum_sha256 {
             let _ = fs::remove_file(destination).await;
             return Err(BuildError::Invalid(format!(
                 "JDK checksum mismatch: expected {}, received {actual}",
-                package.checksum
+                artifact.checksum_sha256
             )));
         }
         Ok(())
@@ -866,17 +751,21 @@ pub async fn resolve(
     auto_install: bool,
     offline: bool,
 ) -> Result<Toolchain, BuildError> {
+    let request = ToolchainRequest {
+        version: request.version.clone(),
+        vendor: normalize_vendor(&request.vendor),
+    };
     let store = ToolchainManager::new(cache_dir)?;
-    if let Some(jdk) = store.find(request).await? {
+    if let Some(jdk) = store.find(&request).await? {
         return managed_toolchain(jdk, request.major()?).await;
     }
     if auto_install {
-        let jdk = store.install(request, offline).await?;
+        let jdk = store.install(&request, offline).await?;
         return managed_toolchain(jdk, request.major()?).await;
     }
     Err(BuildError::Invalid(format!(
-        "JDK {} is not installed; run `jman java install {}`",
-        request.version, request.version
+        "{} JDK {} is not installed; run `jman java install {} --vendor {}`",
+        request.vendor, request.version, request.version, request.vendor
     )))
 }
 
@@ -1012,17 +901,33 @@ fn platform_arch() -> &'static str {
     }
 }
 
-fn normalize_release_name(release: &str) -> Option<(String, u16)> {
-    let version = release
-        .strip_prefix("jdk-")
-        .or_else(|| release.strip_prefix("jdk"))?;
-    let major = version
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect::<String>()
-        .parse()
-        .ok()?;
-    Some((version.to_owned(), major))
+fn platform_libc() -> &'static str {
+    if cfg!(target_os = "linux") {
+        if cfg!(target_env = "musl") {
+            "musl"
+        } else {
+            "glibc"
+        }
+    } else {
+        "libc"
+    }
+}
+
+fn platform_archive_type() -> &'static str {
+    if cfg!(windows) {
+        "zip"
+    } else {
+        "tar.gz"
+    }
+}
+
+fn current_platform() -> Platform<'static> {
+    Platform {
+        os: platform_os(),
+        architecture: platform_arch(),
+        libc: platform_libc(),
+        archive_type: platform_archive_type(),
+    }
 }
 
 fn catalog_result(
@@ -1032,31 +937,30 @@ fn catalog_result(
     source: CatalogSource,
     warning: Option<String>,
 ) -> AvailableCatalog {
-    let lts_majors = cache.lts_majors.iter().copied().collect::<BTreeSet<_>>();
-    let mut seen = BTreeSet::new();
     let mut jdks = cache
-        .pages
+        .releases
         .iter()
-        .flat_map(|page| &page.releases)
-        .filter_map(|release| normalize_release_name(release))
-        .filter(|(_, release_major)| major.is_none_or(|major| *release_major == major))
-        .filter(|(_, release_major)| !lts_only || lts_majors.contains(release_major))
-        .filter(|(version, release_major)| seen.insert((*release_major, version.clone())))
-        .map(|(version, release_major)| AvailableJdk {
-            vendor: "temurin".to_owned(),
-            version,
-            major: release_major,
-            lts: lts_majors.contains(&release_major),
-            os: platform_os().to_owned(),
-            architecture: platform_arch().to_owned(),
+        .filter(|release| major.is_none_or(|major| release.major == major))
+        .filter(|release| !lts_only || release.lts)
+        .map(|release| AvailableJdk {
+            vendor: release.vendor.clone(),
+            version: release.version.clone(),
+            major: release.major,
+            lts: release.lts,
+            os: release.os.clone(),
+            architecture: release.architecture.clone(),
         })
         .collect::<Vec<_>>();
     jdks.sort_by(|left, right| {
-        (right.major, version_key(&right.version)).cmp(&(left.major, version_key(&left.version)))
+        left.vendor.cmp(&right.vendor).then_with(|| {
+            (right.major, version_key(&right.version))
+                .cmp(&(left.major, version_key(&left.version)))
+        })
     });
     AvailableCatalog {
         jdks,
         status: CatalogStatus {
+            provider: cache.provider.clone(),
             source,
             fetched_at: cache.fetched_at,
             warning,
@@ -1066,14 +970,6 @@ fn catalog_result(
 
 fn catalog_is_fresh(cache: &CatalogCache, now: u64) -> bool {
     now.saturating_sub(cache.fetched_at) <= CATALOG_CACHE_TTL.as_secs()
-}
-
-fn response_etag(response: &reqwest::Response) -> Option<String> {
-    response
-        .headers()
-        .get(reqwest::header::ETAG)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned)
 }
 
 fn unix_time() -> u64 {
@@ -1104,12 +1000,6 @@ fn normalize_managed_version(version: &str, major: u16) -> String {
     } else {
         format!("{core}+{encoded_build}")
     }
-}
-
-fn metadata_request_error(error: reqwest::Error) -> BuildError {
-    let message = error.to_string();
-    drop(error);
-    BuildError::Invalid(format!("JDK metadata request failed: {message}"))
 }
 
 fn sanitize(value: &str) -> String {
@@ -1222,14 +1112,15 @@ mod tests {
         assert_eq!(sanitize("17.0.20+8"), "17.0.20_8");
         assert!(version_key("17.0.20+8") > version_key("17.0.9+9"));
         assert!(version_key("21.0.12+8") > version_key("21+35"));
-        assert_eq!(
-            normalize_release_name("jdk-21.0.12+8"),
-            Some(("21.0.12+8".to_owned(), 21))
-        );
-        assert_eq!(
-            normalize_release_name("jdk8u504-b01"),
-            Some(("8u504-b01".to_owned(), 8))
-        );
+        assert_eq!(normalize_vendor("oracle_open_jdk"), "openjdk");
+        assert_eq!(normalize_vendor("tem"), "temurin");
+        assert!(ToolchainRequest {
+            version: "21".to_owned(),
+            vendor: "../../outside".to_owned(),
+        }
+        .validate_vendor()
+        .is_err());
+        assert_eq!(sanitize("../../evil.tar.gz"), ".._.._evil.tar.gz");
         assert_eq!(
             normalize_managed_version("21.0.12+101.0.LTS", 21),
             "21.0.12.1+1"
@@ -1241,25 +1132,95 @@ mod tests {
         assert_eq!(normalize_managed_version("8.0.504+1", 8), "8u504-b01");
     }
 
+    struct StaticProvider;
+
+    impl JdkCatalogProvider for StaticProvider {
+        fn id(&self) -> &'static str {
+            "static-test"
+        }
+
+        fn fetch_catalog<'a>(
+            &'a self,
+            _client: &'a reqwest::Client,
+            platform: Platform<'a>,
+            _validators: Option<&'a CatalogValidators>,
+        ) -> catalog::ProviderFuture<'a, ProviderCatalog> {
+            Box::pin(async move {
+                Ok(ProviderCatalog::Modified {
+                    validators: CatalogValidators {
+                        etag: None,
+                        last_modified: None,
+                    },
+                    releases: vec![CatalogRelease {
+                        vendor: "test-jdk".to_owned(),
+                        version: "21.0.1+1".to_owned(),
+                        major: 21,
+                        lts: true,
+                        os: platform.os.to_owned(),
+                        architecture: platform.architecture.to_owned(),
+                        archive_type: platform.archive_type.to_owned(),
+                        filename: "test-jdk.tar.gz".to_owned(),
+                        source_id: "opaque-test-id".to_owned(),
+                    }],
+                })
+            })
+        }
+
+        fn resolve<'a>(
+            &'a self,
+            _client: &'a reqwest::Client,
+            _platform: Platform<'a>,
+            _vendor: &'a str,
+            _version: &'a str,
+            _exact: bool,
+        ) -> catalog::ProviderFuture<'a, ResolvedArtifact> {
+            Box::pin(async {
+                Err(BuildError::Invalid(
+                    "static provider does not resolve downloads".to_owned(),
+                ))
+            })
+        }
+    }
+
     #[tokio::test]
-    async fn lists_remote_lts_catalog_and_stops_on_missing_page() {
-        let (api_root, server) = catalog_server(vec![
-            MockHttpResponse {
-                expected_path: "/v3/info/available_releases",
-                expected_if_none_match: None,
-                status: 200,
-                etag: Some("\"lts-v1\""),
-                body: r#"{"available_lts_releases":[8,21]}"#,
-            },
-            MockHttpResponse {
-                expected_path: "/v3/info/release_names?",
-                expected_if_none_match: None,
-                status: 200,
-                etag: Some("\"page-v1\""),
-                body: r#"{"releases":["jdk-22.0.1+8","jdk-21.0.2+13","jdk8u402-b06"]}"#,
-            },
-            mock_response("/v3/info/release_names?", 404, r#"{"error":"page"}"#),
+    async fn manager_consumes_the_provider_neutral_catalog_contract() {
+        let cache = tempfile::tempdir().expect("cache");
+        let manager = ToolchainManager::with_provider(cache.path(), Box::new(StaticProvider))
+            .expect("manager");
+
+        let available = manager
+            .available(None, false, false)
+            .await
+            .expect("catalog");
+
+        assert_eq!(available.status.provider, "static-test");
+        assert_eq!(available.jdks[0].vendor, "test-jdk");
+        assert_eq!(available.jdks[0].version, "21.0.1+1");
+        let stored = manager
+            .read_catalog_cache()
+            .await
+            .expect("cache read")
+            .expect("catalog cache");
+        assert_eq!(stored.provider, "static-test");
+        assert_eq!(stored.releases[0].source_id, "opaque-test-id");
+    }
+
+    #[tokio::test]
+    async fn lists_provider_neutral_multivendor_lts_catalog() {
+        let body = foojay_packages(&[
+            foojay_package("tem-22", "temurin", 22, "22.0.1+8", "sts"),
+            foojay_package("open-21", "oracle_open_jdk", 21, "21.0.2+13", "lts"),
+            foojay_package("zulu-8", "zulu", 8, "8.0.402+6", "lts"),
         ]);
+        let (api_root, server) = catalog_server(vec![MockHttpResponse {
+            expected_path: "/v3/packages?",
+            expected_if_none_match: None,
+            expected_if_modified_since: None,
+            status: 200,
+            etag: Some("\"catalog-v1\""),
+            last_modified: Some("Fri, 18 Sep 2026 10:00:00 GMT"),
+            body,
+        }]);
         let cache = tempfile::tempdir().expect("cache");
         let manager = ToolchainManager::with_api_root(cache.path(), &api_root).expect("manager");
 
@@ -1269,10 +1230,11 @@ mod tests {
             available
                 .jdks
                 .iter()
-                .map(|jdk| (jdk.version.as_str(), jdk.major, jdk.lts))
+                .map(|jdk| (jdk.vendor.as_str(), jdk.version.as_str(), jdk.lts))
                 .collect::<Vec<_>>(),
-            [("21.0.2+13", 21, true), ("8u402-b06", 8, true)]
+            [("openjdk", "21.0.2+13", true), ("zulu", "8u402-b06", true)]
         );
+        assert_eq!(available.status.provider, "foojay");
         assert_eq!(available.status.source, CatalogSource::Network);
         server.join().expect("catalog server");
         assert!(manager.catalog_cache_path().is_file());
@@ -1281,8 +1243,8 @@ mod tests {
             .await
             .expect("read cache")
             .expect("stored cache");
-        assert_eq!(stored.lts_etag.as_deref(), Some("\"lts-v1\""));
-        assert_eq!(stored.pages[0].etag.as_deref(), Some("\"page-v1\""));
+        assert_eq!(stored.validators.etag.as_deref(), Some("\"catalog-v1\""));
+        assert_eq!(stored.releases.len(), 3);
 
         let cached = manager
             .available_at(None, true, false, available.status.fetched_at + 1)
@@ -1292,24 +1254,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_revalidates_each_cached_resource_with_etags() {
-        let (api_root, server) = catalog_server(vec![
-            MockHttpResponse {
-                expected_path: "/v3/info/available_releases",
-                expected_if_none_match: Some("\"lts-v1\""),
-                status: 304,
-                etag: None,
-                body: "",
-            },
-            MockHttpResponse {
-                expected_path: "/v3/info/release_names?",
-                expected_if_none_match: Some("\"page-v1\""),
-                status: 304,
-                etag: None,
-                body: "",
-            },
-            mock_response("/v3/info/release_names?", 404, ""),
-        ]);
+    async fn refresh_revalidates_catalog_with_http_validators() {
+        let (api_root, server) = catalog_server(vec![MockHttpResponse {
+            expected_path: "/v3/packages?",
+            expected_if_none_match: Some("\"catalog-v1\""),
+            expected_if_modified_since: Some("Fri, 18 Sep 2026 10:00:00 GMT"),
+            status: 304,
+            etag: None,
+            last_modified: None,
+            body: String::new(),
+        }]);
         let cache_directory = tempfile::tempdir().expect("cache");
         let manager =
             ToolchainManager::with_api_root(cache_directory.path(), &api_root).expect("manager");
@@ -1357,19 +1311,11 @@ mod tests {
 
     #[tokio::test]
     async fn corrupt_cache_is_ignored_and_replaced_from_network() {
-        let (api_root, server) = catalog_server(vec![
-            mock_response(
-                "/v3/info/available_releases",
-                200,
-                r#"{"available_lts_releases":[21]}"#,
-            ),
-            mock_response(
-                "/v3/info/release_names?",
-                200,
-                r#"{"releases":["jdk-21.0.2+13"]}"#,
-            ),
-            mock_response("/v3/info/release_names?", 404, ""),
-        ]);
+        let (api_root, server) = catalog_server(vec![mock_response(
+            "/v3/packages?",
+            200,
+            foojay_packages(&[foojay_package("tem-21", "temurin", 21, "21.0.2+13", "lts")]),
+        )]);
         let cache_directory = tempfile::tempdir().expect("cache");
         let manager =
             ToolchainManager::with_api_root(cache_directory.path(), &api_root).expect("manager");
@@ -1392,17 +1338,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolves_latest_and_exact_adoptium_response_shapes() {
+    async fn resolves_latest_and_exact_foojay_packages_with_sha256() {
+        let checksum = "a".repeat(64);
         let (api_root, server) = catalog_server(vec![
             mock_response(
-                "/v3/assets/latest/21/hotspot?",
+                "/v3/packages?",
                 200,
-                r#"[{"binary":{"package":{"checksum":"latest","link":"https://example.test/latest.tar.gz","name":"latest.tar.gz"}},"release_name":"jdk-21.0.12.1+1","version":{"major":21}}]"#,
+                foojay_packages(&[foojay_package(
+                    "latest",
+                    "temurin",
+                    21,
+                    "21.0.12.1+1",
+                    "lts",
+                )]),
             ),
             mock_response(
-                "/v3/assets/version/8u504-b01?",
+                "/v3/ids/latest",
                 200,
-                r#"[{"binaries":[{"package":{"checksum":"exact","link":"https://example.test/exact.tar.gz","name":"exact.tar.gz"}}],"release_name":"jdk8u504-b01","version_data":{"major":8}}]"#,
+                foojay_info(
+                    "https://github.com/adoptium/temurin21-binaries/releases/download/jdk/archive.tar.gz",
+                    &checksum,
+                ),
+            ),
+            mock_response(
+                "/v3/packages?",
+                200,
+                foojay_packages(&[foojay_package(
+                    "exact",
+                    "temurin",
+                    8,
+                    "8.0.504+1",
+                    "lts",
+                )]),
+            ),
+            mock_response(
+                "/v3/ids/exact",
+                200,
+                foojay_info(
+                    "https://github.com/adoptium/temurin8-binaries/releases/download/jdk/archive.tar.gz",
+                    &checksum,
+                ),
             ),
         ]);
         let cache = tempfile::tempdir().expect("cache");
@@ -1423,8 +1398,15 @@ mod tests {
             .await
             .expect("exact asset");
 
-        assert_eq!((latest.version.as_str(), latest.major), ("21.0.12.1+1", 21));
-        assert_eq!((exact.version.as_str(), exact.major), ("8u504-b01", 8));
+        assert_eq!(
+            (latest.release.version.as_str(), latest.release.major),
+            ("21.0.12.1+1", 21)
+        );
+        assert_eq!(
+            (exact.release.version.as_str(), exact.release.major),
+            ("8u504-b01", 8)
+        );
+        assert_eq!(exact.checksum_sha256, checksum);
         server.join().expect("asset server");
     }
 
@@ -1480,39 +1462,95 @@ mod tests {
     struct MockHttpResponse {
         expected_path: &'static str,
         expected_if_none_match: Option<&'static str>,
+        expected_if_modified_since: Option<&'static str>,
         status: u16,
         etag: Option<&'static str>,
-        body: &'static str,
+        last_modified: Option<&'static str>,
+        body: String,
     }
 
     fn mock_response(
         expected_path: &'static str,
         status: u16,
-        body: &'static str,
+        body: impl Into<String>,
     ) -> MockHttpResponse {
         MockHttpResponse {
             expected_path,
             expected_if_none_match: None,
+            expected_if_modified_since: None,
             status,
             etag: None,
-            body,
+            last_modified: None,
+            body: body.into(),
         }
+    }
+
+    fn foojay_package(
+        id: &str,
+        distribution: &str,
+        major: u16,
+        version: &str,
+        support: &str,
+    ) -> String {
+        format!(
+            r#"{{"id":"{id}","archive_type":"{}","distribution":"{distribution}","major_version":{major},"java_version":"{version}","release_status":"ga","term_of_support":"{support}","operating_system":"{}","lib_c_type":"{}","architecture":"{}","package_type":"jdk","javafx_bundled":false,"directly_downloadable":true,"filename":"{distribution}-{major}.{}","free_use_in_production":true}}"#,
+            platform_archive_type(),
+            if platform_os() == "mac" {
+                "macos"
+            } else {
+                platform_os()
+            },
+            platform_libc(),
+            platform_arch(),
+            platform_archive_type(),
+        )
+    }
+
+    fn foojay_packages(packages: &[String]) -> String {
+        format!(r#"{{"result":[{}]}}"#, packages.join(","))
+    }
+
+    fn foojay_info(url: &str, checksum: &str) -> String {
+        format!(
+            r#"{{"result":[{{"direct_download_uri":"{url}","checksum":"{checksum}","checksum_type":"sha256"}}]}}"#
+        )
     }
 
     fn cached_catalog(fetched_at: u64) -> CatalogCache {
         CatalogCache {
             schema: CATALOG_CACHE_SCHEMA,
             fetched_at,
-            vendor: "temurin".to_owned(),
+            provider: "foojay".to_owned(),
             os: platform_os().to_owned(),
             architecture: platform_arch().to_owned(),
-            lts_etag: Some("\"lts-v1\"".to_owned()),
-            lts_majors: vec![21],
-            pages: vec![CatalogPage {
-                index: 0,
-                etag: Some("\"page-v1\"".to_owned()),
-                releases: vec!["jdk-22.0.1+8".to_owned(), "jdk-21.0.2+13".to_owned()],
-            }],
+            validators: CatalogValidators {
+                etag: Some("\"catalog-v1\"".to_owned()),
+                last_modified: Some("Fri, 18 Sep 2026 10:00:00 GMT".to_owned()),
+            },
+            releases: vec![
+                CatalogRelease {
+                    vendor: "temurin".to_owned(),
+                    version: "22.0.1+8".to_owned(),
+                    major: 22,
+                    lts: false,
+                    os: platform_os().to_owned(),
+                    architecture: platform_arch().to_owned(),
+                    archive_type: platform_archive_type().to_owned(),
+                    filename: "temurin-22.tar.gz".to_owned(),
+                    source_id: "tem-22".to_owned(),
+                },
+                CatalogRelease {
+                    vendor: "openjdk".to_owned(),
+                    version: "21.0.2+13".to_owned(),
+                    major: 21,
+                    lts: true,
+                    os: platform_os().to_owned(),
+                    architecture: platform_arch().to_owned(),
+                    archive_type: platform_archive_type().to_owned(),
+                    filename: "openjdk-21.tar.gz".to_owned(),
+                    source_id: "open-21".to_owned(),
+                },
+            ],
         }
     }
 
@@ -1539,6 +1577,15 @@ mod tests {
                         "missing If-None-Match header: {request}"
                     );
                 }
+                if let Some(modified) = response.expected_if_modified_since {
+                    assert!(
+                        request.to_ascii_lowercase().contains(&format!(
+                            "\r\nif-modified-since: {}\r\n",
+                            modified.to_ascii_lowercase()
+                        )),
+                        "missing If-Modified-Since header: {request}"
+                    );
+                }
                 let reason = match response.status {
                     200 => "OK",
                     304 => "Not Modified",
@@ -1547,9 +1594,12 @@ mod tests {
                 let etag = response
                     .etag
                     .map_or_else(String::new, |etag| format!("ETag: {etag}\r\n"));
+                let last_modified = response
+                    .last_modified
+                    .map_or_else(String::new, |value| format!("Last-Modified: {value}\r\n"));
                 write!(
                     connection,
-                    "HTTP/1.1 {} {reason}\r\n{etag}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    "HTTP/1.1 {} {reason}\r\n{etag}{last_modified}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     response.status,
                     response.body.len(),
                     response.body,

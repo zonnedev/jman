@@ -36,18 +36,24 @@ jman java list                   # installed first, then remotely available JDKs
 jman java list --local           # installed JDKs only; no network access
 jman java list --major 21        # filter one Java feature release
 jman java list --lts             # show only LTS release lines
+jman java list --vendor corretto # filter one distribution
 jman java list --refresh         # revalidate the cached remote catalog
 jman java list --format json     # stable structured output for integrations
-jman java install 21             # install the latest matching Temurin JDK
-jman java use 21                 # pin the current project to Java 21
+jman java install 21             # install Temurin (the default distribution)
+jman java install 21 --vendor zulu
+jman java use 21 --vendor zulu   # pin the project to a distribution and version
 ```
 
-The platform-specific Temurin catalog is cached under
+The platform-specific multi-distribution catalog is discovered through the
+Foojay Disco API and translated into JMAN's provider-neutral model. It is cached under
 `$JMAN_CACHE_DIR/catalog/` (normally `~/.cache/jman/catalog/`) for 15 minutes.
-Expired entries are revalidated with HTTP ETags. If Adoptium is temporarily
+Expired entries are revalidated with HTTP ETags or `Last-Modified`. If Foojay is temporarily
 unreachable, JMAN reports the problem and falls back to the last valid cached
 catalog. `--refresh` bypasses the freshness window while retaining conditional
-ETag requests; `--local` never contacts the network.
+requests; `--local` never contacts the network. Installation resolves the
+vendor archive and SHA-256 digest through the provider, then requires HTTPS and
+checks every download and redirect host against a distribution-scoped allowlist
+before accepting checksum-verified bytes. Temurin remains the default.
 
 The precise supported metadata boundary and release gates are defined in
 [the product contract](docs/product-contract.md). Changes are recorded in the

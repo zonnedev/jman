@@ -5,6 +5,20 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ## [Unreleased]
 
+### Added
+
+- `jman java list` now discovers installable JDKs across audited Foojay
+  distributions, supports `--vendor`, and translates provider metadata into a
+  versioned JMAN catalog model so another provider can be added without changing
+  CLI, cache, manifest, or installer contracts.
+- Java install, use, and remove commands now accept `--vendor`, while preserving
+  Temurin as the default distribution.
+
+### Security
+
+- Managed JDK downloads now require valid SHA-256 metadata, HTTPS, and a
+  distribution-scoped allowlist for the initial vendor URL and every redirect.
+
 ### Fixed
 
 - Go to Declaration on an overriding method now follows its compiler-resolved

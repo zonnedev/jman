@@ -275,12 +275,7 @@ impl Manifest {
                     toolchain.jdk, self.project.java_release
                 )));
             }
-            if toolchain.vendor != "temurin" {
-                return Err(ConfigError::Validation(format!(
-                    "unsupported JDK vendor `{}`; this jman version supports `temurin`",
-                    toolchain.vendor
-                )));
-            }
+            validate_jdk_vendor(&toolchain.vendor)?;
         }
         for coordinate in self
             .dependencies
@@ -446,6 +441,22 @@ fn validate_ga(coordinate: &str) -> Result<(), ConfigError> {
     }
 }
 
+fn validate_jdk_vendor(vendor: &str) -> Result<(), ConfigError> {
+    if !vendor.is_empty()
+        && vendor
+            .bytes()
+            .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || value == b'-')
+        && !vendor.starts_with('-')
+        && !vendor.ends_with('-')
+    {
+        Ok(())
+    } else {
+        Err(ConfigError::Validation(format!(
+            "JDK vendor `{vendor}` must be a lowercase identifier"
+        )))
+    }
+}
+
 fn default_packaging() -> String {
     "jar".to_owned()
 }
@@ -532,6 +543,22 @@ mod tests {
         assert!(matches!(
             manifest.validate(),
             Err(ConfigError::Validation(message)) if message.contains("group:artifact")
+        ));
+    }
+
+    #[test]
+    fn accepts_provider_neutral_vendor_ids_and_rejects_unsafe_values() {
+        let mut manifest = minimal_manifest();
+        manifest.toolchain = Some(Toolchain {
+            jdk: "21".to_owned(),
+            vendor: "future-provider-jdk".to_owned(),
+        });
+        assert!(manifest.validate().is_ok());
+
+        manifest.toolchain.as_mut().expect("toolchain").vendor = "https://example.test".to_owned();
+        assert!(matches!(
+            manifest.validate(),
+            Err(ConfigError::Validation(message)) if message.contains("lowercase identifier")
         ));
     }
 

@@ -260,7 +260,7 @@ struct Java {
 
 #[derive(Debug, Subcommand)]
 enum JavaCommand {
-    /// Download and install a verified Temurin JDK.
+    /// Download and install a verified JDK distribution.
     Install(JavaVersion),
     /// List installed and remotely available JDKs.
     List(JavaList),
@@ -283,6 +283,9 @@ struct JavaList {
     /// List only long-term-support releases.
     #[arg(long)]
     lts: bool,
+    /// List only this JDK distribution.
+    #[arg(long)]
+    vendor: Option<String>,
     /// Revalidate the remote catalog even when the cache is still fresh.
     #[arg(long, conflicts_with = "local")]
     refresh: bool,
@@ -295,6 +298,9 @@ struct JavaList {
 struct JavaVersion {
     /// JDK major or exact version, such as 17 or 17.0.20+8.
     version: String,
+    /// JDK distribution to install.
+    #[arg(long, default_value = "temurin")]
+    vendor: String,
     /// Resolve only from installed JDKs.
     #[arg(long)]
     offline: bool,
@@ -304,6 +310,9 @@ struct JavaVersion {
 struct JavaUse {
     /// JDK major or exact version, such as 17 or 17.0.20+8.
     version: String,
+    /// JDK distribution to pin.
+    #[arg(long, default_value = "temurin")]
+    vendor: String,
     /// Project directory.
     #[arg(long, default_value = ".")]
     path: PathBuf,
@@ -313,6 +322,9 @@ struct JavaUse {
 struct JavaRemove {
     /// JDK major or exact installed version.
     version: String,
+    /// JDK distribution to remove.
+    #[arg(long, default_value = "temurin")]
+    vendor: String,
     /// Remove every installed version of the requested major.
     #[arg(long)]
     all: bool,
@@ -891,7 +903,8 @@ async fn java_command(arguments: Java, ui: &Ui) -> Result<()> {
     let manager = ToolchainManager::new(&default_cache_dir())?;
     match arguments.command {
         JavaCommand::Install(arguments) => {
-            let activity = ui.activity(format!("Installing Temurin JDK {}", arguments.version));
+            let vendor = jman_build::toolchain::normalize_vendor(&arguments.vendor);
+            let activity = ui.activity(format!("Installing {vendor} JDK {}", arguments.version));
             let report_download = |downloaded, total| {
                 activity.set_download_progress(downloaded, total);
             };
@@ -899,14 +912,15 @@ async fn java_command(arguments: Java, ui: &Ui) -> Result<()> {
                 .install_with_progress(
                     &ToolchainRequest {
                         version: arguments.version,
-                        vendor: "temurin".to_owned(),
+                        vendor: vendor.clone(),
                     },
                     arguments.offline,
                     Some(&report_download),
                 )
                 .await?;
             activity.finish(format!(
-                "Installed Temurin {} at {}",
+                "Installed {} {} at {}",
+                jdk.vendor,
                 jdk.version,
                 jdk.home.display()
             ));
@@ -919,17 +933,18 @@ async fn java_command(arguments: Java, ui: &Ui) -> Result<()> {
             let mut manifest = Manifest::read(&path)
                 .with_context(|| format!("could not read {}", path.display()))?;
             let selected_version = arguments.version;
+            let vendor = jman_build::toolchain::normalize_vendor(&arguments.vendor);
             manifest.toolchain = Some(ManifestToolchain {
                 jdk: selected_version.clone(),
-                vendor: "temurin".to_owned(),
+                vendor: vendor.clone(),
             });
             let text = manifest
                 .to_toml()
                 .context("invalid JDK selection for this project")?;
             write_atomically(&path, &text).await?;
             ui.success(format!(
-                "Pinned {} to Temurin JDK {}",
-                manifest.project.name, selected_version
+                "Pinned {} to {} JDK {}",
+                manifest.project.name, vendor, selected_version
             ));
         }
         JavaCommand::Which(arguments) => {
@@ -964,11 +979,16 @@ async fn list_java(
     arguments: JavaList,
     ui: &Ui,
 ) -> Result<()> {
+    let vendor = arguments
+        .vendor
+        .as_deref()
+        .map(jman_build::toolchain::normalize_vendor);
     let installed = manager
         .list()
         .await?
         .into_iter()
         .filter(|jdk| arguments.major.is_none_or(|major| jdk.major == major))
+        .filter(|jdk| vendor.as_ref().is_none_or(|vendor| jdk.vendor == *vendor))
         .filter(|jdk| !arguments.lts || jman_build::toolchain::is_lts_major(jdk.major))
         .collect::<Vec<_>>();
 
@@ -1005,6 +1025,7 @@ async fn list_java(
     let available = catalog
         .jdks
         .into_iter()
+        .filter(|jdk| vendor.as_ref().is_none_or(|vendor| jdk.vendor == *vendor))
         .filter(|jdk| !installed_versions.contains(&(jdk.vendor.as_str(), jdk.version.as_str())))
         .collect::<Vec<_>>();
 
@@ -1112,12 +1133,13 @@ async fn remove_java(
 ) -> Result<()> {
     let request = jman_build::toolchain::ToolchainRequest {
         version: arguments.version,
-        vendor: "temurin".to_owned(),
+        vendor: jman_build::toolchain::normalize_vendor(&arguments.vendor),
     };
     let candidates = manager.removal_candidates(&request, arguments.all).await?;
     if candidates.is_empty() {
         bail!(
-            "no JMAN-managed Temurin JDK {} installation was found",
+            "no JMAN-managed {} JDK {} installation was found",
+            request.vendor,
             request.version
         );
     }
@@ -1127,14 +1149,18 @@ async fn remove_java(
     if arguments.dry_run {
         for jdk in candidates {
             println!(
-                "Would remove Temurin {} at {}",
+                "Would remove {} {} at {}",
+                jdk.vendor,
                 jdk.version,
                 jdk.home.display()
             );
         }
         return Ok(());
     }
-    let activity = ui.activity(format!("Removing Temurin JDK {}", request.version));
+    let activity = ui.activity(format!(
+        "Removing {} JDK {}",
+        request.vendor, request.version
+    ));
     let result = manager.remove(&request, arguments.all).await?;
     activity.finish(format!(
         "Removed {} JDK installation{} and reclaimed {}",
@@ -1160,13 +1186,14 @@ fn protect_pinned_toolchain(
         return Ok(());
     };
     let pin_major = pin.jdk.parse::<u16>().ok();
-    if candidates
-        .iter()
-        .any(|jdk| pin.jdk == jdk.version || pin_major == Some(jdk.major))
-    {
+    if candidates.iter().any(|jdk| {
+        jman_build::toolchain::normalize_vendor(&pin.vendor) == jdk.vendor
+            && (pin.jdk == jdk.version || pin_major == Some(jdk.major))
+    }) {
         bail!(
-            "{} pins Temurin JDK {}; use --force to remove it anyway",
+            "{} pins {} JDK {}; use --force to remove it anyway",
             manifest.project.name,
+            pin.vendor,
             pin.jdk
         );
     }
@@ -1181,7 +1208,7 @@ fn manifest_toolchain_request(
         .as_ref()
         .map(|toolchain| jman_build::toolchain::ToolchainRequest {
             version: toolchain.jdk.clone(),
-            vendor: toolchain.vendor.clone(),
+            vendor: jman_build::toolchain::normalize_vendor(&toolchain.vendor),
         })
 }
 
@@ -2733,6 +2760,8 @@ mod tests {
             "--major",
             "21",
             "--lts",
+            "--vendor",
+            "open",
             "--refresh",
             "--format",
             "json",
@@ -2748,10 +2777,35 @@ mod tests {
         assert!(!arguments.local);
         assert_eq!(arguments.major, Some(21));
         assert!(arguments.lts);
+        assert_eq!(arguments.vendor.as_deref(), Some("open"));
         assert!(arguments.refresh);
         assert_eq!(arguments.format, ReportFormat::Json);
 
         assert!(Cli::try_parse_from(["jman", "java", "list", "--local", "--refresh"]).is_err());
+    }
+
+    #[test]
+    fn java_distribution_defaults_to_temurin_and_accepts_vendor_selection() {
+        let default =
+            Cli::try_parse_from(["jman", "java", "install", "21"]).expect("default distribution");
+        let Command::Java(Java {
+            command: JavaCommand::Install(default),
+        }) = default.command
+        else {
+            panic!("expected java install command");
+        };
+        assert_eq!(default.vendor, "temurin");
+
+        let selected =
+            Cli::try_parse_from(["jman", "java", "install", "21", "--vendor", "corretto"])
+                .expect("selected distribution");
+        let Command::Java(Java {
+            command: JavaCommand::Install(selected),
+        }) = selected.command
+        else {
+            panic!("expected java install command");
+        };
+        assert_eq!(selected.vendor, "corretto");
     }
 
     #[test]
@@ -2774,6 +2828,7 @@ mod tests {
             architecture: "x64".to_owned(),
         };
         let status = jman_build::toolchain::CatalogStatus {
+            provider: "foojay".to_owned(),
             source: jman_build::toolchain::CatalogSource::StaleCache,
             fetched_at: 123,
             warning: Some("offline".to_owned()),
