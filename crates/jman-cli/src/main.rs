@@ -23,8 +23,10 @@ use jman_resolver::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+mod dependency_report;
 mod ui;
 
+use dependency_report::{dependency_path_tree, terminal_text};
 use ui::Ui;
 
 #[derive(Debug, Parser)]
@@ -2805,49 +2807,24 @@ fn dependency_why(arguments: &Why) -> Result<()> {
         "{}:{}:{}",
         manifest.project.group, manifest.project.name, manifest.project.version
     );
-    let packages = lock
-        .packages
-        .iter()
-        .map(|package| (locked_coordinate(package), package))
-        .collect::<BTreeMap<_, _>>();
-    let mut queue = std::collections::VecDeque::new();
-    let mut previous = BTreeMap::<String, String>::new();
-    for dependency in locked_root_dependencies(&lock) {
-        previous.insert(dependency.clone(), root.clone());
-        queue.push_back(dependency);
-    }
-    let found = loop {
-        let Some(coordinate) = queue.pop_front() else {
-            break None;
-        };
-        if coordinate_ga(&coordinate) == arguments.dependency {
-            break Some(coordinate);
-        }
-        if let Some(package) = packages.get(&coordinate) {
-            for child in &package.dependencies {
-                if !previous.contains_key(child) {
-                    previous.insert(child.clone(), coordinate.clone());
-                    queue.push_back(child.clone());
-                }
-            }
-        }
-    };
-    let Some(mut current) = found else {
+    let paths = shortest_dependency_paths(&lock)
+        .into_iter()
+        .filter(|(coordinate, _)| coordinate_ga(coordinate) == arguments.dependency)
+        .flat_map(|(_, paths)| paths)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
         bail!(
             "dependency `{}` is not present in jman.lock",
             arguments.dependency
         );
-    };
-    let mut path = vec![current.clone()];
-    while let Some(parent) = previous.get(&current) {
-        path.push(parent.clone());
-        if parent == &root {
-            break;
-        }
-        parent.clone_into(&mut current);
     }
-    path.reverse();
-    println!("{}", path.join(" -> "));
+    println!(
+        "Dependency paths for {}:\n{}",
+        terminal_text(&arguments.dependency),
+        dependency_path_tree(&root, &paths, "")
+    );
     Ok(())
 }
 
@@ -3822,12 +3799,30 @@ fn audit_paths_for_lock(
     lock: &Lockfile,
     module: &str,
 ) -> BTreeMap<String, BTreeSet<AuditDependencyPath>> {
+    shortest_dependency_paths(lock)
+        .into_iter()
+        .map(|(coordinate, paths)| {
+            (
+                coordinate,
+                paths
+                    .into_iter()
+                    .map(|coordinates| AuditDependencyPath {
+                        module: module.to_owned(),
+                        coordinates,
+                    })
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn shortest_dependency_paths(lock: &Lockfile) -> BTreeMap<String, BTreeSet<Vec<String>>> {
     let packages = lock
         .packages
         .iter()
         .map(|package| (locked_coordinate(package), package))
         .collect::<BTreeMap<_, _>>();
-    let mut paths = BTreeMap::<String, BTreeSet<AuditDependencyPath>>::new();
+    let mut paths = BTreeMap::<String, BTreeSet<Vec<String>>>::new();
     let mut queue = std::collections::VecDeque::new();
     for root in locked_root_dependencies(lock) {
         queue.push_back((root.clone(), vec![root]));
@@ -3845,10 +3840,7 @@ fn audit_paths_for_lock(
         paths
             .entry(coordinate.clone())
             .or_default()
-            .insert(AuditDependencyPath {
-                module: module.to_owned(),
-                coordinates: path.clone(),
-            });
+            .insert(path.clone());
         let Some(package) = packages.get(&coordinate) else {
             continue;
         };
@@ -3993,16 +3985,25 @@ fn print_dependency_audit(report: &DependencyAuditReport) {
                     .join(", ")
             );
         }
-        for path in &finding.paths {
-            println!(
-                "  via {}: {}",
-                terminal_text(&path.module),
-                path.coordinates
-                    .iter()
-                    .map(|coordinate| terminal_text(coordinate))
-                    .collect::<Vec<_>>()
-                    .join(" → ")
-            );
+        if !finding.paths.is_empty() {
+            let mut module_paths = BTreeMap::<&str, BTreeSet<Vec<String>>>::new();
+            for path in &finding.paths {
+                module_paths
+                    .entry(&path.module)
+                    .or_default()
+                    .insert(path.coordinates.clone());
+            }
+            println!("  dependency paths:");
+            for (module, paths) in module_paths {
+                println!(
+                    "{}",
+                    dependency_path_tree(
+                        &format!("module {module}"),
+                        &paths.into_iter().collect::<Vec<_>>(),
+                        "    "
+                    )
+                );
+            }
         }
         if let Some(suppression) = &finding.suppression {
             println!(
@@ -4020,19 +4021,6 @@ fn print_dependency_audit(report: &DependencyAuditReport) {
         "{} active, {} suppressed, {} reported ({} total)",
         report.active, report.suppressed, report.reported_findings, report.total_findings
     );
-}
-
-fn terminal_text(value: &str) -> String {
-    value
-        .chars()
-        .map(|character| {
-            if character.is_control() {
-                ' '
-            } else {
-                character
-            }
-        })
-        .collect()
 }
 
 fn utc_date() -> String {
@@ -5214,7 +5202,7 @@ mod tests {
     }
 
     #[test]
-    fn audit_reports_shortest_transitive_dependency_paths() {
+    fn dependency_reports_keep_every_shortest_transitive_path() {
         let package = |artifact: &str, dependencies: Vec<String>, selected_parent: Option<&str>| {
             LockedPackage {
                 group: "org.example".to_owned(),
@@ -5239,21 +5227,20 @@ mod tests {
             platform: "fixture".to_owned(),
             toolchain: LockedToolchain { java_release: 21 },
             packages: vec![
-                package("root", vec![child.clone()], None),
-                package("child", Vec::new(), Some("org.example:root:1")),
+                package("root-a", vec![child.clone()], None),
+                package("root-b", vec![child.clone()], None),
+                package("child", Vec::new(), Some("org.example:root-a:1")),
             ],
             classpath: LockedClasspaths::default(),
         };
-        let paths = audit_paths_for_lock(&lock, "app");
-        let child_path = paths
-            .get(&child)
-            .expect("child path")
-            .iter()
-            .next()
-            .expect("one path");
+        let paths = shortest_dependency_paths(&lock);
+        let child_paths = paths.get(&child).expect("child paths");
         assert_eq!(
-            child_path.coordinates,
-            ["org.example:root:1", "org.example:child:1"]
+            child_paths,
+            &BTreeSet::from([
+                vec!["org.example:root-a:1".to_owned(), child.clone()],
+                vec!["org.example:root-b:1".to_owned(), child],
+            ])
         );
     }
 
@@ -5312,11 +5299,6 @@ mod tests {
     fn audit_calendar_conversion_is_stable() {
         assert_eq!(civil_date_from_unix_days(0), (1970, 1, 1));
         assert_eq!(civil_date_from_unix_days(20_350), (2025, 9, 19));
-    }
-
-    #[test]
-    fn audit_human_output_neutralizes_terminal_control_characters() {
-        assert_eq!(terminal_text("safe\u{1b}[31m\ntext"), "safe [31m text");
     }
 
     #[test]

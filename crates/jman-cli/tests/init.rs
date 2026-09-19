@@ -468,6 +468,24 @@ expires = "2999-12-31"
     assert_eq!(report["findings"][0]["active"], false);
     assert_eq!(report["findings"][1]["paths"][0]["module"], "audit-demo");
 
+    let human = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .env("JMAN_AUDIT_OSV_URL", format!("http://{address}"))
+        .args([
+            "audit",
+            project.path().to_str().expect("UTF-8 path"),
+            "--offline",
+        ])
+        .output()
+        .expect("human offline audit");
+    assert!(
+        human.status.success(),
+        "{}",
+        String::from_utf8_lossy(&human.stderr)
+    );
+    assert!(String::from_utf8_lossy(&human.stdout)
+        .contains("  dependency paths:\n    module audit-demo\n    └── org.example:library:1.0.0"));
+
     let offline = Command::new(env!("CARGO_BIN_EXE_jman"))
         .env("JMAN_CACHE_DIR", cache.path())
         .env("JMAN_AUDIT_OSV_URL", format!("http://{address}"))
@@ -1664,8 +1682,9 @@ fn native_dependency_commands_work_without_maven_poms() {
         .output()
         .expect("why");
     assert!(why.status.success());
-    assert!(String::from_utf8_lossy(&why.stdout)
-        .contains("com.example:demo:1 -> org.example:library:1"));
+    assert!(String::from_utf8_lossy(&why.stdout).contains(
+        "Dependency paths for org.example:library:\ncom.example:demo:1\n└── org.example:library:1"
+    ));
 
     let remove = Command::new(binary)
         .env("JMAN_CACHE_DIR", cache.path())

@@ -130,6 +130,12 @@ offline operation, CI policy thresholds, and validated reasoned suppressions
 with mandatory expiry dates. See [security auditing](docs/security-auditing.md)
 for the provider, severity, cache, and suppression contracts.
 
+Human dependency explanations use merged trees instead of flattened arrow
+chains. `jman why group:artifact` renders every shortest route from the project
+to the selected dependency, while each audit finding groups its shortest routes
+under the affected workspace module. JSON reports retain explicit path arrays
+for programmatic consumers.
+
 ## Development
 
 Use `make gates` for the complete local acceptance suite, `cargo test

@@ -46,6 +46,13 @@ Versioning while it approaches a stable 0.3.0 release.
   with an installed marker. The default shows the latest release per vendor,
   while `--all` exposes the complete matching catalog.
 
+### Changed
+
+- Human dependency paths in `jman why` and `jman audit` now render as
+  deterministic trees with merged common prefixes. `jman why` includes every
+  shortest route, and audit trees are grouped by workspace module; structured
+  JSON path data is unchanged.
+
 ### Security
 
 - Managed JDK downloads now require valid SHA-256 metadata, HTTPS, and a

@@ -23,7 +23,8 @@ and reviewable CI policy. Supported levels are `unknown`, `low`, `medium`,
 
 Each finding includes its resolved Maven coordinate, advisory identifiers,
 summary, normalized severity, known fixed versions, references, and the
-shortest dependency path from each affected workspace module. JSON output is
+shortest dependency path from each affected workspace module. Human output
+merges common path prefixes into module-rooted dependency trees; JSON output is
 stable and includes counters for total, displayed, active, suppressed, and
 policy-denied findings.
 
