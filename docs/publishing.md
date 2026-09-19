@@ -95,3 +95,11 @@ timeout is five minutes and can be changed with `--timeout-seconds`.
 
 Remote publication refuses a dirty Git worktree by default. Use
 `--allow-dirty` only when the exact uncommitted contents are intentional.
+
+## Interoperability acceptance test
+
+Run `make test-publishing` to publish the repository fixture into an isolated
+local Maven repository and consume it through independent JMAN, Maven, and
+Gradle applications. The test verifies source and Javadoc artifacts, every
+checksum sidecar, generated transitive POM metadata, dependency resolution,
+compilation, and runtime classpaths.

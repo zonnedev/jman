@@ -1,0 +1,29 @@
+manifest-version = 1
+
+[project]
+group = "io.github.zonnedev.jman.fixture"
+name = "publishing-fixture"
+version = "1.0.0"
+java-release = 17
+packaging = "pom"
+modules = ["api", "library"]
+
+[publishing]
+name = "JMAN Publishing Acceptance Fixture"
+description = "Validates repository interoperability across Java build tools"
+url = "https://github.com/zonnedev/jman"
+
+[[publishing.licenses]]
+name = "Apache-2.0"
+url = "https://www.apache.org/licenses/LICENSE-2.0.txt"
+distribution = "repo"
+
+[[publishing.developers]]
+id = "zonnedev"
+name = "ZonneDev"
+
+[publishing.scm]
+connection = "scm:git:https://github.com/zonnedev/jman.git"
+developer-connection = "scm:git:ssh://git@github.com/zonnedev/jman.git"
+url = "https://github.com/zonnedev/jman"
+tag = "HEAD"

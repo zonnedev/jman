@@ -1,0 +1,16 @@
+manifest-version = 1
+
+[project]
+group = "io.github.zonnedev.jman.fixture.consumer"
+name = "jman-consumer"
+version = "1.0.0"
+java-release = 17
+packaging = "jar"
+main-class = "io.github.zonnedev.jman.fixture.consumer.Application"
+
+[[repositories]]
+id = "publishing-acceptance"
+url = "@PUBLISHING_REPOSITORY@"
+
+[dependencies.compile]
+"io.github.zonnedev.jman.fixture:greeting-library" = "1.0.0"

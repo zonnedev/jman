@@ -1,0 +1,8 @@
+manifest-version = 1
+
+[project]
+group = "io.github.zonnedev.jman.fixture"
+name = "greeting-api"
+version = "1.0.0"
+java-release = 17
+packaging = "jar"

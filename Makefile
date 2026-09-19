@@ -7,11 +7,11 @@ NATIVE_FRONTEND_INPUTS := \
 	scripts/build-native.sh \
 	scripts/use-sdkman-java.sh
 
-.PHONY: gates ci test test-rust test-java test-jman-runner test-processor-worker vineflower test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-micronaut-correctness test-vscode-extension test-neovim-plugin test-release-automation package-vscode release stage-release native test-native clean clear
+.PHONY: gates ci test test-rust test-java test-jman-runner test-processor-worker vineflower test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-micronaut-correctness test-vscode-extension test-neovim-plugin test-release-automation package-vscode release stage-release native test-native clean clear
 
-gates: test test-native test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-real-semantics test-lsp test-vscode-extension test-neovim-plugin
+gates: test test-native test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-vscode-extension test-neovim-plugin
 
-ci: test test-native test-vscode-extension test-release-automation
+ci: test test-native test-publishing test-vscode-extension test-release-automation
 
 test: test-rust test-java test-jman-runner
 
@@ -56,6 +56,12 @@ test-project-importers: test-java test-maven-import test-gradle-import
 		"$(CURDIR)/target/reusable-petclinic-gradle.ndjson"
 	grep -q '"buildSystem":"maven"' "$(CURDIR)/target/reusable-petclinic-maven.ndjson"
 	grep -q '"buildSystem":"gradle"' "$(CURDIR)/target/reusable-petclinic-gradle.ndjson"
+
+test-publishing: $(DEBUG_NATIVE_FRONTEND) vineflower
+	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
+	LD_LIBRARY_PATH="$(CURDIR)/target/native$${LD_LIBRARY_PATH:+:$${LD_LIBRARY_PATH}}" \
+	cargo build -p jman-cli
+	./scripts/test-publishing.sh
 
 native: $(NATIVE_FRONTEND)
 

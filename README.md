@@ -47,6 +47,9 @@ Publishing creates deterministic thin, source, and Javadoc JARs, a standalone
 POM, and Maven-compatible checksums. Central publications are also GPG-signed
 and uploaded as a repository-layout bundle. Credentials are accepted only from
 environment variables; see [the publishing guide](docs/publishing.md).
+The acceptance suite publishes a multi-module fixture into an isolated local
+repository and consumes its transitive API through independent JMAN, Maven, and
+Gradle applications.
 
 Manage Java toolchains directly through JMAN:
 

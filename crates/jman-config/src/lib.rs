@@ -86,7 +86,7 @@ pub struct MavenCompatibility {
     pub bom_imports: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct MavenDependencyMetadata {
     #[serde(default = "default_dependency_type", skip_serializing_if = "is_jar")]
@@ -97,6 +97,17 @@ pub struct MavenDependencyMetadata {
     pub optional: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclusions: Vec<String>,
+}
+
+impl Default for MavenDependencyMetadata {
+    fn default() -> Self {
+        Self {
+            dependency_type: default_dependency_type(),
+            classifier: None,
+            optional: false,
+            exclusions: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -706,6 +717,13 @@ mod tests {
             manifest.validate(),
             Err(ConfigError::Validation(message)) if message.contains("developers")
         ));
+    }
+
+    #[test]
+    fn programmatic_maven_dependency_metadata_defaults_to_jar() {
+        let metadata = MavenDependencyMetadata::default();
+        assert_eq!(metadata.dependency_type, "jar");
+        assert_eq!(metadata, toml::from_str("").expect("default metadata"));
     }
 
     fn minimal_manifest() -> Manifest {

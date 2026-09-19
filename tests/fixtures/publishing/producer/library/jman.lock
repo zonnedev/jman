@@ -1,0 +1,9 @@
+lock-version = 3
+manifest-hash = "sha256:publishing-acceptance-library"
+workspace-hash = "sha256:publishing-acceptance"
+platform = "acceptance"
+
+[toolchain]
+java-release = 17
+
+[classpath]
