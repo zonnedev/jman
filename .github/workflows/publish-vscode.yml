@@ -77,11 +77,16 @@ jobs:
           '
           printf 'VSIX_PATH=%s\n' "${package}" >> "${GITHUB_ENV}"
 
-      - name: Publish pre-release to Visual Studio Marketplace
+      - name: Publish to Visual Studio Marketplace
         working-directory: editors/vscode
-        run: >-
-          npx vsce publish
-          --packagePath "${GITHUB_WORKSPACE}/${VSIX_PATH}"
-          --pre-release
-          --azure-credential
-          --skip-duplicate
+        run: |
+          publish_args=(
+            publish
+            --packagePath "${GITHUB_WORKSPACE}/${VSIX_PATH}"
+            --azure-credential
+            --skip-duplicate
+          )
+          if [[ "${RELEASE_TAG#v}" == *-* ]]; then
+            publish_args+=(--pre-release)
+          fi
+          npx vsce "${publish_args[@]}"

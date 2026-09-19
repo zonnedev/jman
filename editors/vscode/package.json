@@ -2,10 +2,10 @@
   "name": "jman-java",
   "displayName": "JMAN Java",
   "description": "Native Java language support for JMAN, Maven, and Gradle projects",
-  "version": "0.3.2",
+  "version": "0.5.0",
   "publisher": "zonnedev",
   "author": "ZonneDev",
-  "preview": true,
+  "preview": false,
   "pricing": "Free",
   "icon": "images/jman.png",
   "galleryBanner": {
@@ -160,7 +160,7 @@
     "check:release": "node test/release.test.js",
     "bundle": "esbuild extension.js --bundle --platform=node --external:vscode --outfile=dist/extension.js",
     "vscode:prepublish": "npm run check && npm run bundle && npm run check:release",
-    "package": "vsce package --target linux-x64 --pre-release --no-dependencies"
+    "package": "vsce package --target linux-x64 --no-dependencies"
   },
   "dependencies": {
     "vscode-languageclient": "^10.1.1",

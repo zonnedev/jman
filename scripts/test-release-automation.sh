@@ -122,6 +122,10 @@ done < <(sed -n 's/^[[:space:]]*uses:[[:space:]]*\([^ #]*\).*/\1/p' "${workflow_
 grep -q 'azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43' \
   "${workflow_dir}/publish-vscode.yml"
 grep -q -- '--azure-credential' "${workflow_dir}/publish-vscode.yml"
+grep -q 'RELEASE_TAG#v' "${workflow_dir}/publish-vscode.yml"
+grep -q 'publish_args+=(--pre-release)' "${workflow_dir}/publish-vscode.yml"
+grep -q 'release_tag="${RELEASE_TAG:-}"' "${project_dir}/scripts/package-vscode.sh"
+grep -q 'package_flags+=(--pre-release)' "${project_dir}/scripts/package-vscode.sh"
 grep -q 'environment: vscode-marketplace' \
   "${workflow_dir}/verify-vscode-marketplace-identity.yml"
 grep -q 'vsce verify-pat --azure-credential zonnedev' \

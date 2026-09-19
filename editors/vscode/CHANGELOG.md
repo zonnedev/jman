@@ -4,6 +4,20 @@ All notable changes to the JMAN Java extension are documented here.
 
 ## Unreleased
 
+## 0.5.0 - 2026-09-20
+
+### Added
+
+- Bundled JMAN 0.5.0 with repository-backed dependency maintenance,
+  vulnerability auditing, Maven-compatible publication, live hierarchical test
+  reporting, generic annotation-processor semantics, and expanded Java
+  navigation.
+
+### Changed
+
+- Promoted JMAN Java from the Marketplace pre-release channel to the stable
+  channel.
+
 ## 0.3.2 - 2026-09-18
 
 ### Fixed

@@ -10,7 +10,7 @@ const manifest = require(path.join(extensionRoot, "package.json"));
 assert.equal(manifest.publisher, "zonnedev");
 assert.equal(manifest.name, "jman-java");
 assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
-assert.equal(manifest.preview, true);
+assert.equal(manifest.preview, false);
 assert.equal(manifest.pricing, "Free");
 assert.deepEqual(manifest.extensionKind, ["workspace"]);
 assert.equal(manifest.capabilities.untrustedWorkspaces.supported, false);
@@ -45,7 +45,7 @@ assert.equal(
 
 assert.equal(
   manifest.scripts.package,
-  "vsce package --target linux-x64 --pre-release --no-dependencies",
+  "vsce package --target linux-x64 --no-dependencies",
 );
 assert.ok(!Object.values(manifest.scripts).some((script) => script.includes("vsce publish")));
 

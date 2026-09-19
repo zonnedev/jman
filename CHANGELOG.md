@@ -5,6 +5,8 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-20
+
 ### Added
 
 - `jman audit` now scans the complete locked Maven graph through a
@@ -65,6 +67,11 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ### Fixed
 
+- The Neovim client now treats LSP JSON `null` values as absent data instead of
+  indexing Neovim's `vim.NIL` sentinel in status and command callbacks.
+- Neovim Gradle workspace discovery now prefers the enclosing settings or
+  wrapper root over nested module build files, preserving the project wrapper
+  and compatible build JDK in multi-module builds.
 - Fat JAR packaging now merges line registries, property registries, and
   list-valued property registries deterministically. This preserves service and
   framework discovery metadata when dependencies contribute the same resource,

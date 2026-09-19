@@ -1,8 +1,9 @@
 # VS Code extension release checklist
 
-JMAN Java releases are prepared as platform-specific VSIX packages. The first
-public channel is a Linux x64 pre-release; do not upload it as a universal
-extension.
+JMAN Java releases are prepared as platform-specific VSIX packages. Stable
+release tags publish to the stable Marketplace channel, while tags with a
+prerelease suffix publish to the pre-release channel. Do not upload either as a
+universal extension.
 
 ## Build and verify
 
@@ -10,7 +11,7 @@ From a clean reviewed checkout on Linux x86-64:
 
 ```bash
 make package-vscode
-(cd target/vscode && sha256sum --check jman-java-0.3.2-linux-x64.vsix.sha256)
+(cd target/vscode && sha256sum --check jman-java-0.5.0-linux-x64.vsix.sha256)
 ```
 
 The packaging command rebuilds the native frontend, Java workers, bundled JMAN
@@ -31,13 +32,13 @@ mkdir -p /tmp/jman-vscode-profile /tmp/jman-vscode-extensions
 code \
   --user-data-dir /tmp/jman-vscode-profile \
   --extensions-dir /tmp/jman-vscode-extensions \
-  --install-extension target/vscode/jman-java-0.3.2-linux-x64.vsix
+  --install-extension target/vscode/jman-java-0.5.0-linux-x64.vsix
 ```
 
 Launch VS Code with the same two directory arguments and verify:
 
-1. The extension is labeled as a pre-release and displays the expected icon,
-   README, changelog, license, and platform support statement.
+1. The extension displays the expected version, icon, README, changelog,
+   license, and platform support statement.
 2. It remains disabled until the workspace is trusted.
 3. A JMAN project starts the bundled server and reports `jman` as its build
    system through **JMAN Java: Show Status**.
@@ -62,9 +63,9 @@ other server for the remainder of acceptance testing.
 2. Open **Actions → Publish VS Code Marketplace → Run workflow** and enter the
    GitHub Release tag that contains the reviewed package.
 3. Approve the protected `vscode-marketplace` environment deployment.
-4. Confirm the listing is a pre-release for Linux x64, not a universal stable
-   release, and review its rendered README, icon, links, license, pricing,
-   support details, and installation controls.
+4. Confirm the listing uses the channel implied by the release tag and targets
+   Linux x64 rather than a universal package. Review its rendered README, icon,
+   links, license, pricing, support details, and installation controls.
 5. Install the Marketplace copy into the clean profile and repeat the startup,
    status, completion, and test-discovery smoke checks.
 

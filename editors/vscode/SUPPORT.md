@@ -2,7 +2,7 @@
 
 ## Before opening an issue
 
-1. Update to the latest JMAN Java pre-release.
+1. Update to the latest JMAN Java release.
 2. Run **JMAN Java: Show Status** from the Command Palette.
 3. Check **View → Output → JMAN Java** for startup, synchronization, or protocol
    errors.

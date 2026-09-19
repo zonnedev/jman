@@ -9,6 +9,17 @@ native_dir="${project_dir}/target/native"
 native_library="${native_dir}/libjman_javac_frontend.so"
 extension_version="$(node -p 'require(process.argv[1]).version' "${extension_dir}/package.json")"
 target_platform="linux-x64"
+release_tag="${RELEASE_TAG:-}"
+channel="stable"
+package_flags=(
+  --target "${target_platform}"
+  --no-dependencies
+  --out "${output_dir}/jman-java-${extension_version}-${target_platform}.vsix"
+)
+if [[ "${release_tag#v}" == *-* ]]; then
+  channel="pre-release"
+  package_flags+=(--pre-release)
+fi
 
 if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
   printf 'JMAN Java %s must be built on Linux x86-64, got %s %s\n' \
@@ -48,11 +59,7 @@ jar --create \
 (
   cd "${extension_dir}"
   npm ci
-  npx vsce package \
-    --target "${target_platform}" \
-    --pre-release \
-    --no-dependencies \
-    --out "${output_dir}/jman-java-${extension_version}-${target_platform}.vsix"
+  npx vsce package "${package_flags[@]}"
 )
 
 package="${output_dir}/jman-java-${extension_version}-${target_platform}.vsix"
@@ -65,5 +72,5 @@ unzip -tq "${package}"
   sha256sum --check "$(basename "${checksum}")"
 )
 
-printf 'VS Code pre-release package: %s\n' "${package}"
+printf 'VS Code %s package: %s\n' "${channel}" "${package}"
 printf 'SHA-256 checksum: %s\n' "${checksum}"

@@ -95,10 +95,11 @@ from test code lenses.
 
 ## Compatibility and limitations
 
-JMAN Java is an early preview. Maven and Gradle model import intentionally does
-not execute arbitrary build plugins inside the language-server process. Rename
-and change-signature operations are conservative, and some framework-generated
-or reflective references may not yet be discovered.
+JMAN Java is under active development. Maven and Gradle model import
+intentionally does not execute arbitrary build plugins inside the
+language-server process. Rename and change-signature operations are
+conservative, and some framework-generated or reflective references may not yet
+be discovered.
 
 Running multiple Java language servers for the same workspace can produce
 duplicate diagnostics, competing code actions, and excess resource usage.

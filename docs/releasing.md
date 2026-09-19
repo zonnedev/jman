@@ -68,8 +68,8 @@ dependency-audit checks against the exact tag.
 Create and push an annotated tag that exactly matches the workspace version:
 
 ```bash
-git tag -a v0.3.0-rc.3 -m "JMAN 0.3.0-rc.3"
-git push origin v0.3.0-rc.3
+git tag -a v0.5.0 -m "JMAN 0.5.0"
+git push origin v0.5.0
 ```
 
 Tags whose version contains a hyphen, such as `-rc.1`, become GitHub
@@ -84,7 +84,7 @@ The Release workflow currently publishes:
 
 - `jman-<version>-linux-x86_64.tar.gz`, containing the CLI, native compiler
   frontend, Java workers, project import support, documentation, and license;
-- `jman-java-<version>-linux-x64.vsix`, the Linux x64 VS Code pre-release;
+- `jman-java-<version>-linux-x64.vsix`, the Linux x64 VS Code extension;
 - `SHA256SUMS`, covering both installable artifacts; and
 - `release-manifest.json`, recording versions, target platforms, filenames, and
   SHA-256 digests.
@@ -95,7 +95,7 @@ After downloading an artifact, verify both controls:
 
 ```bash
 sha256sum --check SHA256SUMS
-gh attestation verify jman-0.3.0-rc.3-linux-x86_64.tar.gz \
+gh attestation verify jman-0.5.0-linux-x86_64.tar.gz \
   --repo zonnedev/jman
 ```
 
@@ -114,9 +114,10 @@ tag, and approve the `vscode-marketplace` environment deployment.
 
 The publishing workflow downloads the already-reviewed VSIX from the GitHub
 Release, verifies it against `SHA256SUMS`, confirms its publisher and extension
-identity, and publishes it through Marketplace trusted publishing. It does not
-rebuild or modify the package. Re-running it is safe because duplicate versions
-are skipped.
+identity, and publishes it through Marketplace trusted publishing. Tags with a
+prerelease suffix publish to the Marketplace pre-release channel; stable tags
+publish to the stable channel. It does not rebuild or modify the package.
+Re-running it is safe because duplicate versions are skipped.
 
 ## Local artifact rehearsal
 
@@ -126,7 +127,7 @@ release:
 ```bash
 make release
 make package-vscode
-make stage-release TAG=v0.3.0-rc.3
+make stage-release TAG=v0.5.0
 (cd target/github-release && sha256sum --check SHA256SUMS)
 ```
 
