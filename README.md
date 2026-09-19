@@ -85,6 +85,22 @@ The precise supported metadata boundary and release gates are defined in
 [the product contract](docs/product-contract.md). Changes are recorded in the
 [changelog](CHANGELOG.md).
 
+Inspect direct dependency upgrades without changing the workspace:
+
+```bash
+jman outdated
+jman outdated --include-prerelease
+jman outdated --offline
+jman outdated --format json
+```
+
+Workspace declarations are aggregated by coordinate and current version, while
+local path dependencies are excluded. JMAN reports the newest patch, minor,
+major, and overall update using each module's configured Maven repositories.
+Stable releases are preferred unless prereleases are explicitly requested.
+See [dependency maintenance](docs/dependency-maintenance.md) for the complete
+contract.
+
 ## Development
 
 Use `make gates` for the complete local acceptance suite, `cargo test

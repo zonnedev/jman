@@ -53,6 +53,8 @@ enum Command {
     Add(Add),
     /// Remove a dependency and synchronize the lockfile.
     Remove(Remove),
+    /// Check direct dependencies for newer repository versions.
+    Outdated(Outdated),
     /// Display the resolved dependency tree.
     Tree(ProjectPath),
     /// Explain why a dependency is present.
@@ -154,6 +156,22 @@ struct Remove {
     /// Resolve only from the local dependency cache.
     #[arg(long)]
     offline: bool,
+}
+
+#[derive(Debug, Args)]
+struct Outdated {
+    /// Project directory.
+    #[arg(default_value = ".")]
+    path: PathBuf,
+    /// Use only previously cached Maven metadata.
+    #[arg(long)]
+    offline: bool,
+    /// Include alpha, beta, milestone, release-candidate, and snapshot versions.
+    #[arg(long)]
+    include_prerelease: bool,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = ReportFormat::Human)]
+    format: ReportFormat,
 }
 
 #[derive(Debug, Args)]
@@ -461,6 +479,9 @@ async fn main() {
         }) | Command::Publish(PublishCommand {
             format: ReportFormat::Json,
             ..
+        }) | Command::Outdated(Outdated {
+            format: ReportFormat::Json,
+            ..
         })
     );
     let ui = Ui::new(cli.quiet, cli.verbose, cli.no_progress, structured);
@@ -476,6 +497,7 @@ async fn run(cli: Cli, ui: &Ui) -> Result<()> {
         Command::Sync(sync) => sync_project(&sync, ui).await,
         Command::Add(add) => add_dependency(&add, ui).await,
         Command::Remove(remove) => remove_dependency(&remove, ui).await,
+        Command::Outdated(arguments) => outdated_dependencies(&arguments, ui).await,
         Command::Tree(arguments) => dependency_tree(&arguments.path),
         Command::Why(arguments) => dependency_why(&arguments),
         Command::Check(arguments) => compile_project(&arguments, ui, "Checking", "Checked").await,
@@ -2796,6 +2818,369 @@ fn coordinate_ga(coordinate: &str) -> String {
     )
 }
 
+#[derive(Clone, Debug)]
+struct OutdatedRequest {
+    dependency: String,
+    current: String,
+    scopes: BTreeSet<String>,
+    modules: BTreeSet<String>,
+    repositories: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum OutdatedStatus {
+    Outdated,
+    UpToDate,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OutdatedDependencyReport {
+    dependency: String,
+    current: String,
+    status: OutdatedStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    change: Option<jman_resolver::VersionChange>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    patch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    minor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    major: Option<String>,
+    scopes: Vec<String>,
+    modules: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OutdatedReport {
+    checked: usize,
+    outdated: usize,
+    up_to_date: usize,
+    unavailable: usize,
+    dependencies: Vec<OutdatedDependencyReport>,
+}
+
+async fn outdated_dependencies(arguments: &Outdated, ui: &Ui) -> Result<()> {
+    let target = absolute_path(&arguments.path)?;
+    if !target.join("jman.toml").is_file() {
+        bail!(
+            "cannot inspect {}: jman.toml was not found",
+            target.display()
+        );
+    }
+    let workspace_root = find_workspace_root(&target);
+    let requests = collect_outdated_requests(&workspace_root).await?;
+    let activity = ui.activity(format!(
+        "Checking {} direct dependenc{}",
+        requests.len(),
+        if requests.len() == 1 { "y" } else { "ies" }
+    ));
+    let checks = requests.into_values().map(|request| async move {
+        check_outdated_dependency(request, arguments.offline, arguments.include_prerelease).await
+    });
+    let mut dependencies = stream::iter(checks)
+        .buffer_unordered(8)
+        .collect::<Vec<_>>()
+        .await;
+    dependencies.sort_by(|left, right| {
+        (&left.dependency, &left.current).cmp(&(&right.dependency, &right.current))
+    });
+    let outdated = dependencies
+        .iter()
+        .filter(|dependency| dependency.status == OutdatedStatus::Outdated)
+        .count();
+    let up_to_date = dependencies
+        .iter()
+        .filter(|dependency| dependency.status == OutdatedStatus::UpToDate)
+        .count();
+    let unavailable = dependencies
+        .iter()
+        .filter(|dependency| dependency.status == OutdatedStatus::Unavailable)
+        .count();
+    let report = OutdatedReport {
+        checked: dependencies.len(),
+        outdated,
+        up_to_date,
+        unavailable,
+        dependencies,
+    };
+    activity.finish(format!("Checked {} direct dependencies", report.checked));
+    match arguments.format {
+        ReportFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+        ReportFormat::Human => print_outdated_report(&report, ui),
+    }
+    Ok(())
+}
+
+async fn collect_outdated_requests(
+    root: &Path,
+) -> Result<BTreeMap<(String, String), OutdatedRequest>> {
+    let directories = workspace_directories(root).await?;
+    let mut requests = BTreeMap::new();
+    for directory in directories {
+        let manifest_path = directory.join("jman.toml");
+        let manifest = Manifest::read(&manifest_path)
+            .with_context(|| format!("could not read {}", manifest_path.display()))?;
+        let workspace_dependencies = manifest
+            .path_dependencies
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        for (scope, dependencies) in [
+            ("compile", &manifest.dependencies.compile),
+            ("runtime", &manifest.dependencies.runtime),
+            ("provided", &manifest.dependencies.provided),
+            ("test", &manifest.dependencies.test),
+            ("processor", &manifest.annotation_processors),
+        ] {
+            for (dependency, current) in dependencies {
+                if workspace_dependencies.contains(dependency.as_str()) {
+                    continue;
+                }
+                let key = (dependency.clone(), current.clone());
+                let request = requests.entry(key).or_insert_with(|| OutdatedRequest {
+                    dependency: dependency.clone(),
+                    current: current.clone(),
+                    scopes: BTreeSet::new(),
+                    modules: BTreeSet::new(),
+                    repositories: Vec::new(),
+                });
+                request.scopes.insert(scope.to_owned());
+                request.modules.insert(manifest.project.name.clone());
+                if manifest.repositories.is_empty() {
+                    let central = jman_resolver::MAVEN_CENTRAL_URL.to_owned();
+                    if !request.repositories.contains(&central) {
+                        request.repositories.push(central);
+                    }
+                } else {
+                    for repository in &manifest.repositories {
+                        if !request.repositories.contains(&repository.url) {
+                            request.repositories.push(repository.url.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(requests)
+}
+
+async fn check_outdated_dependency(
+    request: OutdatedRequest,
+    offline: bool,
+    include_prerelease: bool,
+) -> OutdatedDependencyReport {
+    let result = async {
+        let (group, artifact) = split_ga(&request.dependency)?;
+        validate_outdated_version(&request.current)?;
+        let repository =
+            RepositoryClient::with_default_cache_mode(request.repositories.clone(), offline)
+                .context("could not initialize Maven repositories")?;
+        let catalog = repository
+            .available_versions(group, artifact)
+            .await
+            .context("could not load Maven version metadata")?;
+        let mut versions = catalog.versions;
+        for advertised in [catalog.release, catalog.latest].into_iter().flatten() {
+            if !versions.contains(&advertised) {
+                versions.push(advertised);
+            }
+        }
+        let updates =
+            jman_resolver::analyze_versions(&request.current, &versions, include_prerelease);
+        Ok::<_, anyhow::Error>((updates, catalog.source))
+    }
+    .await;
+    let scopes = request.scopes.into_iter().collect();
+    let modules = request.modules.into_iter().collect();
+    match result {
+        Ok((updates, source)) => OutdatedDependencyReport {
+            dependency: request.dependency,
+            current: request.current,
+            status: if updates.latest.is_some() {
+                OutdatedStatus::Outdated
+            } else {
+                OutdatedStatus::UpToDate
+            },
+            latest: updates.latest,
+            change: updates.change,
+            patch: updates.patch,
+            minor: updates.minor,
+            major: updates.major,
+            scopes,
+            modules,
+            source: Some(redact_repository_source(&source)),
+            error: None,
+        },
+        Err(error) => OutdatedDependencyReport {
+            dependency: request.dependency,
+            current: request.current,
+            status: OutdatedStatus::Unavailable,
+            latest: None,
+            change: None,
+            patch: None,
+            minor: None,
+            major: None,
+            scopes,
+            modules,
+            source: None,
+            error: Some(format!("{error:#}")),
+        },
+    }
+}
+
+fn validate_outdated_version(version: &str) -> Result<()> {
+    let normalized = version.trim().to_ascii_uppercase();
+    if normalized.is_empty()
+        || normalized.contains(['[', ']', '(', ')', ',', '*'])
+        || normalized.ends_with(".+")
+        || normalized.contains("${")
+        || matches!(normalized.as_str(), "LATEST" | "RELEASE")
+    {
+        bail!("dependency version `{version}` is not an exact version");
+    }
+    Ok(())
+}
+
+fn redact_repository_source(source: &str) -> String {
+    let Some((scheme, remainder)) = source.split_once("://") else {
+        return source.to_owned();
+    };
+    let Some((_, host_and_path)) = remainder.rsplit_once('@') else {
+        return source.to_owned();
+    };
+    format!("{scheme}://***@{host_and_path}")
+}
+
+fn print_outdated_report(report: &OutdatedReport, ui: &Ui) {
+    if report.dependencies.is_empty() {
+        println!("No external direct dependencies found.");
+        return;
+    }
+    print!("{}", outdated_table(&report.dependencies));
+    println!();
+    println!(
+        "{} outdated, {} up to date, {} unavailable",
+        report.outdated, report.up_to_date, report.unavailable
+    );
+    for dependency in &report.dependencies {
+        if dependency.source.as_deref() == Some("stale-cache") {
+            ui.warning(format!(
+                "{}: repository metadata was unavailable; using the last cached catalog",
+                dependency.dependency
+            ));
+        }
+        if let Some(error) = &dependency.error {
+            ui.warning(format!("{}: {error}", dependency.dependency));
+        }
+    }
+}
+
+fn outdated_table(dependencies: &[OutdatedDependencyReport]) -> String {
+    let rows = dependencies
+        .iter()
+        .map(|dependency| {
+            let state = match dependency.status {
+                OutdatedStatus::Outdated => {
+                    dependency.change.map_or("other", |change| match change {
+                        jman_resolver::VersionChange::Patch => "patch",
+                        jman_resolver::VersionChange::Minor => "minor",
+                        jman_resolver::VersionChange::Major => "major",
+                        jman_resolver::VersionChange::Other => "other",
+                    })
+                }
+                OutdatedStatus::UpToDate => "current",
+                OutdatedStatus::Unavailable => "unavailable",
+            };
+            [
+                dependency.dependency.clone(),
+                dependency.current.clone(),
+                dependency.latest.clone().unwrap_or_else(|| "-".to_owned()),
+                state.to_owned(),
+                dependency.scopes.join(","),
+                dependency.modules.join(","),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let headers = [
+        "DEPENDENCY",
+        "CURRENT",
+        "LATEST",
+        "CHANGE",
+        "SCOPES",
+        "MODULES",
+    ];
+    let widths = std::array::from_fn::<_, 6, _>(|index| {
+        rows.iter()
+            .map(|row| row[index].chars().count())
+            .max()
+            .unwrap_or_default()
+            .max(headers[index].len())
+    });
+    let mut output = String::new();
+    writeln!(
+        output,
+        "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {:<w4$}  {}",
+        headers[0],
+        headers[1],
+        headers[2],
+        headers[3],
+        headers[4],
+        headers[5],
+        w0 = widths[0],
+        w1 = widths[1],
+        w2 = widths[2],
+        w3 = widths[3],
+        w4 = widths[4],
+    )
+    .expect("writing a String cannot fail");
+    writeln!(
+        output,
+        "{:-<w0$}  {:-<w1$}  {:-<w2$}  {:-<w3$}  {:-<w4$}  {:-<w5$}",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        w0 = widths[0],
+        w1 = widths[1],
+        w2 = widths[2],
+        w3 = widths[3],
+        w4 = widths[4],
+        w5 = widths[5],
+    )
+    .expect("writing a String cannot fail");
+    for row in rows {
+        writeln!(
+            output,
+            "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {:<w4$}  {}",
+            row[0],
+            row[1],
+            row[2],
+            row[3],
+            row[4],
+            row[5],
+            w0 = widths[0],
+            w1 = widths[1],
+            w2 = widths[2],
+            w3 = widths[3],
+            w4 = widths[4],
+        )
+        .expect("writing a String cannot fail");
+    }
+    output
+}
+
 async fn sync_project(arguments: &Sync, ui: &Ui) -> Result<()> {
     let target = absolute_path(&arguments.path)?;
     if !target.join("jman.toml").is_file() {
@@ -3748,6 +4133,88 @@ mod tests {
             panic!("expected java install command");
         };
         assert_eq!(selected.vendor, "corretto");
+    }
+
+    #[test]
+    fn outdated_accepts_offline_prerelease_and_json_controls() {
+        let cli = Cli::try_parse_from([
+            "jman",
+            "outdated",
+            "workspace",
+            "--offline",
+            "--include-prerelease",
+            "--format",
+            "json",
+        ])
+        .expect("outdated command");
+        let Command::Outdated(arguments) = cli.command else {
+            panic!("expected outdated command");
+        };
+        assert_eq!(arguments.path, PathBuf::from("workspace"));
+        assert!(arguments.offline);
+        assert!(arguments.include_prerelease);
+        assert_eq!(arguments.format, ReportFormat::Json);
+    }
+
+    #[test]
+    fn outdated_rejects_dynamic_versions_without_guessing() {
+        for version in ["[1,2)", "1.+", "LATEST", "${revision}"] {
+            assert!(validate_outdated_version(version).is_err(), "{version}");
+        }
+        for version in ["1", "1.2.3", "21.0.8+9", "1.0.0.Final"] {
+            assert!(validate_outdated_version(version).is_ok(), "{version}");
+        }
+    }
+
+    #[test]
+    fn outdated_reports_do_not_expose_repository_credentials() {
+        assert_eq!(
+            redact_repository_source("https://user:secret@repo.example/releases"),
+            "https://***@repo.example/releases"
+        );
+        assert_eq!(redact_repository_source("cache"), "cache");
+    }
+
+    #[test]
+    fn outdated_table_distinguishes_updates_current_and_unavailable_metadata() {
+        let dependency = |name: &str,
+                          status: OutdatedStatus,
+                          latest: Option<&str>,
+                          change: Option<jman_resolver::VersionChange>| {
+            OutdatedDependencyReport {
+                dependency: name.to_owned(),
+                current: "1.0.0".to_owned(),
+                status,
+                latest: latest.map(ToOwned::to_owned),
+                change,
+                patch: None,
+                minor: None,
+                major: None,
+                scopes: vec!["compile".to_owned()],
+                modules: vec!["app".to_owned()],
+                source: None,
+                error: None,
+            }
+        };
+        let table = outdated_table(&[
+            dependency(
+                "org.example:old",
+                OutdatedStatus::Outdated,
+                Some("2.0.0"),
+                Some(jman_resolver::VersionChange::Major),
+            ),
+            dependency("org.example:current", OutdatedStatus::UpToDate, None, None),
+            dependency(
+                "org.example:unknown",
+                OutdatedStatus::Unavailable,
+                None,
+                None,
+            ),
+        ]);
+        assert!(table.starts_with("DEPENDENCY"));
+        assert!(table.contains("org.example:old      1.0.0    2.0.0   major"));
+        assert!(table.contains("org.example:current  1.0.0    -       current"));
+        assert!(table.contains("org.example:unknown  1.0.0    -       unavailable"));
     }
 
     #[test]

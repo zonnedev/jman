@@ -60,6 +60,155 @@ fn publish_command_exposes_safe_repository_controls() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn outdated_aggregates_workspace_dependencies_and_uses_cached_maven_metadata() {
+    let project = tempfile::tempdir().expect("temporary workspace");
+    let cache = tempfile::tempdir().expect("temporary cache");
+    let repository = tempfile::tempdir().expect("temporary repository");
+    for module in ["alpha", "beta"] {
+        fs::create_dir_all(project.path().join(module)).expect("module directory");
+    }
+    fs::write(
+        project.path().join("jman.toml"),
+        r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "workspace"
+version = "1.0.0"
+java-release = 17
+packaging = "pom"
+modules = ["alpha", "beta"]
+"#,
+    )
+    .expect("root manifest");
+    let repository_url = format!("file://{}", repository.path().display());
+    fs::write(
+        project.path().join("alpha/jman.toml"),
+        format!(
+            r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "alpha"
+version = "1.0.0"
+java-release = 17
+packaging = "jar"
+
+[[repositories]]
+id = "fixture"
+url = "{repository_url}"
+
+[dependencies.compile]
+"org.example:library" = "1.2.3"
+"#
+        ),
+    )
+    .expect("alpha manifest");
+    fs::write(
+        project.path().join("beta/jman.toml"),
+        format!(
+            r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "beta"
+version = "1.0.0"
+java-release = 17
+packaging = "jar"
+
+[[repositories]]
+id = "fixture"
+url = "{repository_url}"
+
+[dependencies.compile]
+"com.example:alpha" = "1.0.0"
+
+[dependencies.runtime]
+"org.example:library" = "1.2.3"
+
+[path-dependencies]
+"com.example:alpha" = "../alpha"
+"#
+        ),
+    )
+    .expect("beta manifest");
+    let metadata = repository
+        .path()
+        .join("org/example/library/maven-metadata.xml");
+    fs::create_dir_all(metadata.parent().expect("metadata parent")).expect("metadata directory");
+    fs::write(
+        &metadata,
+        r"<metadata>
+  <groupId>org.example</groupId>
+  <artifactId>library</artifactId>
+  <versioning>
+    <latest>2.0.0-rc1</latest>
+    <release>1.3.0</release>
+    <versions>
+      <version>1.2.3</version>
+      <version>1.2.4</version>
+      <version>1.3.0</version>
+      <version>2.0.0-rc1</version>
+    </versions>
+  </versioning>
+</metadata>
+",
+    )
+    .expect("Maven metadata");
+
+    let run = |additional: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_jman"));
+        command
+            .env("JMAN_CACHE_DIR", cache.path())
+            .args(["outdated", project.path().to_str().expect("UTF-8 path")])
+            .args(additional)
+            .args(["--format", "json"])
+            .output()
+            .expect("inspect dependencies")
+    };
+    let stable = run(&[]);
+    assert!(
+        stable.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stable.stderr)
+    );
+    assert!(stable.stderr.is_empty());
+    let report: serde_json::Value = serde_json::from_slice(&stable.stdout).expect("stable report");
+    assert_eq!(report["checked"], 1);
+    assert_eq!(report["outdated"], 1);
+    assert_eq!(
+        report["dependencies"][0]["dependency"],
+        "org.example:library"
+    );
+    assert_eq!(report["dependencies"][0]["current"], "1.2.3");
+    assert_eq!(report["dependencies"][0]["patch"], "1.2.4");
+    assert_eq!(report["dependencies"][0]["minor"], "1.3.0");
+    assert!(report["dependencies"][0]["major"].is_null());
+    assert_eq!(report["dependencies"][0]["latest"], "1.3.0");
+    assert_eq!(
+        report["dependencies"][0]["scopes"],
+        serde_json::json!(["compile", "runtime"])
+    );
+    assert_eq!(
+        report["dependencies"][0]["modules"],
+        serde_json::json!(["alpha", "beta"])
+    );
+
+    let prerelease = run(&["--include-prerelease"]);
+    let report: serde_json::Value =
+        serde_json::from_slice(&prerelease.stdout).expect("prerelease report");
+    assert_eq!(report["dependencies"][0]["major"], "2.0.0-rc1");
+    assert_eq!(report["dependencies"][0]["latest"], "2.0.0-rc1");
+    assert_eq!(report["dependencies"][0]["change"], "major");
+
+    fs::remove_file(metadata).expect("remove repository metadata");
+    let offline = run(&["--offline"]);
+    assert!(offline.status.success());
+    let report: serde_json::Value =
+        serde_json::from_slice(&offline.stdout).expect("offline report");
+    assert_eq!(report["dependencies"][0]["source"], "cache");
+    assert_eq!(report["dependencies"][0]["latest"], "1.3.0");
+}
+
+#[test]
 fn publishes_complete_artifact_set_to_local_repository_and_reports_json() {
     let project = tempfile::tempdir().expect("temporary project");
     let cache = tempfile::tempdir().expect("temporary cache");

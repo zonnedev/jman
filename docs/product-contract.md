@@ -30,6 +30,7 @@ JMAN supports this declared Maven model subset:
 - optional dependencies, exclusions, classifiers, and artifact types;
 - nearest-definition mediation with declaration-order tie breaking;
 - release and timestamped snapshot artifacts with repository policies;
+- repository version catalogs for read-only direct-dependency update reports;
 - artifact relocation;
 - active-by-default profiles plus environment property and OS activation;
 - nested reactors, local parents, and inter-module dependencies.
@@ -47,8 +48,14 @@ The following are explicitly outside the 0.1.x contract:
 - Maven build plugins, extensions, lifecycle bindings, and arbitrary goals;
 - settings.xml mirrors, servers, credentials, proxies, and encrypted settings;
 - every Maven profile activation form or arbitrary model-builder quirk;
-- publishing, signing, deployment, and installation into a local Maven repo;
 - a claim of complete Maven 3.x or Maven 4.x compatibility.
+
+JMAN publishing supports local Maven installation, generic HTTPS repositories,
+and Maven Central Portal bundles for `jar` and `pom` modules. Generated
+standalone POMs, source and Javadoc JARs, checksums, signatures, and transitive
+workspace coordinates are covered by the cross-tool publishing acceptance
+suite. Arbitrary Maven repository staging protocols and non-JAR packaging remain
+outside the contract.
 
 Unsupported build-plugin declarations are diagnosed during import instead of
 being silently translated. Compiler arguments, processors, main classes, and
@@ -69,6 +76,8 @@ Every release candidate must satisfy all of the following from a clean tree:
 6. Offline cache misses, corrupted artifacts, failed compilation, cancellation,
    and absent optional container runtimes produce actionable failures without
    destroying the last successful output.
+7. `make test-publishing` proves that independent JMAN, Maven, and Gradle
+   consumers can compile and run against the generated multi-module repository.
 
 Stable-release Maven compatibility remains gated on 100% agreement for the
 declared subset and at least 99% successful, graph-identical resolution across

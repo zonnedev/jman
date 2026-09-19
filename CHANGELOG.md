@@ -7,6 +7,10 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ### Added
 
+- `jman outdated` now aggregates direct dependencies across workspaces,
+  discovers Maven repository versions, classifies patch, minor, and major
+  upgrades, excludes prereleases by default, supports cached offline operation,
+  and provides human-readable and JSON reports without modifying project state.
 - `jman publish` now builds and stages Maven-compatible multi-module
   publications for the local Maven repository, generic HTTPS repositories, and
   the Maven Central Portal. It generates standalone POM metadata, source and

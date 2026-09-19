@@ -3,20 +3,32 @@ use std::{
     future::Future,
     path::{Path, PathBuf},
     pin::Pin,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use sha2::{Digest, Sha256};
 
 use crate::{Coordinate, PomSource, ResolverError};
 
-const CENTRAL: &str = "https://repo.maven.apache.org/maven2";
+pub const MAVEN_CENTRAL_URL: &str = "https://repo.maven.apache.org/maven2";
+static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
 pub struct CachedFile {
     pub path: PathBuf,
     pub checksum: String,
     pub bytes: Vec<u8>,
+    pub source: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VersionCatalog {
+    pub versions: Vec<String>,
+    pub latest: Option<String>,
+    pub release: Option<String>,
     pub source: String,
 }
 
@@ -59,7 +71,7 @@ impl RepositoryClient {
                 source,
             })?;
         let repositories = if repositories.is_empty() {
-            vec![CENTRAL.to_owned()]
+            vec![MAVEN_CENTRAL_URL.to_owned()]
         } else {
             repositories
         };
@@ -105,6 +117,53 @@ impl RepositoryClient {
     #[must_use]
     pub fn cache_dir(&self) -> &Path {
         &self.cache_dir
+    }
+
+    /// Load the versions advertised for a Maven group and artifact.
+    ///
+    /// Online calls refresh repository metadata. Offline calls use the last
+    /// successfully cached metadata document.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when metadata is unavailable or malformed.
+    pub async fn available_versions(
+        &self,
+        group: &str,
+        artifact: &str,
+    ) -> Result<VersionCatalog, ResolverError> {
+        let relative = format!("{}/{artifact}/maven-metadata.xml", group.replace('.', "/"));
+        let cached = self.cache_dir.join("repository").join(&relative);
+        if self.offline {
+            let bytes = tokio::fs::read(&cached)
+                .await
+                .map_err(|_| ResolverError::OfflineMiss(format!("{group}:{artifact} metadata")))?;
+            return parse_version_catalog(&bytes, "cache");
+        }
+        let mut last_error = None;
+        for repository in &self.repositories {
+            match self.fetch_repository_bytes(repository, &relative).await {
+                Ok(Some(bytes)) => match parse_version_catalog(&bytes, repository) {
+                    Ok(catalog) => {
+                        write_atomic(&cached, &bytes).await?;
+                        return Ok(catalog);
+                    }
+                    Err(error) => last_error = Some(error),
+                },
+                Ok(None) => {}
+                Err(error) => last_error = Some(error),
+            }
+        }
+        if let Ok(bytes) = tokio::fs::read(&cached).await {
+            return parse_version_catalog(&bytes, "stale-cache");
+        }
+        if let Some(error) = last_error {
+            return Err(error);
+        }
+        Err(ResolverError::HttpStatus {
+            url: relative,
+            status: reqwest::StatusCode::NOT_FOUND,
+        })
     }
 
     /// Fetch and verify an artifact through the local and content-addressed caches.
@@ -349,7 +408,11 @@ async fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ResolverError> {
             path: parent.to_owned(),
             source,
         })?;
-    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    let temporary = path.with_extension(format!(
+        "tmp-{}-{}",
+        std::process::id(),
+        TEMPORARY_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
     tokio::fs::write(&temporary, bytes)
         .await
         .map_err(|source| ResolverError::Cache {
@@ -371,6 +434,42 @@ async fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ResolverError> {
 
 fn sha256(bytes: &[u8]) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+}
+
+fn parse_version_catalog(bytes: &[u8], source: &str) -> Result<VersionCatalog, ResolverError> {
+    let xml = std::str::from_utf8(bytes)
+        .map_err(|error| ResolverError::InvalidMetadata(error.to_string()))?;
+    let document = roxmltree::Document::parse(xml)
+        .map_err(|error| ResolverError::InvalidMetadata(error.to_string()))?;
+    let versioning = document
+        .descendants()
+        .find(|node| node.is_element() && node.tag_name().name() == "versioning")
+        .ok_or_else(|| ResolverError::InvalidMetadata("missing <versioning> element".to_owned()))?;
+    let latest = xml_child_text(versioning, "latest");
+    let release = xml_child_text(versioning, "release");
+    let mut seen = std::collections::BTreeSet::new();
+    let versions = versioning
+        .children()
+        .find(|node| node.is_element() && node.tag_name().name() == "versions")
+        .into_iter()
+        .flat_map(|node| node.children())
+        .filter(|node| node.is_element() && node.tag_name().name() == "version")
+        .filter_map(|node| node.text().map(str::trim))
+        .filter(|version| !version.is_empty())
+        .filter(|version| seen.insert((*version).to_owned()))
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    if versions.is_empty() && latest.is_none() && release.is_none() {
+        return Err(ResolverError::InvalidMetadata(
+            "metadata does not advertise any versions".to_owned(),
+        ));
+    }
+    Ok(VersionCatalog {
+        versions,
+        latest,
+        release,
+        source: source.to_owned(),
+    })
 }
 
 fn snapshot_value(xml: &str, coordinate: &Coordinate) -> Result<Option<String>, ResolverError> {
@@ -526,5 +625,116 @@ mod tests {
 
         assert_eq!(repaired.bytes, b"library");
         assert_eq!(fs::read(repaired.path).expect("repaired CAS"), b"library");
+    }
+
+    #[tokio::test]
+    async fn loads_deduplicates_and_caches_available_versions() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let repository = temporary.path().join("repository");
+        let metadata = repository.join("org/example/library/maven-metadata.xml");
+        fs::create_dir_all(metadata.parent().expect("metadata parent"))
+            .expect("repository directories");
+        fs::write(
+            &metadata,
+            "<metadata><versioning><latest>2.0.0-rc1</latest><release>1.2.0</release>\
+             <versions><version>1.0.0</version><version>1.2.0</version>\
+             <version>1.2.0</version><version>2.0.0-rc1</version></versions>\
+             </versioning></metadata>",
+        )
+        .expect("version metadata");
+        let cache = temporary.path().join("cache");
+        let repositories = vec![format!("file://{}", repository.display())];
+        let online =
+            RepositoryClient::new(cache.clone(), repositories.clone()).expect("online repository");
+        let catalog = online
+            .available_versions("org.example", "library")
+            .await
+            .expect("available versions");
+        assert_eq!(
+            catalog.versions,
+            ["1.0.0", "1.2.0", "2.0.0-rc1"].map(str::to_owned)
+        );
+        assert_eq!(catalog.release.as_deref(), Some("1.2.0"));
+        assert_eq!(catalog.latest.as_deref(), Some("2.0.0-rc1"));
+        assert!(catalog.source.starts_with("file://"));
+
+        fs::remove_file(metadata).expect("remove source metadata");
+        let stale = RepositoryClient::new(cache.clone(), repositories.clone())
+            .expect("stale repository")
+            .available_versions("org.example", "library")
+            .await
+            .expect("stale cached versions");
+        assert_eq!(stale.versions, catalog.versions);
+        assert_eq!(stale.source, "stale-cache");
+        let offline =
+            RepositoryClient::new_with_mode(cache, repositories, true).expect("offline repository");
+        let cached = offline
+            .available_versions("org.example", "library")
+            .await
+            .expect("cached versions");
+        assert_eq!(cached.versions, catalog.versions);
+        assert_eq!(cached.source, "cache");
+    }
+
+    #[tokio::test]
+    async fn available_versions_reports_offline_cache_miss() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let client = RepositoryClient::new_with_mode(
+            temporary.path().join("cache"),
+            vec!["https://repo.invalid".to_owned()],
+            true,
+        )
+        .expect("offline repository");
+        assert!(matches!(
+            client.available_versions("org.example", "missing").await,
+            Err(ResolverError::OfflineMiss(value)) if value.contains("org.example:missing")
+        ));
+    }
+
+    #[tokio::test]
+    async fn malformed_repository_metadata_does_not_replace_a_valid_cache() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let repository = temporary.path().join("repository");
+        let metadata = repository.join("org/example/library/maven-metadata.xml");
+        fs::create_dir_all(metadata.parent().expect("metadata parent"))
+            .expect("repository directories");
+        fs::write(
+            &metadata,
+            "<metadata><versioning><release>1.2.0</release></versioning></metadata>",
+        )
+        .expect("valid metadata");
+        let cache = temporary.path().join("cache");
+        let repositories = vec![format!("file://{}", repository.display())];
+        RepositoryClient::new(cache.clone(), repositories.clone())
+            .expect("repository client")
+            .available_versions("org.example", "library")
+            .await
+            .expect("initial metadata");
+
+        fs::write(&metadata, "<metadata>").expect("malformed metadata");
+        let catalog = RepositoryClient::new(cache.clone(), repositories.clone())
+            .expect("repository client")
+            .available_versions("org.example", "library")
+            .await
+            .expect("last known-good metadata");
+        assert_eq!(catalog.release.as_deref(), Some("1.2.0"));
+        assert_eq!(catalog.source, "stale-cache");
+
+        let cached = RepositoryClient::new_with_mode(cache, repositories, true)
+            .expect("offline repository client")
+            .available_versions("org.example", "library")
+            .await
+            .expect("valid cached metadata");
+        assert_eq!(cached.release.as_deref(), Some("1.2.0"));
+    }
+
+    #[test]
+    fn rejects_metadata_without_a_version_catalog() {
+        let error = parse_version_catalog(
+            b"<metadata><versioning><versions/></versioning></metadata>",
+            "fixture",
+        )
+        .expect_err("empty catalog");
+        assert!(matches!(error, ResolverError::InvalidMetadata(_)));
     }
 }

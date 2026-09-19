@@ -5,6 +5,7 @@ mod graph;
 mod model;
 mod pom;
 mod repository;
+mod version;
 
 pub use effective::{EffectiveModelBuilder, PomSource};
 pub use graph::{DependencyResolver, ResolvedGraph, ResolvedPackage};
@@ -13,7 +14,8 @@ pub use model::{
     RawPom, Relocation, Repository,
 };
 pub use pom::{parse_pom, plugin_coordinates};
-pub use repository::{CachedFile, RepositoryClient};
+pub use repository::{CachedFile, RepositoryClient, VersionCatalog, MAVEN_CENTRAL_URL};
+pub use version::{analyze_versions, VersionChange, VersionUpdates};
 
 use thiserror::Error;
 
@@ -21,6 +23,8 @@ use thiserror::Error;
 pub enum ResolverError {
     #[error("invalid Maven POM: {0}")]
     InvalidPom(String),
+    #[error("invalid Maven metadata: {0}")]
+    InvalidMetadata(String),
     #[error("invalid Maven coordinate: {0}")]
     InvalidCoordinate(String),
     #[error("dependency {0} has no version after dependency management")]
