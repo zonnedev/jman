@@ -1,45 +1,124 @@
 # JMAN for Neovim
 
-Native Neovim 0.11+ integration for the JMAN Java build tool and language server.
+Native Neovim 0.11+ Java support for JMAN, Maven, and Gradle workspaces. The
+plugin uses Neovim's built-in LSP client and the same JMAN language server,
+project model, refactorings, build synchronization, and test descriptors as the
+VS Code extension.
+
+## Requirements
+
+- Neovim 0.11 or newer.
+- A `jman` release on `PATH`, `JMAN_BIN`, or configured through `cmd`.
+- A Java workspace containing `jman.toml`, Gradle build files, or `pom.xml`.
+
+Run `:checkhealth jman` after installation to verify the executable, Java
+environment, configured build JDK, and current workspace detection.
+
+## Installation
+
+The repository contains a small runtime bridge, so plugin managers can install
+JMAN directly from the main repository.
+
+With lazy.nvim:
 
 ```lua
 {
-  dir = "/path/to/jman/editors/neovim",
+  "zonnedev/jman",
   ft = "java",
   opts = {
-    cmd = "/path/to/jman",
-    build_sync = "prompt", -- manual, prompt, or automatic
+    build_sync = "prompt",
   },
 }
 ```
 
-The plugin prefers `jman.toml` over Gradle and Maven markers, starts
-`jman lsp --stdio`, and uses Neovim's built-in LSP client.
+With Neovim 0.12's built-in package manager:
+
+```lua
+vim.pack.add({ "https://github.com/zonnedev/jman" })
+require("jman").setup()
+```
+
+On Neovim 0.11, use lazy.nvim or clone the repository under a native
+`pack/*/start/` directory.
+
+For a local checkout:
+
+```lua
+vim.opt.runtimepath:prepend("/path/to/jman/editors/neovim")
+require("jman").setup({ cmd = "/path/to/jman/target/release/jman" })
+```
+
+## Configuration
+
+```lua
+require("jman").setup({
+  cmd = nil,                 -- absolute executable; falls back to JMAN_BIN/PATH
+  java_home = nil,           -- Java home inherited by the language server
+  build_java_home = nil,     -- optional Maven/Gradle runtime override
+  build_system = "auto",     -- auto, jman, gradle, or maven
+  build_sync = "prompt",     -- manual, prompt, or automatic
+  extra_env = {},            -- additional language-server and task environment
+  notify = true,
+  keymaps = true,
+})
+```
+
+Automatic workspace detection prefers `jman.toml`, followed by Gradle and
+Maven. An explicit `build_system` restricts detection to that model. Maven and
+Gradle operations prefer project-local `mvnw` and `gradlew` wrappers and use the
+compatible build JDK selected by the language server.
 
 ## Commands
 
-- `:JmanStatus`
-- `:JmanSync`
-- `:JmanCheck`
-- `:JmanBuild`
-- `:JmanRun`
-- `:JmanTest`
-- `:JmanTests` (discover and select tests through the LSP)
-- `:JmanTestPattern [pattern]`
-- `:JmanTestNearest`
-- `:JmanRebuildIndex`
-- `:JmanClearCache`
-- `:JmanRestartLsp`
-- `:JmanChangeSignature`
+| Command | Purpose |
+| --- | --- |
+| `:JmanStatus` | Show indexing, semantic, sync, cache, and build-runtime status |
+| `:JmanSync` | Synchronize the native or external project model |
+| `:JmanCheck` | Check with JMAN, Gradle, or Maven |
+| `:JmanBuild` | Build with JMAN, Gradle, or Maven |
+| `:JmanRun` | Run with JMAN or Gradle when supported |
+| `:JmanTest` | Run all tests with the active build system |
+| `:JmanTests` | Discover and select a test class or method through the LSP |
+| `:JmanTestPattern [selector]` | Run an exact LSP-prepared test selector |
+| `:JmanTestNearest` | Run the test nearest the cursor |
+| `:JmanCodeAction` | Select a JMAN code action |
+| `:JmanOrganizeImports` | Apply the organize-imports source action |
+| `:JmanChangeSignature` | Change a method signature and update call sites |
+| `:JmanRebuildIndex` | Rebuild the workspace index |
+| `:JmanClearCache` | Confirm, clear, and rebuild the workspace cache |
+| `:JmanRestartLsp` | Restart JMAN Java clients |
 
-Default keymaps use the `<leader>j` prefix. `require("jman").status()` returns a
-compact statusline component such as `JMAN:ready`.
+JUnit classes and methods receive standard LSP CodeLens actions. Running a
+CodeLens, selecting a test, or using `:JmanTestNearest` asks the server for the
+correct JMAN, Maven, or Gradle invocation and build JDK. Native JMAN tests keep
+their live human-readable test tree in the terminal.
 
-JUnit methods also receive standard LSP CodeLens actions. Use
-`vim.lsp.codelens.run()` on a `Run Test` lens to execute the exact JMAN selector.
+## Default keymaps
 
-Run `:checkhealth jman` to validate Neovim and the configured JMAN executable.
+| Mapping | Action |
+| --- | --- |
+| `<leader>js` | Synchronize |
+| `<leader>jc` | Check |
+| `<leader>jb` | Build |
+| `<leader>jr` | Run |
+| `<leader>jt` | Test nearest |
+| `<leader>jT` | Test all |
+| `<leader>jl` | Select test |
+| `<leader>ji` | Show status |
+| `<leader>ja` | Code action |
+| `<leader>jo` | Organize imports |
 
-Build commands are intentionally enabled only for native `jman.toml` workspaces.
-Maven and Gradle projects still receive the full JMAN Java language server, model
-sync, navigation, completion, diagnostics, and refactoring support.
+Set `keymaps = false` to leave mappings entirely to your configuration.
+
+## Statusline
+
+`require("jman").status()` returns a compact value such as `JMAN:ready`,
+`JMAN:required`, or `JMAN:off`. The plugin emits the `User JmanStatusChanged`
+autocommand whenever synchronization state changes, allowing statusline plugins
+to refresh without polling.
+
+```lua
+vim.o.statusline = "%f %m %= %{v:lua.require'jman'.status()}"
+```
+
+See `:help jman.nvim` for the complete in-editor reference.

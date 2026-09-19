@@ -3,6 +3,7 @@ local M = {}
 local defaults = {
 	cmd = nil,
 	java_home = nil,
+	build_java_home = nil,
 	build_system = "auto",
 	build_sync = "prompt",
 	extra_env = {},
@@ -13,13 +14,35 @@ local defaults = {
 local state = {
 	options = vim.deepcopy(defaults),
 	sync = { state = "starting" },
-	clients = {},
+	terminal_id = 0,
 }
 
 local build_markers = {
 	jman = { "jman.toml" },
 	gradle = { "settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts" },
 	maven = { "pom.xml" },
+}
+
+local gradle_root_markers = { "settings.gradle", "settings.gradle.kts", "gradlew", "gradlew.bat" }
+
+local operation_arguments = {
+	jman = {
+		check = { "check" },
+		build = { "build" },
+		test = { "test" },
+		run = { "run" },
+	},
+	gradle = {
+		check = { "check" },
+		build = { "build" },
+		test = { "test" },
+		run = { "run" },
+	},
+	maven = {
+		check = { "test", "-DskipTests" },
+		build = { "package" },
+		test = { "test" },
+	},
 }
 
 local function executable()
@@ -38,6 +61,10 @@ function M.executable()
 	return executable()
 end
 
+function M.config()
+	return vim.deepcopy(state.options)
+end
+
 local function parents(path)
 	local current = vim.fs.dirname(vim.fs.normalize(path))
 	return function()
@@ -53,7 +80,16 @@ end
 
 local function root_and_system(path)
 	local candidates = {}
+	local gradle_root
 	for directory in parents(path) do
+		if not gradle_root then
+			for _, marker in ipairs(gradle_root_markers) do
+				if vim.uv.fs_stat(directory .. "/" .. marker) then
+					gradle_root = directory
+					break
+				end
+			end
+		end
 		for system, markers in pairs(build_markers) do
 			if not candidates[system] then
 				for _, marker in ipairs(markers) do
@@ -64,6 +100,11 @@ local function root_and_system(path)
 				end
 			end
 		end
+	end
+	candidates.gradle = gradle_root or candidates.gradle
+	if state.options.build_system ~= "auto" then
+		local configured = state.options.build_system
+		return candidates[configured], candidates[configured] and configured or nil
 	end
 	if candidates.jman then
 		return candidates.jman, "jman"
@@ -76,6 +117,16 @@ local function root_and_system(path)
 	end
 end
 
+local function set_sync(sync)
+	state.sync = sync or { state = "unknown" }
+	vim.schedule(function()
+		vim.api.nvim_exec_autocmds("User", {
+			pattern = "JmanStatusChanged",
+			modeline = false,
+		})
+	end)
+end
+
 local function client_for_buffer(bufnr)
 	for _, client in ipairs(vim.lsp.get_clients({ bufnr = bufnr or 0, name = "jman-java" })) do
 		return client
@@ -86,6 +137,17 @@ local function notify(message, level)
 	if state.options.notify then
 		vim.notify(message, level or vim.log.levels.INFO, { title = "JMAN Java" })
 	end
+end
+
+local function json_object(value)
+	return type(value) == "table" and value or {}
+end
+
+local function json_value(value, fallback)
+	if value == nil or value == vim.NIL then
+		return fallback
+	end
+	return value
 end
 
 local function execute_command(command, callback)
@@ -102,13 +164,56 @@ local function execute_command(command, callback)
 			notify(error.message or tostring(error), vim.log.levels.ERROR)
 			return
 		end
-		if result and result.buildSync then
-			state.sync = result.buildSync
+		if type(result) == "table" and type(result.buildSync) == "table" then
+			set_sync(result.buildSync)
 		end
 		if callback then
 			callback(result)
 		end
 	end, 0)
+end
+
+local function path_separator()
+	return package.config:sub(1, 1) == "\\" and ";" or ":"
+end
+
+local function build_tool_environment(java_home, use_build_java_home)
+	local environment = vim.tbl_extend("force", vim.fn.environ(), state.options.extra_env)
+	if (not java_home or java_home == "") and use_build_java_home ~= false then
+		java_home = state.options.build_java_home
+	end
+	if not java_home or java_home == "" then
+		return environment
+	end
+	environment.JAVA_HOME = java_home
+	local path_key = environment.PATH and "PATH" or environment.Path and "Path" or "PATH"
+	local java_bin = java_home .. "/bin"
+	environment[path_key] = environment[path_key] and (java_bin .. path_separator() .. environment[path_key])
+		or java_bin
+	return environment
+end
+
+local function operation_environment(system, java_home)
+	if system == "jman" then
+		return build_tool_environment(state.options.java_home, false)
+	end
+	return build_tool_environment(java_home, true)
+end
+
+local function wrapper_command(system, root)
+	if system == "jman" then
+		return executable()
+	end
+	local windows = package.config:sub(1, 1) == "\\"
+	local wrapper = system == "gradle" and "gradlew" or "mvnw"
+	if windows then
+		wrapper = wrapper .. ".cmd"
+	end
+	local candidate = root .. "/" .. wrapper
+	if vim.uv.fs_stat(candidate) then
+		return candidate
+	end
+	return system == "maven" and "mvn" or "gradle"
 end
 
 local function apply_code_action(client, action, bufnr)
@@ -152,7 +257,8 @@ function M.code_actions(only, apply)
 			notify(error.message or tostring(error), vim.log.levels.ERROR)
 			return
 		end
-		if not actions or #actions == 0 then
+		actions = json_object(actions)
+		if #actions == 0 then
 			notify("No JMAN code actions available", vim.log.levels.INFO)
 			return
 		end
@@ -179,22 +285,19 @@ function M.organize_imports()
 	M.code_actions({ "source.organizeImports" }, true)
 end
 
-local function terminal(args, title)
-	local file = vim.api.nvim_buf_get_name(0)
-	local root, system = root_and_system(file)
-	if not root or system ~= "jman" then
-		notify("JMAN build operations require a native jman.toml workspace", vim.log.levels.ERROR)
-		return
-	end
-	local command = { executable() }
-	vim.list_extend(command, args)
+local function terminal(command, args, title, root, environment)
+	local invocation = { command }
+	vim.list_extend(invocation, args)
 	vim.cmd("botright new")
 	local buffer = vim.api.nvim_get_current_buf()
-	vim.api.nvim_buf_set_name(buffer, "JMAN://" .. title)
+	state.terminal_id = state.terminal_id + 1
+	local safe_title = title:gsub("%c", " ")
+	vim.api.nvim_buf_set_name(buffer, string.format("JMAN://%s/%d", safe_title, state.terminal_id))
 	vim.bo[buffer].bufhidden = "wipe"
-	vim.fn.termopen(command, {
+	vim.bo[buffer].swapfile = false
+	vim.fn.termopen(invocation, {
 		cwd = root,
-		env = vim.tbl_extend("force", vim.fn.environ(), state.options.extra_env),
+		env = environment or build_tool_environment(),
 		on_exit = function(_, code)
 			vim.schedule(function()
 				notify(
@@ -205,6 +308,57 @@ local function terminal(args, title)
 		end,
 	})
 	vim.cmd("startinsert")
+end
+
+local function active_workspace(bufnr)
+	local file = vim.api.nvim_buf_get_name(bufnr or 0)
+	local root, system = root_and_system(file)
+	if not root then
+		notify("No JMAN, Maven, or Gradle Java workspace was detected", vim.log.levels.ERROR)
+		return
+	end
+	return root, system
+end
+
+local function workspace_operation(operation)
+	local root, detected_system = active_workspace()
+	if not root then
+		return
+	end
+	local client = client_for_buffer(0)
+	if not client then
+		notify("No JMAN Java language server is attached", vim.log.levels.WARN)
+		return
+	end
+	client:request("workspace/executeCommand", {
+		command = "jman.java.status",
+		arguments = {},
+	}, function(error, result)
+		if error then
+			notify(error.message or tostring(error), vim.log.levels.ERROR)
+			return
+		end
+		local workspace = json_object(json_object(result).workspace)
+		local system = json_value(workspace.buildSystem, detected_system)
+		local args = operation_arguments[system] and operation_arguments[system][operation]
+		if not args then
+			notify(
+				string.format("The %s project model does not support %s", system or "current", operation),
+				vim.log.levels.WARN
+			)
+			return
+		end
+		local runtime = json_object(workspace.buildRuntime)
+		vim.schedule(function()
+			terminal(
+				wrapper_command(system, root),
+				vim.deepcopy(args),
+				operation:gsub("^%l", string.upper),
+				root,
+				operation_environment(system, runtime.javaHome)
+			)
+		end)
+	end, 0)
 end
 
 local function test_selector(bufnr, cursor_line)
@@ -244,29 +398,75 @@ local function test_selector(bufnr, cursor_line)
 	return qualified
 end
 
+local function position_in_range(line, character, range)
+	if not range or not range.start or not range["end"] then
+		return false
+	end
+	local starts_before = line > range.start.line or (line == range.start.line and character >= range.start.character)
+	local ends_after = line < range["end"].line or (line == range["end"].line and character <= range["end"].character)
+	return starts_before and ends_after
+end
+
+local function nearest_test_item(items, line, character)
+	local candidates = vim.tbl_filter(function(item)
+		return item.selector and position_in_range(line, character, item.range)
+	end, items or {})
+	table.sort(candidates, function(left, right)
+		if left.kind ~= right.kind then
+			return left.kind == "test"
+		end
+		local left_lines = left.range["end"].line - left.range.start.line
+		local right_lines = right.range["end"].line - right.range.start.line
+		if left_lines ~= right_lines then
+			return left_lines < right_lines
+		end
+		return left.selector < right.selector
+	end)
+	return candidates[1]
+end
+
 function M.status()
 	local client = client_for_buffer(0)
 	local sync = state.sync.state or "unknown"
 	return client and ("JMAN:" .. sync) or "JMAN:off"
 end
 
+local function status_message(result)
+	result = json_object(result)
+	local workspace = json_object(result.workspace)
+	local cache = json_object(result.cache)
+	local structural = json_object(cache.structural)
+	local semantic = json_object(cache.semantic)
+	local runtime = json_object(workspace.buildRuntime)
+	local runtime_summary = ""
+	if type(workspace.buildRuntime) == "table" then
+		runtime_summary = string.format(
+			" · %s %s on Java %s",
+			workspace.buildSystem == "gradle" and "Gradle" or workspace.buildSystem == "maven" and "Maven" or "build",
+			json_value(runtime.buildToolVersion, "unknown"),
+			json_value(runtime.javaMajor, "unknown")
+		)
+	end
+	local build_sync = json_object(result.buildSync)
+	return string.format(
+		"%s · %d indexed · %d semantic · %d open · sync %s · cache %d/%d structural, %d/%d semantic, %.1f MiB%s",
+		json_value(workspace.buildSystem, "unknown"),
+		json_value(result.indexedDocuments, 0),
+		json_value(result.semanticDocuments, 0),
+		json_value(result.openDocuments, 0),
+		json_value(build_sync.state, "unknown"),
+		json_value(structural.hits, 0),
+		json_value(structural.entries, 0),
+		json_value(semantic.hits, 0),
+		json_value(semantic.entries, 0),
+		json_value(cache.bytes, 0) / 1024 / 1024,
+		runtime_summary
+	)
+end
+
 function M.show_status()
 	execute_command("jman.java.status", function(result)
-		if not result then
-			return
-		end
-		local workspace = result.workspace or {}
-		local cache = result.cache or {}
-		notify(
-			string.format(
-				"%s workspace · %d indexed · %d semantic · sync %s · cache %.1f MiB",
-				workspace.buildSystem or "unknown",
-				result.indexedDocuments or 0,
-				result.semanticDocuments or 0,
-				result.buildSync and result.buildSync.state or "unknown",
-				(cache.bytes or 0) / 1024 / 1024
-			)
-		)
+		notify(status_message(result))
 	end)
 end
 
@@ -277,6 +477,7 @@ function M.sync()
 		notify("No Java workspace was detected", vim.log.levels.ERROR)
 		return
 	end
+	set_sync({ state = "syncing" })
 	if system ~= "jman" then
 		execute_command("jman.java.syncWorkspace", function()
 			notify("Java project model synchronized")
@@ -285,11 +486,12 @@ function M.sync()
 	end
 	vim.system({ executable(), "--no-progress", "sync", root }, {
 		cwd = root,
-		env = vim.tbl_extend("force", vim.fn.environ(), state.options.extra_env),
+		env = operation_environment("jman"),
 		text = true,
 	}, function(result)
 		vim.schedule(function()
 			if result.code ~= 0 then
+				set_sync({ state = "failed", error = result.stderr })
 				notify(result.stderr ~= "" and result.stderr or "jman sync failed", vim.log.levels.ERROR)
 				return
 			end
@@ -301,36 +503,119 @@ function M.sync()
 end
 
 function M.check()
-	terminal({ "check" }, "Check")
+	workspace_operation("check")
 end
 function M.build()
-	terminal({ "build" }, "Build")
+	workspace_operation("build")
 end
 function M.run()
-	terminal({ "run" }, "Run")
+	workspace_operation("run")
 end
 function M.test()
-	terminal({ "test" }, "Test")
+	workspace_operation("test")
+end
+
+local function human_test_arguments(prepared)
+	local arguments = {}
+	local skip_next = false
+	for index, argument in ipairs(prepared.arguments or {}) do
+		if skip_next then
+			skip_next = false
+		elseif
+			prepared.report == "json-lines"
+			and argument == "--report"
+			and prepared.arguments[index + 1] == "json"
+		then
+			skip_next = true
+		else
+			table.insert(arguments, argument)
+		end
+	end
+	return arguments
+end
+
+local function run_test_selectors(selectors, bufnr)
+	bufnr = bufnr or vim.api.nvim_get_current_buf()
+	if not vim.api.nvim_buf_is_valid(bufnr) then
+		notify("The Java buffer is no longer available", vim.log.levels.WARN)
+		return
+	end
+	local root = active_workspace(bufnr)
+	if not root then
+		return
+	end
+	local client = client_for_buffer(bufnr)
+	if not client then
+		notify("No JMAN Java language server is attached", vim.log.levels.WARN)
+		return
+	end
+	local uri = vim.uri_from_bufnr(bufnr)
+	client:request("jman.java/tests/run", {
+		selectors = selectors,
+		uri = uri ~= "" and uri or nil,
+	}, function(error, prepared)
+		if error then
+			notify(error.message or tostring(error), vim.log.levels.ERROR)
+			return
+		end
+		prepared = json_object(prepared)
+		if not prepared.program then
+			notify("The language server returned no test execution plan", vim.log.levels.ERROR)
+			return
+		end
+		vim.schedule(function()
+			terminal(
+				wrapper_command(prepared.program, root),
+				human_test_arguments(prepared),
+				"Test " .. table.concat(selectors, ", "),
+				root,
+				operation_environment(prepared.program, prepared.buildJavaHome)
+			)
+		end)
+	end, bufnr)
 end
 
 function M.test_pattern(pattern)
 	pattern = pattern or vim.fn.input("JMAN test pattern: ")
 	if pattern and pattern ~= "" then
-		terminal({ "test", "--tests", pattern }, "Test " .. pattern)
+		run_test_selectors({ pattern })
 	end
 end
 
 function M.test_nearest()
-	local selector, error = test_selector(0, vim.api.nvim_win_get_cursor(0)[1])
-	if not selector then
-		notify(error, vim.log.levels.ERROR)
+	local bufnr = vim.api.nvim_get_current_buf()
+	local client = client_for_buffer(bufnr)
+	if not client then
+		notify("No JMAN Java language server is attached", vim.log.levels.WARN)
 		return
 	end
-	M.test_pattern(selector)
+	local cursor = vim.api.nvim_win_get_cursor(0)
+	client:request("jman.java/tests/discover", {
+		textDocument = vim.lsp.util.make_text_document_params(bufnr),
+	}, function(error, result)
+		if not vim.api.nvim_buf_is_valid(bufnr) then
+			return
+		end
+		local item = not error and nearest_test_item(json_object(json_object(result).items), cursor[1] - 1, cursor[2])
+		if item then
+			run_test_selectors({ item.selector }, bufnr)
+			return
+		end
+		local selector, fallback_error = test_selector(bufnr, cursor[1])
+		if selector then
+			run_test_selectors({ selector }, bufnr)
+		else
+			notify(
+				error and (error.message or tostring(error)) or fallback_error or "No test was found at the cursor",
+				vim.log.levels.ERROR
+			)
+		end
+	end, bufnr)
 end
 
 function M.tests()
-	local client = client_for_buffer(0)
+	local bufnr = vim.api.nvim_get_current_buf()
+	local client = client_for_buffer(bufnr)
 	if not client then
 		notify("No JMAN Java language server is attached", vim.log.levels.WARN)
 		return
@@ -340,22 +625,31 @@ function M.tests()
 			notify(error.message or tostring(error), vim.log.levels.ERROR)
 			return
 		end
+		local discovered = json_object(json_object(result).items)
 		local tests = vim.tbl_filter(function(item)
-			return item.kind == "test"
-		end, result and result.items or {})
+			return item.selector ~= nil and (item.kind == "class" or item.kind == "test")
+		end, discovered)
+		local items = {}
+		for _, item in ipairs(discovered) do
+			items[item.id] = item
+		end
 		vim.schedule(function()
 			vim.ui.select(tests, {
 				prompt = "JMAN tests",
 				format_item = function(item)
-					return item.selector
+					local parent = item.parentId and items[item.parentId]
+					if parent then
+						return string.format("%s › %s", parent.label, item.label)
+					end
+					return string.format("%s (all tests)", item.label)
 				end,
 			}, function(item)
 				if item then
-					M.test_pattern(item.selector)
+					run_test_selectors({ item.selector }, bufnr)
 				end
 			end)
 		end)
-	end, 0)
+	end, bufnr)
 end
 
 function M.rebuild_index()
@@ -365,8 +659,14 @@ function M.rebuild_index()
 end
 
 function M.clear_cache()
-	execute_command("jman.java.clearWorkspaceCache", function()
-		notify("JMAN Java cache cleared and rebuilt")
+	vim.ui.select({ "Clear and rebuild", "Cancel" }, {
+		prompt = "Clear the JMAN Java cache for this workspace?",
+	}, function(choice)
+		if choice == "Clear and rebuild" then
+			execute_command("jman.java.clearWorkspaceCache", function()
+				notify("JMAN Java cache cleared and rebuilt")
+			end)
+		end
 	end)
 end
 
@@ -401,8 +701,8 @@ function M.change_signature()
 			local argument_order = {}
 			for value in order:gmatch("[^,]+") do
 				local number = tonumber(vim.trim(value))
-				if not number then
-					notify("Argument order must contain integers", vim.log.levels.ERROR)
+				if not number or number < 0 or number % 1 ~= 0 then
+					notify("Argument order must contain non-negative integers", vim.log.levels.ERROR)
 					return
 				end
 				table.insert(argument_order, number)
@@ -415,7 +715,7 @@ function M.change_signature()
 			}, function(error, edit)
 				if error then
 					notify(error.message or tostring(error), vim.log.levels.ERROR)
-				elseif edit then
+				elseif type(edit) == "table" then
 					vim.lsp.util.apply_workspace_edit(edit, client.offset_encoding)
 				end
 			end, 0)
@@ -437,6 +737,10 @@ local function create_commands()
 		JmanClearCache = M.clear_cache,
 		JmanRestartLsp = M.restart,
 		JmanChangeSignature = M.change_signature,
+		JmanCodeAction = function()
+			M.code_actions(nil, false)
+		end,
+		JmanOrganizeImports = M.organize_imports,
 	}
 	for name, callback in pairs(commands) do
 		vim.api.nvim_create_user_command(name, callback, { force = true })
@@ -444,6 +748,17 @@ local function create_commands()
 	vim.api.nvim_create_user_command("JmanTestPattern", function(command)
 		M.test_pattern(command.args)
 	end, { nargs = "?", force = true })
+end
+
+local function server_environment()
+	local environment = vim.deepcopy(state.options.extra_env)
+	if state.options.java_home and state.options.java_home ~= "" then
+		environment.JAVA_HOME = state.options.java_home
+	end
+	if state.options.build_java_home and state.options.build_java_home ~= "" then
+		environment.JAVA_LSP_BUILD_JAVA_HOME = state.options.build_java_home
+	end
+	return environment
 end
 
 local function configure_lsp()
@@ -458,9 +773,7 @@ local function configure_lsp()
 			buildSystem = state.options.build_system ~= "auto" and state.options.build_system or nil,
 			buildSync = state.options.build_sync,
 		},
-		cmd_env = vim.tbl_extend("force", state.options.extra_env, {
-			JAVA_HOME = state.options.java_home or vim.env.JAVA_HOME,
-		}),
+		cmd_env = server_environment(),
 		commands = {
 			["jman.java.test"] = function(command)
 				M.test_pattern(command.arguments and command.arguments[1])
@@ -480,7 +793,7 @@ local function configure_lsp()
 		end,
 		handlers = {
 			["jman.java/buildSyncStatus"] = function(_, result)
-				state.sync = result or { state = "unknown" }
+				set_sync(result)
 				if result and result.state == "failed" then
 					notify(result.error or "Build synchronization failed", vim.log.levels.ERROR)
 				elseif result and result.state == "required" and state.options.build_sync == "prompt" then
@@ -509,29 +822,63 @@ local function configure_keymaps()
 	local maps = {
 		{ "<leader>js", M.sync, "JMAN Sync" },
 		{ "<leader>jc", M.check, "JMAN Check" },
-		{ "<leader>jman", M.build, "JMAN Build" },
+		{ "<leader>jb", M.build, "JMAN Build" },
 		{ "<leader>jr", M.run, "JMAN Run" },
 		{ "<leader>jt", M.test_nearest, "JMAN Test Nearest" },
 		{ "<leader>jT", M.test, "JMAN Test All" },
 		{ "<leader>jl", M.tests, "JMAN List Tests" },
 		{ "<leader>ji", M.show_status, "JMAN Status" },
+		{
+			"<leader>ja",
+			function()
+				M.code_actions(nil, false)
+			end,
+			"JMAN Code Action",
+		},
+		{ "<leader>jo", M.organize_imports, "JMAN Organize Imports" },
 	}
 	for _, map in ipairs(maps) do
 		vim.keymap.set("n", map[1], map[2], { desc = map[3] })
 	end
 end
 
+local function validate_options(options)
+	local build_systems = { auto = true, jman = true, gradle = true, maven = true }
+	local sync_modes = { manual = true, prompt = true, automatic = true }
+	if not build_systems[options.build_system] then
+		error("jman.nvim: build_system must be auto, jman, gradle, or maven")
+	end
+	if not sync_modes[options.build_sync] then
+		error("jman.nvim: build_sync must be manual, prompt, or automatic")
+	end
+	if options.cmd ~= nil and type(options.cmd) ~= "string" then
+		error("jman.nvim: cmd must be a string")
+	end
+	if type(options.extra_env) ~= "table" then
+		error("jman.nvim: extra_env must be a table")
+	end
+end
+
 function M.setup(options)
 	state.options = vim.tbl_deep_extend("force", vim.deepcopy(defaults), options or {})
+	validate_options(state.options)
 	create_commands()
 	configure_keymaps()
 	configure_lsp()
 end
 
 M._test = {
+	build_tool_environment = build_tool_environment,
+	human_test_arguments = human_test_arguments,
 	lsp_diagnostics = lsp_diagnostics,
+	operation_arguments = operation_arguments,
+	operation_environment = operation_environment,
 	root_and_system = root_and_system,
+	server_environment = server_environment,
+	status_message = status_message,
+	nearest_test_item = nearest_test_item,
 	test_selector = test_selector,
+	wrapper_command = wrapper_command,
 }
 
 return M

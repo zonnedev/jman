@@ -1,0 +1,13 @@
+# Changelog
+
+## Unreleased
+
+- Added Maven and Gradle check, build, run, and test operations with wrapper
+  preference and the language server's compatible build JDK.
+- Added LSP-prepared class and method test execution for every supported build
+  system while retaining JMAN's live human test report.
+- Added richer status reporting, synchronization-state events, configuration
+  validation, safer cache clearing, code-action commands, and expanded health
+  checks.
+- Added direct installation from the JMAN repository, complete user
+  documentation, and broader headless integration tests.

@@ -22,6 +22,21 @@ vim.cmd("edit " .. vim.fn.fnameescape(java))
 local selector = jman._test.test_selector(0, 4)
 assert(selector == "demo.GreetingTest#greets", "nearest test selector was " .. tostring(selector))
 
+local nearest = jman._test.nearest_test_item({
+	{
+		kind = "class",
+		selector = "demo.GreetingTest",
+		range = { start = { line = 1, character = 0 }, ["end"] = { line = 4, character = 1 } },
+	},
+	{
+		kind = "test",
+		selector = "demo.GreetingTest#greets",
+		range = { start = { line = 2, character = 2 }, ["end"] = { line = 3, character = 18 } },
+	},
+}, 3, 8)
+assert(nearest.selector == "demo.GreetingTest#greets", "method range must win over its containing class")
+assert(jman._test.nearest_test_item({}, 0, 0) == nil, "empty discovery must not invent a test")
+
 local namespace = vim.api.nvim_create_namespace("jman-neovim-test")
 local lsp_diagnostic = {
 	range = {

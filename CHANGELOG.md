@@ -52,6 +52,11 @@ Versioning while it approaches a stable 0.3.0 release.
   deterministic trees with merged common prefixes. `jman why` includes every
   shortest route, and audit trees are grouped by workspace module; structured
   JSON path data is unchanged.
+- The Neovim client now provides VS Code-equivalent JMAN, Maven, and Gradle
+  project operations, wrapper and compatible build-JDK selection, LSP-prepared
+  class and method tests, richer status and health reporting, synchronization
+  events, safer maintenance actions, complete help, and direct installation
+  from the main repository.
 
 ### Security
 

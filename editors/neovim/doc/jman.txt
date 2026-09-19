@@ -1,0 +1,120 @@
+*jman.nvim*                     JMAN Java support for Neovim
+
+===============================================================================
+CONTENTS                                                        *jman-contents*
+
+1. Introduction ............................................... |jman-intro|
+2. Setup ....................................................... |jman-setup|
+3. Commands .................................................. |jman-commands|
+4. Keymaps .................................................... |jman-keymaps|
+5. Statusline .............................................. |jman-statusline|
+6. Health ...................................................... |jman-health|
+
+===============================================================================
+INTRODUCTION                                                       *jman-intro*
+
+jman.nvim connects Neovim 0.11's built-in LSP client to the JMAN Java language
+server. It supports native jman.toml, Maven, and Gradle workspaces for project
+model synchronization, navigation, completion, diagnostics, refactoring,
+CodeLens tests, and build operations.
+
+===============================================================================
+SETUP                                                               *jman-setup*
+
+Setup is required once after the plugin is loaded: >lua
+
+  require("jman").setup({
+    cmd = nil,
+    java_home = nil,
+    build_java_home = nil,
+    build_system = "auto",
+    build_sync = "prompt",
+    extra_env = {},
+    notify = true,
+    keymaps = true,
+  })
+<
+cmd ~
+  Absolute path to JMAN. Falls back to $JMAN_BIN and then jman on $PATH.
+
+java_home ~
+  Optional JAVA_HOME inherited by the language server.
+
+build_java_home ~
+  Optional Maven or Gradle runtime override. By default the language server
+  selects a runtime compatible with the build tool.
+
+build_system ~
+  One of "auto", "jman", "gradle", or "maven". Automatic detection prefers
+  jman.toml, followed by Gradle and Maven markers.
+
+build_sync ~
+  One of "manual", "prompt", or "automatic".
+
+extra_env ~
+  Environment variables added to the server and project operations.
+
+notify ~
+  Use |vim.notify()| for operation and synchronization messages.
+
+keymaps ~
+  Install the mappings documented in |jman-keymaps|.
+
+===============================================================================
+COMMANDS                                                         *jman-commands*
+
+:JmanStatus             Show project, index, cache, sync, and runtime status.
+:JmanSync               Synchronize the active project model.
+:JmanCheck              Check the project with its active build system.
+:JmanBuild              Build the project with its active build system.
+:JmanRun                Run the project when supported by the build system.
+:JmanTest               Run all tests.
+:JmanTests              Select a discovered test class or method.
+:JmanTestPattern {test} Run an exact test selector.
+:JmanTestNearest        Run the test nearest the cursor.
+:JmanCodeAction         Select a JMAN code action.
+:JmanOrganizeImports    Organize Java imports.
+:JmanChangeSignature    Change a method signature and update call sites.
+:JmanRebuildIndex       Rebuild the workspace source index.
+:JmanClearCache         Confirm, clear, and rebuild the workspace cache.
+:JmanRestartLsp         Restart every JMAN Java client.
+
+Maven and Gradle commands prefer mvnw and gradlew in the project root and use
+the build runtime selected by JMAN. Test selectors are prepared by the language
+server so classes, methods, wrappers, and external build syntax remain correct.
+
+===============================================================================
+KEYMAPS                                                           *jman-keymaps*
+
+<Leader>js    Synchronize project
+<Leader>jc    Check project
+<Leader>jb    Build project
+<Leader>jr    Run project
+<Leader>jt    Test nearest
+<Leader>jT    Test all
+<Leader>jl    Select test
+<Leader>ji    Show status
+<Leader>ja    Code action
+<Leader>jo    Organize imports
+
+===============================================================================
+STATUSLINE                                                     *jman-statusline*
+
+require("jman").status() returns JMAN:ready, JMAN:required, JMAN:syncing,
+JMAN:failed, or JMAN:off. Synchronization transitions emit: >vim
+
+  User JmanStatusChanged
+<
+Statusline plugins can refresh on that event without polling.
+
+===============================================================================
+HEALTH                                                               *jman-health*
+
+Run: >vim
+
+  :checkhealth jman
+<
+The health provider checks the Neovim version, JMAN executable, Java runtime,
+optional external build JDK, and workspace detection.
+
+vim:tw=78:ts=8:noet:ft=help:norl:

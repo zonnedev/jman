@@ -1,0 +1,8 @@
+jman-commands	jman.txt	/*jman-commands*
+jman-contents	jman.txt	/*jman-contents*
+jman-health	jman.txt	/*jman-health*
+jman-intro	jman.txt	/*jman-intro*
+jman-keymaps	jman.txt	/*jman-keymaps*
+jman-setup	jman.txt	/*jman-setup*
+jman-statusline	jman.txt	/*jman-statusline*
+jman.nvim	jman.txt	/*jman.nvim*

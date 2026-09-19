@@ -11,7 +11,7 @@ NATIVE_FRONTEND_INPUTS := \
 
 gates: test test-native test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-vscode-extension test-neovim-plugin
 
-ci: test test-native test-publishing test-vscode-extension test-release-automation
+ci: test test-native test-publishing test-vscode-extension test-neovim-plugin test-release-automation
 
 test: test-rust test-java test-jman-runner
 
@@ -101,7 +101,9 @@ test-vscode-extension:
 	cd editors/vscode && npm run check
 
 test-neovim-plugin:
-	nvim --headless -u NONE -i NONE -l editors/neovim/tests/minimal.lua
+	@for test in editors/neovim/tests/*.lua; do \
+		nvim --headless -u NONE -i NONE -l "$$test" || exit $$?; \
+	done
 
 test-release-automation:
 	./scripts/test-release-automation.sh

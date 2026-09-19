@@ -136,6 +136,15 @@ to the selected dependency, while each audit finding groups its shortest routes
 under the affected workspace module. JSON reports retain explicit path arrays
 for programmatic consumers.
 
+## Editor integrations
+
+The VS Code extension and Neovim 0.11+ plugin use the same JMAN Java language
+server for native JMAN, Maven, and Gradle projects. Both provide project-model
+synchronization, navigation, diagnostics, refactorings, CodeLens tests,
+build-tool wrappers, and compatible build-JDK selection. Neovim users can
+install this repository directly and configure `require("jman").setup()`; see
+[the Neovim guide](editors/neovim/README.md) and `:help jman.nvim`.
+
 ## Development
 
 Use `make gates` for the complete local acceptance suite, `cargo test
