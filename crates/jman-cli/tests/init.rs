@@ -1,6 +1,7 @@
 use std::{
     fs,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read, Write},
+    net::TcpListener,
     process::{Command, Stdio},
 };
 
@@ -376,6 +377,118 @@ url = "{repository_url}"
             "{path} was not restored"
         );
     }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn audit_reports_transitive_policy_results_and_reuses_them_offline() {
+    let project = tempfile::tempdir().expect("temporary project");
+    let cache = tempfile::tempdir().expect("temporary cache");
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let artifact = repository.path().join("org/example/library/1.0.0");
+    fs::create_dir_all(&artifact).expect("artifact directory");
+    fs::write(
+        artifact.join("library-1.0.0.pom"),
+        r"<project><modelVersion>4.0.0</modelVersion><groupId>org.example</groupId><artifactId>library</artifactId><version>1.0.0</version></project>",
+    )
+    .expect("artifact POM");
+    fs::write(artifact.join("library-1.0.0.jar"), b"fixture").expect("artifact JAR");
+    fs::write(
+        project.path().join("jman.toml"),
+        format!(
+            r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "audit-demo"
+version = "1.0.0"
+java-release = 17
+packaging = "jar"
+
+[[repositories]]
+id = "fixture"
+url = "file://{}"
+
+[dependencies.compile]
+"org.example:library" = "1.0.0"
+
+[audit]
+[[audit.suppressions]]
+id = "CVE-muted"
+reason = "The vulnerable entry point is not reachable"
+expires = "2999-12-31"
+"#,
+            repository.path().display()
+        ),
+    )
+    .expect("manifest");
+    let sync = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .args([
+            "sync",
+            project.path().to_str().expect("UTF-8 path"),
+            "--report",
+            "json",
+        ])
+        .output()
+        .expect("synchronize fixture");
+    assert!(
+        sync.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sync.stderr)
+    );
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("OSV listener");
+    let address = listener.local_addr().expect("OSV address");
+    let server = std::thread::spawn(move || serve_osv_audit_fixture(&listener));
+    let audit = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .env("JMAN_AUDIT_OSV_URL", format!("http://{address}"))
+        .args([
+            "audit",
+            project.path().to_str().expect("UTF-8 path"),
+            "--deny",
+            "high",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("audit fixture");
+    server.join().expect("OSV server");
+    assert!(!audit.status.success());
+    assert!(String::from_utf8_lossy(&audit.stderr).contains("audit policy denied"));
+    let report: serde_json::Value = serde_json::from_slice(&audit.stdout).expect("audit report");
+    assert_eq!(report["provider"], "osv");
+    assert_eq!(report["source"], "network");
+    assert_eq!(report["packagesChecked"], 1);
+    assert_eq!(report["totalFindings"], 2);
+    assert_eq!(report["active"], 1);
+    assert_eq!(report["suppressed"], 1);
+    assert_eq!(report["denied"], 1);
+    assert_eq!(report["findings"][0]["advisory"]["severity"], "critical");
+    assert_eq!(report["findings"][0]["active"], false);
+    assert_eq!(report["findings"][1]["paths"][0]["module"], "audit-demo");
+
+    let offline = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .env("JMAN_AUDIT_OSV_URL", format!("http://{address}"))
+        .args([
+            "audit",
+            project.path().to_str().expect("UTF-8 path"),
+            "--offline",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("offline audit");
+    assert!(
+        offline.status.success(),
+        "{}",
+        String::from_utf8_lossy(&offline.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&offline.stdout).expect("offline audit report");
+    assert_eq!(report["source"], "cache");
+    assert_eq!(report["totalFindings"], 2);
 }
 
 #[test]
@@ -2233,4 +2346,52 @@ processors = ["sha256:{digest}"]
         fs::read_to_string(extracted.path().join("META-INF/MANIFEST.MF")).expect("JAR manifest");
     assert!(jar_manifest.contains("Manifest-Version: 1.0\r\n"));
     assert!(jar_manifest.contains("Main-Class: com.example.App\r\n"));
+}
+
+fn serve_osv_audit_fixture(listener: &TcpListener) {
+    for _ in 0..3 {
+        let (mut stream, _) = listener.accept().expect("OSV connection");
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let read = stream.read(&mut buffer).expect("OSV request bytes");
+            request.extend_from_slice(&buffer[..read]);
+            let headers = request
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map(|index| index + 4);
+            let Some(headers) = headers else {
+                continue;
+            };
+            let header_text = String::from_utf8_lossy(&request[..headers]);
+            let content_length = header_text
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                })
+                .unwrap_or_default();
+            if request.len() >= headers + content_length {
+                break;
+            }
+        }
+        let request = String::from_utf8_lossy(&request);
+        let body = if request.starts_with("POST /v1/querybatch") {
+            assert!(request.contains("org.example:library"));
+            r#"{"results":[{"vulns":[{"id":"GHSA-active"},{"id":"GHSA-muted"}]}]}"#
+        } else if request.starts_with("GET /v1/vulns/GHSA-active") {
+            r#"{"id":"GHSA-active","summary":"Active vulnerability","database_specific":{"severity":"HIGH"},"affected":[{"package":{"ecosystem":"Maven","name":"org.example:library"},"ranges":[{"events":[{"fixed":"1.0.1"}]}]}]}"#
+        } else {
+            assert!(request.starts_with("GET /v1/vulns/GHSA-muted"));
+            r#"{"id":"GHSA-muted","aliases":["CVE-muted"],"summary":"Suppressed vulnerability","database_specific":{"severity":"CRITICAL"},"affected":[{"package":{"ecosystem":"Maven","name":"org.example:library"},"ranges":[{"events":[{"fixed":"2.0.0"}]}]}]}"#
+        };
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .expect("OSV response");
+    }
 }

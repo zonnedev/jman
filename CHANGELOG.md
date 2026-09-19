@@ -7,6 +7,11 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ### Added
 
+- `jman audit` now scans the complete locked Maven graph through a
+  provider-neutral audit core backed by OSV, reports shortest transitive paths
+  and fixed versions, normalizes advisory severity, caches exact-graph results
+  for offline and resilient operation, supports human and JSON output plus CI
+  deny thresholds, and validates reasoned, expiring suppressions.
 - `jman update` now applies repository-backed direct-dependency upgrades across
   a workspace, defaults to patch-only changes, supports bounded minor and major
   upgrades, coordinate selection, dry-run and JSON plans, cached offline use,

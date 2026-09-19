@@ -32,6 +32,8 @@ JMAN supports this declared Maven model subset:
 - release and timestamped snapshot artifacts with repository policies;
 - repository version catalogs for direct-dependency reports and transactional,
   policy-bounded workspace updates;
+- exact-lock vulnerability auditing with provider-neutral findings, dependency
+  paths, cached OSV results, CI thresholds, and expiring suppressions;
 - artifact relocation;
 - active-by-default profiles plus environment property and OS activation;
 - nested reactors, local parents, and inter-module dependencies.

@@ -52,6 +52,8 @@ pub struct Manifest {
     pub build: Option<Build>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publishing: Option<Publishing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audit: Option<Audit>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repositories: Vec<Repository>,
     #[serde(default, skip_serializing_if = "Dependencies::is_empty")]
@@ -200,6 +202,19 @@ pub struct Scm {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Audit {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suppressions: Vec<AuditSuppression>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AuditSuppression {
+    pub id: String,
+    pub reason: String,
+    pub expires: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -376,6 +391,9 @@ impl Manifest {
         }
         if let Some(publishing) = &self.publishing {
             validate_publishing(publishing)?;
+        }
+        if let Some(audit) = &self.audit {
+            validate_audit(audit)?;
         }
         Ok(())
     }
@@ -559,6 +577,60 @@ fn validate_publishing(publishing: &Publishing) -> Result<(), ConfigError> {
     Ok(())
 }
 
+fn validate_audit(audit: &Audit) -> Result<(), ConfigError> {
+    let mut identifiers = std::collections::BTreeSet::new();
+    for suppression in &audit.suppressions {
+        if suppression.id.trim().is_empty() {
+            return Err(ConfigError::Validation(
+                "audit suppression ID cannot be empty".to_owned(),
+            ));
+        }
+        if !identifiers.insert(suppression.id.as_str()) {
+            return Err(ConfigError::Validation(format!(
+                "duplicate audit suppression `{}`",
+                suppression.id
+            )));
+        }
+        if suppression.reason.trim().is_empty() {
+            return Err(ConfigError::Validation(format!(
+                "audit suppression `{}` requires a reason",
+                suppression.id
+            )));
+        }
+        if !is_iso_date(&suppression.expires) {
+            return Err(ConfigError::Validation(format!(
+                "audit suppression `{}` expiry must use a valid YYYY-MM-DD date",
+                suppression.id
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn is_iso_date(value: &str) -> bool {
+    let mut parts = value.split('-');
+    let Some(year) = parts.next().and_then(|part| part.parse::<u32>().ok()) else {
+        return false;
+    };
+    let Some(month) = parts.next().and_then(|part| part.parse::<u32>().ok()) else {
+        return false;
+    };
+    let Some(day) = parts.next().and_then(|part| part.parse::<u32>().ok()) else {
+        return false;
+    };
+    if parts.next().is_some() || value.len() != 10 || year == 0 || !(1..=12).contains(&month) {
+        return false;
+    }
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let days = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    (1..=days).contains(&day)
+}
+
 fn default_packaging() -> String {
     "jar".to_owned()
 }
@@ -637,6 +709,7 @@ mod tests {
                     tag: Some("HEAD".to_owned()),
                 }),
             }),
+            audit: None,
             repositories: vec![Repository {
                 id: "central".to_owned(),
                 url: "https://repo.maven.apache.org/maven2".to_owned(),
@@ -720,6 +793,50 @@ mod tests {
     }
 
     #[test]
+    fn audit_suppressions_require_a_reason_and_valid_expiry_date() {
+        let mut manifest = minimal_manifest();
+        manifest.audit = Some(Audit {
+            suppressions: vec![AuditSuppression {
+                id: "GHSA-example".to_owned(),
+                reason: "Compensating input validation is deployed".to_owned(),
+                expires: "2027-03-31".to_owned(),
+            }],
+        });
+        assert!(manifest.validate().is_ok());
+        let text = manifest.to_toml().expect("audit configuration");
+        assert!(text.contains("[[audit.suppressions]]"));
+        assert_eq!(
+            toml::from_str::<Manifest>(&text)
+                .expect("round-trip manifest")
+                .audit,
+            manifest.audit
+        );
+
+        manifest
+            .audit
+            .as_mut()
+            .expect("audit configuration")
+            .suppressions[0]
+            .reason
+            .clear();
+        assert!(matches!(
+            manifest.validate(),
+            Err(ConfigError::Validation(message)) if message.contains("reason")
+        ));
+        let suppression = &mut manifest
+            .audit
+            .as_mut()
+            .expect("audit configuration")
+            .suppressions[0];
+        suppression.reason = "accepted risk".to_owned();
+        suppression.expires = "2027-02-29".to_owned();
+        assert!(matches!(
+            manifest.validate(),
+            Err(ConfigError::Validation(message)) if message.contains("expiry")
+        ));
+    }
+
+    #[test]
     fn programmatic_maven_dependency_metadata_defaults_to_jar() {
         let metadata = MavenDependencyMetadata::default();
         assert_eq!(metadata.dependency_type, "jar");
@@ -742,6 +859,7 @@ mod tests {
             maven: None,
             build: None,
             publishing: None,
+            audit: None,
             repositories: Vec::new(),
             dependencies: Dependencies::default(),
             annotation_processors: BTreeMap::new(),

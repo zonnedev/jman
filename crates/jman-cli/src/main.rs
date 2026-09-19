@@ -57,6 +57,8 @@ enum Command {
     Outdated(Outdated),
     /// Update direct dependency versions and synchronize the workspace.
     Update(Update),
+    /// Audit resolved dependencies for known vulnerabilities.
+    Audit(AuditCommand),
     /// Display the resolved dependency tree.
     Tree(ProjectPath),
     /// Explain why a dependency is present.
@@ -198,6 +200,49 @@ struct Update {
     /// Output format.
     #[arg(long, value_enum, default_value_t = ReportFormat::Human)]
     format: ReportFormat,
+}
+
+#[derive(Debug, Args)]
+struct AuditCommand {
+    /// Project directory.
+    #[arg(default_value = ".")]
+    path: PathBuf,
+    /// Use only a previously cached audit for this exact dependency graph.
+    #[arg(long, conflicts_with = "refresh")]
+    offline: bool,
+    /// Bypass a fresh cached audit and query the provider again.
+    #[arg(long)]
+    refresh: bool,
+    /// Hide findings below this severity.
+    #[arg(long, value_enum, default_value_t = AuditSeverity::Unknown)]
+    severity: AuditSeverity,
+    /// Exit unsuccessfully when an active finding reaches this severity.
+    #[arg(long, value_enum)]
+    deny: Option<AuditSeverity>,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = ReportFormat::Human)]
+    format: ReportFormat,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, ValueEnum)]
+enum AuditSeverity {
+    Unknown,
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl From<AuditSeverity> for jman_audit::Severity {
+    fn from(value: AuditSeverity) -> Self {
+        match value {
+            AuditSeverity::Unknown => Self::Unknown,
+            AuditSeverity::Low => Self::Low,
+            AuditSeverity::Medium => Self::Medium,
+            AuditSeverity::High => Self::High,
+            AuditSeverity::Critical => Self::Critical,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
@@ -520,6 +565,9 @@ async fn main() {
         }) | Command::Update(Update {
             format: ReportFormat::Json,
             ..
+        }) | Command::Audit(AuditCommand {
+            format: ReportFormat::Json,
+            ..
         })
     );
     let ui = Ui::new(cli.quiet, cli.verbose, cli.no_progress, structured);
@@ -537,6 +585,7 @@ async fn run(cli: Cli, ui: &Ui) -> Result<()> {
         Command::Remove(remove) => remove_dependency(&remove, ui).await,
         Command::Outdated(arguments) => outdated_dependencies(&arguments, ui).await,
         Command::Update(arguments) => update_dependencies(&arguments, ui).await,
+        Command::Audit(arguments) => audit_dependencies(&arguments, ui).await,
         Command::Tree(arguments) => dependency_tree(&arguments.path),
         Command::Why(arguments) => dependency_why(&arguments),
         Command::Check(arguments) => compile_project(&arguments, ui, "Checking", "Checked").await,
@@ -2192,6 +2241,7 @@ fn scaffold_manifest(
             compiler_args: Vec::new(),
         }),
         publishing: None,
+        audit: None,
         repositories: Vec::new(),
         dependencies: Dependencies::default(),
         annotation_processors: BTreeMap::new(),
@@ -3562,6 +3612,458 @@ fn dependency_update_table(changes: &[DependencyUpdate]) -> String {
     output.trim_end().to_owned()
 }
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditDependencyPath {
+    module: String,
+    coordinates: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppliedAuditSuppression {
+    reason: String,
+    expires: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditFindingReport {
+    package: jman_audit::AuditPackage,
+    advisory: jman_audit::Advisory,
+    paths: Vec<AuditDependencyPath>,
+    active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suppression: Option<AppliedAuditSuppression>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DependencyAuditReport {
+    provider: String,
+    source: jman_audit::AuditSource,
+    packages_checked: usize,
+    total_findings: usize,
+    reported_findings: usize,
+    active: usize,
+    suppressed: usize,
+    denied: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    suppression_warnings: Vec<String>,
+    findings: Vec<AuditFindingReport>,
+}
+
+#[derive(Debug)]
+struct AuditWorkspace {
+    packages: Vec<jman_audit::AuditPackage>,
+    paths: BTreeMap<jman_audit::AuditPackage, Vec<AuditDependencyPath>>,
+    suppressions: Vec<jman_config::AuditSuppression>,
+}
+
+async fn audit_dependencies(arguments: &AuditCommand, ui: &Ui) -> Result<()> {
+    validate_audit_thresholds(arguments.severity, arguments.deny)?;
+    let target = absolute_path(&arguments.path)?;
+    if !target.join("jman.toml").is_file() {
+        bail!("cannot audit {}: jman.toml was not found", target.display());
+    }
+    let workspace_root = find_workspace_root(&target);
+    let activity = ui.activity("Loading resolved dependency graph");
+    let workspace = load_audit_workspace(&workspace_root).await?;
+    activity.finish(format!(
+        "Loaded {} resolved packages",
+        workspace.packages.len()
+    ));
+    let activity = ui.activity("Querying vulnerability intelligence");
+    let provider = std::env::var("JMAN_AUDIT_OSV_URL")
+        .map_or_else(
+            |_| jman_audit::OsvProvider::new(),
+            jman_audit::OsvProvider::with_base_url,
+        )
+        .context("could not initialize OSV provider")?;
+    let auditor = jman_audit::Auditor::new(
+        provider,
+        jman_audit::AuditOptions::platform_default(arguments.offline, arguments.refresh),
+    );
+    let result = auditor
+        .audit(&workspace.packages)
+        .await
+        .context("dependency vulnerability audit failed")?;
+    activity.finish(format!(
+        "Received {} vulnerability findings",
+        result.findings.len()
+    ));
+    if result.source == jman_audit::AuditSource::StaleCache {
+        ui.warning("the audit provider was unavailable; using the last cached result");
+    }
+    let report = evaluate_audit(
+        result,
+        &workspace.paths,
+        &workspace.suppressions,
+        arguments.severity.into(),
+        arguments.deny.map(Into::into),
+        &utc_date(),
+    );
+    for warning in &report.suppression_warnings {
+        ui.warning(terminal_text(warning));
+    }
+    match arguments.format {
+        ReportFormat::Human => print_dependency_audit(&report),
+        ReportFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+    }
+    if report.denied > 0 {
+        let threshold = arguments
+            .deny
+            .expect("denied findings require a configured threshold");
+        bail!(
+            "audit policy denied {} active finding{} at {:?} severity or higher",
+            report.denied,
+            if report.denied == 1 { "" } else { "s" },
+            threshold
+        );
+    }
+    Ok(())
+}
+
+fn validate_audit_thresholds(minimum: AuditSeverity, deny: Option<AuditSeverity>) -> Result<()> {
+    if deny.is_some_and(|deny| minimum > deny) {
+        bail!("--severity cannot be higher than --deny because denied findings would be hidden");
+    }
+    Ok(())
+}
+
+async fn load_audit_workspace(root: &Path) -> Result<AuditWorkspace> {
+    let directories = workspace_directories(root).await?;
+    let workspace_hash = hash_workspace_manifests(root).await?;
+    let root_manifest = Manifest::read(&root.join("jman.toml"))
+        .with_context(|| format!("could not read {}", root.join("jman.toml").display()))?;
+    let suppressions = root_manifest
+        .audit
+        .map_or_else(Vec::new, |audit| audit.suppressions);
+    let manifests = directories
+        .iter()
+        .map(|directory| {
+            Manifest::read(&directory.join("jman.toml")).with_context(|| {
+                format!("could not read {}", directory.join("jman.toml").display())
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let workspace_packages = manifests
+        .iter()
+        .map(|manifest| {
+            (
+                manifest.project.group.clone(),
+                manifest.project.name.clone(),
+                manifest.project.version.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let mut packages = BTreeSet::new();
+    let mut paths = BTreeMap::<_, BTreeSet<_>>::new();
+    for (directory, manifest) in directories.iter().zip(&manifests) {
+        let lock_path = directory.join("jman.lock");
+        let lock = Lockfile::read(&lock_path).with_context(|| {
+            format!(
+                "could not read {}; run jman sync before auditing",
+                lock_path.display()
+            )
+        })?;
+        let manifest_text = manifest
+            .to_toml()
+            .context("could not serialize jman.toml for lock validation")?;
+        if lock.manifest_hash != sha256(manifest_text.as_bytes())
+            || lock.workspace_hash != workspace_hash
+            || lock.platform != platform_id()
+            || lock.toolchain.java_release != manifest.project.java_release
+        {
+            bail!(
+                "{} is stale for the current workspace; run jman sync before auditing",
+                lock_path.display()
+            );
+        }
+        let module_paths = audit_paths_for_lock(&lock, &manifest.project.name);
+        for package in &lock.packages {
+            if workspace_packages.contains(&(
+                package.group.clone(),
+                package.artifact.clone(),
+                package.version.clone(),
+            )) {
+                continue;
+            }
+            let audit_package = jman_audit::AuditPackage {
+                group: package.group.clone(),
+                artifact: package.artifact.clone(),
+                version: package.version.clone(),
+            };
+            packages.insert(audit_package.clone());
+            let coordinate = locked_coordinate(package);
+            let package_paths = module_paths.get(&coordinate).cloned().unwrap_or_else(|| {
+                BTreeSet::from([AuditDependencyPath {
+                    module: manifest.project.name.clone(),
+                    coordinates: vec![coordinate],
+                }])
+            });
+            paths
+                .entry(audit_package)
+                .or_default()
+                .extend(package_paths);
+        }
+    }
+    Ok(AuditWorkspace {
+        packages: packages.into_iter().collect(),
+        paths: paths
+            .into_iter()
+            .map(|(package, paths)| (package, paths.into_iter().collect()))
+            .collect(),
+        suppressions,
+    })
+}
+
+fn audit_paths_for_lock(
+    lock: &Lockfile,
+    module: &str,
+) -> BTreeMap<String, BTreeSet<AuditDependencyPath>> {
+    let packages = lock
+        .packages
+        .iter()
+        .map(|package| (locked_coordinate(package), package))
+        .collect::<BTreeMap<_, _>>();
+    let mut paths = BTreeMap::<String, BTreeSet<AuditDependencyPath>>::new();
+    let mut queue = std::collections::VecDeque::new();
+    for root in locked_root_dependencies(lock) {
+        queue.push_back((root.clone(), vec![root]));
+    }
+    let mut shortest = BTreeMap::<String, usize>::new();
+    while let Some((coordinate, path)) = queue.pop_front() {
+        let length = path.len();
+        if shortest
+            .get(&coordinate)
+            .is_some_and(|existing| *existing < length)
+        {
+            continue;
+        }
+        shortest.insert(coordinate.clone(), length);
+        paths
+            .entry(coordinate.clone())
+            .or_default()
+            .insert(AuditDependencyPath {
+                module: module.to_owned(),
+                coordinates: path.clone(),
+            });
+        let Some(package) = packages.get(&coordinate) else {
+            continue;
+        };
+        for dependency in &package.dependencies {
+            if path.contains(dependency) {
+                continue;
+            }
+            let mut child_path = path.clone();
+            child_path.push(dependency.clone());
+            queue.push_back((dependency.clone(), child_path));
+        }
+    }
+    paths
+}
+
+fn evaluate_audit(
+    result: jman_audit::AuditResult,
+    paths: &BTreeMap<jman_audit::AuditPackage, Vec<AuditDependencyPath>>,
+    suppressions: &[jman_config::AuditSuppression],
+    minimum: jman_audit::Severity,
+    deny: Option<jman_audit::Severity>,
+    today: &str,
+) -> DependencyAuditReport {
+    let total_findings = result.findings.len();
+    let mut used_suppressions = BTreeSet::new();
+    let mut suppression_warnings = suppressions
+        .iter()
+        .filter(|suppression| suppression.expires.as_str() < today)
+        .map(|suppression| {
+            format!(
+                "audit suppression '{}' expired on {} and no longer applies",
+                suppression.id, suppression.expires
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let mut all = Vec::new();
+    for finding in result.findings {
+        let suppression = suppressions.iter().find(|suppression| {
+            suppression.id == finding.advisory.id
+                || finding.advisory.aliases.contains(&suppression.id)
+        });
+        let applied = suppression.and_then(|suppression| {
+            if suppression.expires.as_str() < today {
+                None
+            } else {
+                used_suppressions.insert(suppression.id.clone());
+                Some(AppliedAuditSuppression {
+                    reason: suppression.reason.clone(),
+                    expires: suppression.expires.clone(),
+                })
+            }
+        });
+        all.push(AuditFindingReport {
+            paths: paths.get(&finding.package).cloned().unwrap_or_default(),
+            package: finding.package,
+            advisory: finding.advisory,
+            active: applied.is_none(),
+            suppression: applied,
+        });
+    }
+    for suppression in suppressions {
+        if suppression.expires.as_str() >= today && !used_suppressions.contains(&suppression.id) {
+            suppression_warnings.insert(format!(
+                "audit suppression '{}' did not match any finding",
+                suppression.id
+            ));
+        }
+    }
+    let denied = deny.map_or(0, |threshold| {
+        all.iter()
+            .filter(|finding| finding.active && finding.advisory.severity >= threshold)
+            .count()
+    });
+    all.retain(|finding| finding.advisory.severity >= minimum);
+    all.sort_by(|left, right| {
+        right
+            .advisory
+            .severity
+            .cmp(&left.advisory.severity)
+            .then_with(|| left.package.cmp(&right.package))
+            .then_with(|| left.advisory.id.cmp(&right.advisory.id))
+    });
+    let active = all.iter().filter(|finding| finding.active).count();
+    let suppressed = all.len() - active;
+    DependencyAuditReport {
+        provider: result.provider,
+        source: result.source,
+        packages_checked: paths.len(),
+        total_findings,
+        reported_findings: all.len(),
+        active,
+        suppressed,
+        denied,
+        suppression_warnings: suppression_warnings.into_iter().collect(),
+        findings: all,
+    }
+}
+
+fn print_dependency_audit(report: &DependencyAuditReport) {
+    if report.findings.is_empty() {
+        println!(
+            "No known vulnerabilities found in {} resolved packages.",
+            report.packages_checked
+        );
+        return;
+    }
+    for finding in &report.findings {
+        let status = if finding.active {
+            "ACTIVE"
+        } else {
+            "SUPPRESSED"
+        };
+        println!(
+            "{}  {}  {}  {}",
+            finding.advisory.severity.name().to_ascii_uppercase(),
+            status,
+            terminal_text(&finding.advisory.id),
+            terminal_text(&finding.package.coordinate())
+        );
+        println!("  {}", terminal_text(&finding.advisory.summary));
+        if !finding.advisory.aliases.is_empty() {
+            println!(
+                "  aliases: {}",
+                finding
+                    .advisory
+                    .aliases
+                    .iter()
+                    .map(|alias| terminal_text(alias))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        if !finding.advisory.fixed_versions.is_empty() {
+            println!(
+                "  fixed: {}",
+                finding
+                    .advisory
+                    .fixed_versions
+                    .iter()
+                    .map(|version| terminal_text(version))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        for path in &finding.paths {
+            println!(
+                "  via {}: {}",
+                terminal_text(&path.module),
+                path.coordinates
+                    .iter()
+                    .map(|coordinate| terminal_text(coordinate))
+                    .collect::<Vec<_>>()
+                    .join(" → ")
+            );
+        }
+        if let Some(suppression) = &finding.suppression {
+            println!(
+                "  suppressed until {}: {}",
+                terminal_text(&suppression.expires),
+                terminal_text(&suppression.reason)
+            );
+        }
+        if let Some(reference) = finding.advisory.references.first() {
+            println!("  {}", terminal_text(reference));
+        }
+        println!();
+    }
+    println!(
+        "{} active, {} suppressed, {} reported ({} total)",
+        report.active, report.suppressed, report.reported_findings, report.total_findings
+    );
+}
+
+fn terminal_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
+fn utc_date() -> String {
+    let days = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        / 86_400;
+    let (year, month, day) = civil_date_from_unix_days(days.cast_signed());
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn civil_date_from_unix_days(days: i64) -> (i64, i64, i64) {
+    let shifted = days + 719_468;
+    let era = if shifted >= 0 {
+        shifted
+    } else {
+        shifted - 146_096
+    } / 146_097;
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    (year, month, day)
+}
+
 async fn sync_project(arguments: &Sync, ui: &Ui) -> Result<()> {
     let target = absolute_path(&arguments.path)?;
     if !target.join("jman.toml").is_file() {
@@ -3975,6 +4477,7 @@ fn manifest_from_maven(effective: &EffectivePom, maven_authoritative: bool) -> R
             compiler_args: effective.compiler_args.clone(),
         }),
         publishing: None,
+        audit: None,
         repositories: effective
             .repositories
             .iter()
@@ -4677,6 +5180,143 @@ mod tests {
             assert_eq!(selected.to, expected);
             assert_eq!(selected.change, change);
         }
+    }
+
+    #[test]
+    fn audit_accepts_offline_filter_policy_and_json_controls() {
+        let cli = Cli::try_parse_from([
+            "jman",
+            "audit",
+            "workspace",
+            "--offline",
+            "--severity",
+            "medium",
+            "--deny",
+            "critical",
+            "--format",
+            "json",
+        ])
+        .expect("audit command");
+        let Command::Audit(arguments) = cli.command else {
+            panic!("expected audit command");
+        };
+        assert_eq!(arguments.path, PathBuf::from("workspace"));
+        assert!(arguments.offline);
+        assert_eq!(arguments.severity, AuditSeverity::Medium);
+        assert_eq!(arguments.deny, Some(AuditSeverity::Critical));
+        assert_eq!(arguments.format, ReportFormat::Json);
+        assert!(
+            validate_audit_thresholds(AuditSeverity::High, Some(AuditSeverity::Critical)).is_ok()
+        );
+        assert!(
+            validate_audit_thresholds(AuditSeverity::Critical, Some(AuditSeverity::High)).is_err()
+        );
+    }
+
+    #[test]
+    fn audit_reports_shortest_transitive_dependency_paths() {
+        let package = |artifact: &str, dependencies: Vec<String>, selected_parent: Option<&str>| {
+            LockedPackage {
+                group: "org.example".to_owned(),
+                artifact: artifact.to_owned(),
+                version: "1".to_owned(),
+                extension: "jar".to_owned(),
+                classifier: None,
+                source: "fixture".to_owned(),
+                pom_checksum: format!("sha256:{}", "0".repeat(64)),
+                artifact_checksum: None,
+                artifact_size: None,
+                dependencies,
+                scopes: vec!["compile".to_owned()],
+                selected_parent: selected_parent.map(ToOwned::to_owned),
+            }
+        };
+        let child = "org.example:child:1".to_owned();
+        let lock = Lockfile {
+            lock_version: LOCK_VERSION,
+            manifest_hash: format!("sha256:{}", "0".repeat(64)),
+            workspace_hash: format!("sha256:{}", "0".repeat(64)),
+            platform: "fixture".to_owned(),
+            toolchain: LockedToolchain { java_release: 21 },
+            packages: vec![
+                package("root", vec![child.clone()], None),
+                package("child", Vec::new(), Some("org.example:root:1")),
+            ],
+            classpath: LockedClasspaths::default(),
+        };
+        let paths = audit_paths_for_lock(&lock, "app");
+        let child_path = paths
+            .get(&child)
+            .expect("child path")
+            .iter()
+            .next()
+            .expect("one path");
+        assert_eq!(
+            child_path.coordinates,
+            ["org.example:root:1", "org.example:child:1"]
+        );
+    }
+
+    #[test]
+    fn audit_applies_alias_suppressions_and_denies_only_active_findings() {
+        let package = jman_audit::AuditPackage {
+            group: "org.example".to_owned(),
+            artifact: "library".to_owned(),
+            version: "1".to_owned(),
+        };
+        let finding = |id: &str, alias: &str, severity| jman_audit::Finding {
+            package: package.clone(),
+            advisory: jman_audit::Advisory {
+                id: id.to_owned(),
+                aliases: vec![alias.to_owned()],
+                summary: "fixture".to_owned(),
+                severity,
+                fixed_versions: vec!["2".to_owned()],
+                references: Vec::new(),
+                modified: None,
+            },
+        };
+        let report = evaluate_audit(
+            jman_audit::AuditResult {
+                provider: "fixture".to_owned(),
+                source: jman_audit::AuditSource::Network,
+                findings: vec![
+                    finding("GHSA-active", "CVE-active", jman_audit::Severity::Critical),
+                    finding("GHSA-muted", "CVE-muted", jman_audit::Severity::High),
+                ],
+            },
+            &BTreeMap::from([(package, Vec::new())]),
+            &[
+                jman_config::AuditSuppression {
+                    id: "CVE-muted".to_owned(),
+                    reason: "not reachable".to_owned(),
+                    expires: "2027-01-01".to_owned(),
+                },
+                jman_config::AuditSuppression {
+                    id: "GHSA-active".to_owned(),
+                    reason: "expired exception".to_owned(),
+                    expires: "2025-01-01".to_owned(),
+                },
+            ],
+            jman_audit::Severity::Medium,
+            Some(jman_audit::Severity::High),
+            "2026-09-19",
+        );
+        assert_eq!(report.active, 1);
+        assert_eq!(report.suppressed, 1);
+        assert_eq!(report.denied, 1);
+        assert!(report.suppression_warnings[0].contains("expired"));
+    }
+
+    #[test]
+    fn audit_calendar_conversion_is_stable() {
+        assert_eq!(civil_date_from_unix_days(0), (1970, 1, 1));
+        assert_eq!(civil_date_from_unix_days(20_350), (2025, 9, 19));
+    }
+
+    #[test]
+    fn audit_human_output_neutralizes_terminal_control_characters() {
+        assert_eq!(terminal_text("safe\u{1b}[31m\ntext"), "safe [31m text");
     }
 
     #[test]

@@ -115,6 +115,21 @@ jman update --level latest --include-prerelease
 lockfiles as one operation. If dependency resolution fails, all touched
 manifests and lockfiles are restored.
 
+Audit the complete locked dependency graph against known vulnerabilities:
+
+```bash
+jman audit
+jman audit --severity high
+jman audit --deny high
+jman audit --offline
+jman audit --format json
+```
+
+Audit reports include shortest dependency paths, fixed versions, cached and
+offline operation, CI policy thresholds, and validated reasoned suppressions
+with mandatory expiry dates. See [security auditing](docs/security-auditing.md)
+for the provider, severity, cache, and suppression contracts.
+
 ## Development
 
 Use `make gates` for the complete local acceptance suite, `cargo test

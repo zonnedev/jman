@@ -787,6 +787,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "jman-audit"
+version = "0.3.0-rc.3"
+dependencies = [
+ "dirs",
+ "futures",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "jman-build"
 version = "0.3.0-rc.3"
 dependencies = [
@@ -817,6 +833,7 @@ dependencies = [
  "futures",
  "hex",
  "indicatif",
+ "jman-audit",
  "jman-build",
  "jman-config",
  "jman-java-lsp",

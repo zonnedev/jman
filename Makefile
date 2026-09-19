@@ -125,6 +125,8 @@ stage-release:
 	@test -n "$(TAG)" || { echo "usage: make stage-release TAG=v<version>" >&2; exit 2; }
 	./scripts/stage-release-artifacts.sh "$(TAG)"
 
+package: release package-vscode
+
 clean:
 	cargo clean
 

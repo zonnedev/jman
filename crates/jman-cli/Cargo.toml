@@ -16,6 +16,7 @@ dirs.workspace = true
 futures.workspace = true
 hex.workspace = true
 indicatif.workspace = true
+jman-audit = { path = "../jman-audit" }
 jman-build = { path = "../jman-build" }
 jman-config = { path = "../jman-config" }
 jman-resolver = { path = "../jman-resolver" }

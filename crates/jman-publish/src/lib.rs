@@ -1093,6 +1093,7 @@ mod tests {
                     tag: Some("HEAD".to_owned()),
                 }),
             }),
+            audit: None,
             repositories: Vec::new(),
             dependencies: Dependencies::default(),
             annotation_processors: BTreeMap::new(),

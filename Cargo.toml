@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/jman-audit",
     "crates/jman-build",
     "crates/jman-cli",
     "crates/jman-config",
