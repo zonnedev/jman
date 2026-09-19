@@ -101,6 +101,20 @@ Stable releases are preferred unless prereleases are explicitly requested.
 See [dependency maintenance](docs/dependency-maintenance.md) for the complete
 contract.
 
+Apply repository updates transactionally, with patch-only selection by default:
+
+```bash
+jman update --dry-run
+jman update
+jman update org.example:library --level minor
+jman update --level major
+jman update --level latest --include-prerelease
+```
+
+`jman update` edits every matching workspace declaration and regenerates its
+lockfiles as one operation. If dependency resolution fails, all touched
+manifests and lockfiles are restored.
+
 ## Development
 
 Use `make gates` for the complete local acceptance suite, `cargo test

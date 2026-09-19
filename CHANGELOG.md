@@ -7,6 +7,10 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ### Added
 
+- `jman update` now applies repository-backed direct-dependency upgrades across
+  a workspace, defaults to patch-only changes, supports bounded minor and major
+  upgrades, coordinate selection, dry-run and JSON plans, cached offline use,
+  and restores every manifest and lockfile if synchronization fails.
 - `jman outdated` now aggregates direct dependencies across workspaces,
   discovers Maven repository versions, classifies patch, minor, and major
   upgrades, excludes prereleases by default, supports cached offline operation,

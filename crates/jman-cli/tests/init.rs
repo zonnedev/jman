@@ -209,6 +209,176 @@ url = "{repository_url}"
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn update_is_patch_safe_dry_runnable_and_transactional_across_a_workspace() {
+    let project = tempfile::tempdir().expect("temporary workspace");
+    let cache = tempfile::tempdir().expect("temporary cache");
+    let repository = tempfile::tempdir().expect("temporary repository");
+    for module in ["alpha", "beta"] {
+        fs::create_dir_all(project.path().join(module)).expect("module directory");
+    }
+    fs::write(
+        project.path().join("jman.toml"),
+        r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "workspace"
+version = "1.0.0"
+java-release = 17
+packaging = "pom"
+modules = ["alpha", "beta"]
+"#,
+    )
+    .expect("root manifest");
+    let repository_url = format!("file://{}", repository.path().display());
+    fs::write(
+        project.path().join("alpha/jman.toml"),
+        format!(
+            r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "alpha"
+version = "1.0.0"
+java-release = 17
+packaging = "jar"
+
+[[repositories]]
+id = "fixture"
+url = "{repository_url}"
+
+[dependencies.compile]
+"org.example:library" = "1.2.3"
+"#
+        ),
+    )
+    .expect("alpha manifest");
+    fs::write(
+        project.path().join("beta/jman.toml"),
+        format!(
+            r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "beta"
+version = "1.0.0"
+java-release = 17
+packaging = "jar"
+
+[[repositories]]
+id = "fixture"
+url = "{repository_url}"
+
+[dependencies.runtime]
+"org.example:library" = "1.2.3"
+"#
+        ),
+    )
+    .expect("beta manifest");
+    let metadata = repository
+        .path()
+        .join("org/example/library/maven-metadata.xml");
+    fs::create_dir_all(metadata.parent().expect("metadata parent")).expect("metadata directory");
+    let write_metadata = |patch: &str| {
+        fs::write(
+            &metadata,
+            format!(
+                "<metadata><versioning><release>2.0.0</release><versions>\
+                 <version>1.2.3</version><version>1.2.4</version>\
+                 <version>{patch}</version><version>1.3.0</version>\
+                 <version>2.0.0</version></versions></versioning></metadata>"
+            ),
+        )
+        .expect("Maven metadata");
+    };
+    write_metadata("1.2.4");
+    let artifact = repository.path().join("org/example/library/1.2.4");
+    fs::create_dir_all(&artifact).expect("artifact directory");
+    fs::write(
+        artifact.join("library-1.2.4.pom"),
+        r"<project><modelVersion>4.0.0</modelVersion><groupId>org.example</groupId><artifactId>library</artifactId><version>1.2.4</version></project>",
+    )
+    .expect("artifact POM");
+    fs::write(artifact.join("library-1.2.4.jar"), b"fixture").expect("artifact JAR");
+
+    let run = |additional: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_jman"))
+            .env("JMAN_CACHE_DIR", cache.path())
+            .args(["update", "org.example:library"])
+            .args(["--path", project.path().to_str().expect("UTF-8 path")])
+            .args(additional)
+            .args(["--format", "json"])
+            .output()
+            .expect("update dependencies")
+    };
+    let before = fs::read_to_string(project.path().join("alpha/jman.toml")).expect("manifest");
+    let dry_run = run(&["--dry-run"]);
+    assert!(
+        dry_run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dry_run.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&dry_run.stdout).expect("dry-run report");
+    assert_eq!(report["level"], "patch");
+    assert_eq!(report["dryRun"], true);
+    assert_eq!(report["applied"], false);
+    assert_eq!(report["changes"][0]["from"], "1.2.3");
+    assert_eq!(report["changes"][0]["to"], "1.2.4");
+    assert_eq!(
+        fs::read_to_string(project.path().join("alpha/jman.toml")).expect("manifest"),
+        before
+    );
+
+    let minor = run(&["--dry-run", "--level", "minor"]);
+    assert!(minor.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&minor.stdout).expect("minor report");
+    assert_eq!(report["changes"][0]["to"], "1.3.0");
+
+    let applied = run(&[]);
+    assert!(
+        applied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&applied.stdout).expect("applied report");
+    assert_eq!(report["applied"], true);
+    for module in ["alpha", "beta"] {
+        let manifest = fs::read_to_string(project.path().join(module).join("jman.toml"))
+            .expect("updated manifest");
+        assert!(manifest.contains("\"org.example:library\" = \"1.2.4\""));
+        let lock = fs::read_to_string(project.path().join(module).join("jman.lock"))
+            .expect("module lockfile");
+        assert!(lock.contains("version = \"1.2.4\""));
+    }
+
+    let preserved = [
+        "jman.toml",
+        "jman.lock",
+        "alpha/jman.toml",
+        "alpha/jman.lock",
+        "beta/jman.toml",
+        "beta/jman.lock",
+    ]
+    .map(|path| {
+        (
+            path,
+            fs::read(project.path().join(path)).expect("transaction snapshot"),
+        )
+    });
+    write_metadata("1.2.5");
+    let failed = run(&[]);
+    assert!(!failed.status.success());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("restored"));
+    for (path, expected) in preserved {
+        assert_eq!(
+            fs::read(project.path().join(path)).expect("restored workspace file"),
+            expected,
+            "{path} was not restored"
+        );
+    }
+}
+
+#[test]
 fn publishes_complete_artifact_set_to_local_repository_and_reports_json() {
     let project = tempfile::tempdir().expect("temporary project");
     let cache = tempfile::tempdir().expect("temporary cache");

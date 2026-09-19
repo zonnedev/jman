@@ -30,7 +30,8 @@ JMAN supports this declared Maven model subset:
 - optional dependencies, exclusions, classifiers, and artifact types;
 - nearest-definition mediation with declaration-order tie breaking;
 - release and timestamped snapshot artifacts with repository policies;
-- repository version catalogs for read-only direct-dependency update reports;
+- repository version catalogs for direct-dependency reports and transactional,
+  policy-bounded workspace updates;
 - artifact relocation;
 - active-by-default profiles plus environment property and OS activation;
 - nested reactors, local parents, and inter-module dependencies.

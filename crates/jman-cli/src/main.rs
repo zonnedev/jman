@@ -55,6 +55,8 @@ enum Command {
     Remove(Remove),
     /// Check direct dependencies for newer repository versions.
     Outdated(Outdated),
+    /// Update direct dependency versions and synchronize the workspace.
+    Update(Update),
     /// Display the resolved dependency tree.
     Tree(ProjectPath),
     /// Explain why a dependency is present.
@@ -172,6 +174,39 @@ struct Outdated {
     /// Output format.
     #[arg(long, value_enum, default_value_t = ReportFormat::Human)]
     format: ReportFormat,
+}
+
+#[derive(Debug, Args)]
+struct Update {
+    /// Update only this dependency in group:artifact notation.
+    dependency: Option<String>,
+    /// Project directory.
+    #[arg(long, default_value = ".")]
+    path: PathBuf,
+    /// Highest version-change class that may be selected.
+    #[arg(long, value_enum, default_value_t = UpdateLevel::Patch)]
+    level: UpdateLevel,
+    /// Use only previously cached Maven metadata and artifacts.
+    #[arg(long)]
+    offline: bool,
+    /// Include alpha, beta, milestone, release-candidate, and snapshot versions.
+    #[arg(long)]
+    include_prerelease: bool,
+    /// Show the update plan without modifying manifests or lockfiles.
+    #[arg(long)]
+    dry_run: bool,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = ReportFormat::Human)]
+    format: ReportFormat,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+enum UpdateLevel {
+    Patch,
+    Minor,
+    Major,
+    Latest,
 }
 
 #[derive(Debug, Args)]
@@ -482,6 +517,9 @@ async fn main() {
         }) | Command::Outdated(Outdated {
             format: ReportFormat::Json,
             ..
+        }) | Command::Update(Update {
+            format: ReportFormat::Json,
+            ..
         })
     );
     let ui = Ui::new(cli.quiet, cli.verbose, cli.no_progress, structured);
@@ -498,6 +536,7 @@ async fn run(cli: Cli, ui: &Ui) -> Result<()> {
         Command::Add(add) => add_dependency(&add, ui).await,
         Command::Remove(remove) => remove_dependency(&remove, ui).await,
         Command::Outdated(arguments) => outdated_dependencies(&arguments, ui).await,
+        Command::Update(arguments) => update_dependencies(&arguments, ui).await,
         Command::Tree(arguments) => dependency_tree(&arguments.path),
         Command::Why(arguments) => dependency_why(&arguments),
         Command::Check(arguments) => compile_project(&arguments, ui, "Checking", "Checked").await,
@@ -2879,13 +2918,29 @@ async fn outdated_dependencies(arguments: &Outdated, ui: &Ui) -> Result<()> {
     }
     let workspace_root = find_workspace_root(&target);
     let requests = collect_outdated_requests(&workspace_root).await?;
+    let checked = requests.len();
     let activity = ui.activity(format!(
         "Checking {} direct dependenc{}",
-        requests.len(),
-        if requests.len() == 1 { "y" } else { "ies" }
+        checked,
+        if checked == 1 { "y" } else { "ies" }
     ));
+    let report =
+        build_outdated_report(requests, arguments.offline, arguments.include_prerelease).await;
+    activity.finish(format!("Checked {} direct dependencies", report.checked));
+    match arguments.format {
+        ReportFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
+        ReportFormat::Human => print_outdated_report(&report, ui),
+    }
+    Ok(())
+}
+
+async fn build_outdated_report(
+    requests: BTreeMap<(String, String), OutdatedRequest>,
+    offline: bool,
+    include_prerelease: bool,
+) -> OutdatedReport {
     let checks = requests.into_values().map(|request| async move {
-        check_outdated_dependency(request, arguments.offline, arguments.include_prerelease).await
+        check_outdated_dependency(request, offline, include_prerelease).await
     });
     let mut dependencies = stream::iter(checks)
         .buffer_unordered(8)
@@ -2906,19 +2961,13 @@ async fn outdated_dependencies(arguments: &Outdated, ui: &Ui) -> Result<()> {
         .iter()
         .filter(|dependency| dependency.status == OutdatedStatus::Unavailable)
         .count();
-    let report = OutdatedReport {
+    OutdatedReport {
         checked: dependencies.len(),
         outdated,
         up_to_date,
         unavailable,
         dependencies,
-    };
-    activity.finish(format!("Checked {} direct dependencies", report.checked));
-    match arguments.format {
-        ReportFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
-        ReportFormat::Human => print_outdated_report(&report, ui),
     }
-    Ok(())
 }
 
 async fn collect_outdated_requests(
@@ -3179,6 +3228,338 @@ fn outdated_table(dependencies: &[OutdatedDependencyReport]) -> String {
         .expect("writing a String cannot fail");
     }
     output
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DependencyUpdate {
+    dependency: String,
+    from: String,
+    to: String,
+    change: jman_resolver::VersionChange,
+    scopes: Vec<String>,
+    modules: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DependencyUpdateReport {
+    level: UpdateLevel,
+    dry_run: bool,
+    applied: bool,
+    updated: usize,
+    changes: Vec<DependencyUpdate>,
+}
+
+#[derive(Debug)]
+struct WorkspaceFileSnapshot {
+    path: PathBuf,
+    contents: Option<String>,
+}
+
+async fn update_dependencies(arguments: &Update, ui: &Ui) -> Result<()> {
+    let target = absolute_path(&arguments.path)?;
+    if !target.join("jman.toml").is_file() {
+        bail!(
+            "cannot update {}: jman.toml was not found",
+            target.display()
+        );
+    }
+    if let Some(dependency) = &arguments.dependency {
+        split_ga(dependency)?;
+    }
+    let workspace_root = find_workspace_root(&target);
+    let requests = collect_outdated_requests(&workspace_root).await?;
+    let activity = ui.activity("Planning dependency updates");
+    let mut outdated =
+        build_outdated_report(requests, arguments.offline, arguments.include_prerelease)
+            .await
+            .dependencies;
+    if let Some(dependency) = &arguments.dependency {
+        outdated.retain(|candidate| candidate.dependency == *dependency);
+        if outdated.is_empty() {
+            bail!("external dependency `{dependency}` is not declared in this workspace");
+        }
+    }
+    let unavailable = outdated
+        .iter()
+        .filter(|dependency| dependency.status == OutdatedStatus::Unavailable)
+        .map(|dependency| {
+            format!(
+                "{}@{} ({})",
+                dependency.dependency,
+                dependency.current,
+                dependency
+                    .error
+                    .as_deref()
+                    .unwrap_or("metadata unavailable")
+            )
+        })
+        .collect::<Vec<_>>();
+    if !unavailable.is_empty() {
+        bail!(
+            "cannot create a complete update plan: {}",
+            unavailable.join("; ")
+        );
+    }
+    for dependency in &outdated {
+        if dependency.source.as_deref() == Some("stale-cache") {
+            ui.warning(format!(
+                "{}: repository metadata was unavailable; planning from the last cached catalog",
+                dependency.dependency
+            ));
+        }
+    }
+    let changes = outdated
+        .iter()
+        .filter_map(|dependency| select_dependency_update(dependency, arguments.level))
+        .collect::<Vec<_>>();
+    activity.finish(format!("Planned {} dependency updates", changes.len()));
+    let mut report = DependencyUpdateReport {
+        level: arguments.level,
+        dry_run: arguments.dry_run,
+        applied: false,
+        updated: changes.len(),
+        changes,
+    };
+    if arguments.dry_run || report.changes.is_empty() {
+        print_dependency_update_report(&report, arguments.format, ui)?;
+        return Ok(());
+    }
+
+    let directories = workspace_directories(&workspace_root).await?;
+    let snapshots = snapshot_workspace_files(&directories).await?;
+    let result = async {
+        apply_dependency_update_plan(&directories, &report.changes).await?;
+        sync_project(
+            &Sync {
+                path: workspace_root,
+                report: ReportFormat::Human,
+                refresh: true,
+                offline: arguments.offline,
+            },
+            ui,
+        )
+        .await
+    }
+    .await;
+    if let Err(error) = result {
+        if let Err(restoration_error) = restore_workspace_files(&snapshots).await {
+            bail!(
+                "dependency update failed: {error:#}; workspace restoration also failed: \
+                 {restoration_error:#}"
+            );
+        }
+        bail!("dependency update failed and workspace files were restored: {error:#}");
+    }
+    report.applied = true;
+    print_dependency_update_report(&report, arguments.format, ui)
+}
+
+fn select_dependency_update(
+    dependency: &OutdatedDependencyReport,
+    level: UpdateLevel,
+) -> Option<DependencyUpdate> {
+    let selected = match level {
+        UpdateLevel::Patch => dependency
+            .patch
+            .as_ref()
+            .map(|version| (version, jman_resolver::VersionChange::Patch)),
+        UpdateLevel::Minor => dependency
+            .minor
+            .as_ref()
+            .map(|version| (version, jman_resolver::VersionChange::Minor))
+            .or_else(|| {
+                dependency
+                    .patch
+                    .as_ref()
+                    .map(|version| (version, jman_resolver::VersionChange::Patch))
+            }),
+        UpdateLevel::Major => dependency
+            .major
+            .as_ref()
+            .map(|version| (version, jman_resolver::VersionChange::Major))
+            .or_else(|| {
+                dependency
+                    .minor
+                    .as_ref()
+                    .map(|version| (version, jman_resolver::VersionChange::Minor))
+            })
+            .or_else(|| {
+                dependency
+                    .patch
+                    .as_ref()
+                    .map(|version| (version, jman_resolver::VersionChange::Patch))
+            }),
+        UpdateLevel::Latest => dependency.latest.as_ref().zip(dependency.change),
+    }?;
+    Some(DependencyUpdate {
+        dependency: dependency.dependency.clone(),
+        from: dependency.current.clone(),
+        to: selected.0.clone(),
+        change: selected.1,
+        scopes: dependency.scopes.clone(),
+        modules: dependency.modules.clone(),
+        source: dependency.source.clone(),
+    })
+}
+
+async fn apply_dependency_update_plan(
+    directories: &[PathBuf],
+    changes: &[DependencyUpdate],
+) -> Result<()> {
+    let versions = changes
+        .iter()
+        .map(|change| {
+            (
+                (change.dependency.as_str(), change.from.as_str()),
+                change.to.as_str(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for directory in directories {
+        let manifest_path = directory.join("jman.toml");
+        let mut manifest = Manifest::read(&manifest_path)
+            .with_context(|| format!("could not read {}", manifest_path.display()))?;
+        let mut manifest_changed = false;
+        for dependencies in [
+            &mut manifest.dependencies.compile,
+            &mut manifest.dependencies.runtime,
+            &mut manifest.dependencies.provided,
+            &mut manifest.dependencies.test,
+            &mut manifest.annotation_processors,
+        ] {
+            for (dependency, current) in dependencies {
+                if let Some(version) = versions.get(&(dependency.as_str(), current.as_str())) {
+                    *current = (*version).to_owned();
+                    manifest_changed = true;
+                }
+            }
+        }
+        if manifest_changed {
+            let updated = manifest
+                .to_toml()
+                .context("could not serialize jman.toml")?;
+            write_atomically(&manifest_path, &updated).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn snapshot_workspace_files(directories: &[PathBuf]) -> Result<Vec<WorkspaceFileSnapshot>> {
+    let mut snapshots = Vec::with_capacity(directories.len() * 2);
+    for directory in directories {
+        for file in ["jman.toml", "jman.lock"] {
+            let path = directory.join(file);
+            let contents = match tokio::fs::read_to_string(&path).await {
+                Ok(contents) => Some(contents),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("could not snapshot {}", path.display()));
+                }
+            };
+            snapshots.push(WorkspaceFileSnapshot { path, contents });
+        }
+    }
+    Ok(snapshots)
+}
+
+async fn restore_workspace_files(snapshots: &[WorkspaceFileSnapshot]) -> Result<()> {
+    for snapshot in snapshots {
+        if let Some(contents) = &snapshot.contents {
+            write_atomically(&snapshot.path, contents).await?;
+        } else if let Err(error) = tokio::fs::remove_file(&snapshot.path).await {
+            if error.kind() != io::ErrorKind::NotFound {
+                return Err(error).with_context(|| {
+                    format!("could not remove generated {}", snapshot.path.display())
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn print_dependency_update_report(
+    report: &DependencyUpdateReport,
+    format: ReportFormat,
+    ui: &Ui,
+) -> Result<()> {
+    if format == ReportFormat::Json {
+        println!("{}", serde_json::to_string_pretty(report)?);
+        return Ok(());
+    }
+    if report.changes.is_empty() {
+        println!("No dependency updates match the selected level.");
+        return Ok(());
+    }
+    println!("{}", dependency_update_table(&report.changes));
+    if report.dry_run {
+        println!("Dry run: no manifests or lockfiles were changed.");
+    } else if report.applied {
+        ui.success(format!(
+            "Applied {} dependency updates and synchronized the workspace",
+            report.updated
+        ));
+    }
+    Ok(())
+}
+
+fn dependency_update_table(changes: &[DependencyUpdate]) -> String {
+    let rows = changes
+        .iter()
+        .map(|change| {
+            [
+                change.dependency.clone(),
+                change.from.clone(),
+                change.to.clone(),
+                format!("{:?}", change.change).to_ascii_lowercase(),
+                change.modules.join(","),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let headers = ["DEPENDENCY", "FROM", "TO", "CHANGE", "MODULES"];
+    let widths = std::array::from_fn::<_, 5, _>(|index| {
+        rows.iter()
+            .map(|row| row[index].chars().count())
+            .max()
+            .unwrap_or_default()
+            .max(headers[index].len())
+    });
+    let mut output = String::new();
+    writeln!(
+        output,
+        "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {}",
+        headers[0],
+        headers[1],
+        headers[2],
+        headers[3],
+        headers[4],
+        w0 = widths[0],
+        w1 = widths[1],
+        w2 = widths[2],
+        w3 = widths[3],
+    )
+    .expect("writing a String cannot fail");
+    for row in rows {
+        writeln!(
+            output,
+            "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {}",
+            row[0],
+            row[1],
+            row[2],
+            row[3],
+            row[4],
+            w0 = widths[0],
+            w1 = widths[1],
+            w2 = widths[2],
+            w3 = widths[3],
+        )
+        .expect("writing a String cannot fail");
+    }
+    output.trim_end().to_owned()
 }
 
 async fn sync_project(arguments: &Sync, ui: &Ui) -> Result<()> {
@@ -4215,6 +4596,87 @@ mod tests {
         assert!(table.contains("org.example:old      1.0.0    2.0.0   major"));
         assert!(table.contains("org.example:current  1.0.0    -       current"));
         assert!(table.contains("org.example:unknown  1.0.0    -       unavailable"));
+    }
+
+    #[test]
+    fn update_defaults_to_patch_and_accepts_safe_automation_controls() {
+        let default = Cli::try_parse_from(["jman", "update", "org.example:library"])
+            .expect("default update command");
+        let Command::Update(default) = default.command else {
+            panic!("expected update command");
+        };
+        assert_eq!(default.dependency.as_deref(), Some("org.example:library"));
+        assert_eq!(default.level, UpdateLevel::Patch);
+        assert!(!default.dry_run);
+
+        let controlled = Cli::try_parse_from([
+            "jman",
+            "update",
+            "--path",
+            "workspace",
+            "--level",
+            "major",
+            "--offline",
+            "--include-prerelease",
+            "--dry-run",
+            "--format",
+            "json",
+        ])
+        .expect("controlled update command");
+        let Command::Update(controlled) = controlled.command else {
+            panic!("expected update command");
+        };
+        assert_eq!(controlled.dependency, None);
+        assert_eq!(controlled.path, PathBuf::from("workspace"));
+        assert_eq!(controlled.level, UpdateLevel::Major);
+        assert!(controlled.offline);
+        assert!(controlled.include_prerelease);
+        assert!(controlled.dry_run);
+        assert_eq!(controlled.format, ReportFormat::Json);
+    }
+
+    #[test]
+    fn update_levels_never_cross_their_selected_boundary() {
+        let dependency = OutdatedDependencyReport {
+            dependency: "org.example:library".to_owned(),
+            current: "1.2.3".to_owned(),
+            status: OutdatedStatus::Outdated,
+            latest: Some("4.0.0-special".to_owned()),
+            change: Some(jman_resolver::VersionChange::Other),
+            patch: Some("1.2.4".to_owned()),
+            minor: Some("1.3.0".to_owned()),
+            major: Some("2.0.0".to_owned()),
+            scopes: vec!["compile".to_owned()],
+            modules: vec!["app".to_owned()],
+            source: Some("fixture".to_owned()),
+            error: None,
+        };
+        for (level, expected, change) in [
+            (
+                UpdateLevel::Patch,
+                "1.2.4",
+                jman_resolver::VersionChange::Patch,
+            ),
+            (
+                UpdateLevel::Minor,
+                "1.3.0",
+                jman_resolver::VersionChange::Minor,
+            ),
+            (
+                UpdateLevel::Major,
+                "2.0.0",
+                jman_resolver::VersionChange::Major,
+            ),
+            (
+                UpdateLevel::Latest,
+                "4.0.0-special",
+                jman_resolver::VersionChange::Other,
+            ),
+        ] {
+            let selected = select_dependency_update(&dependency, level).expect("selected update");
+            assert_eq!(selected.to, expected);
+            assert_eq!(selected.change, change);
+        }
     }
 
     #[test]
