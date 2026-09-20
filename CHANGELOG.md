@@ -5,6 +5,8 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-20
+
 ### Added
 
 - `jman test --coverage` now provides pinned JaCoCo instrumentation, isolated
