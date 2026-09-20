@@ -46,10 +46,8 @@ does not support long-lived Marketplace tokens.
 
 ## Prepare a release
 
-Update the workspace version in `Cargo.toml`, the independently versioned VS
-Code extension in `editors/vscode/package.json` when needed, their lockfiles,
-and `CHANGELOG.md`. From a clean reviewed commit, run the complete maintainer
-suite:
+Record user-facing changes below each `Unreleased` heading. From a clean
+reviewed commit, run the complete maintainer suite:
 
 ```bash
 cargo fmt --all -- --check
@@ -65,12 +63,18 @@ that are intentionally not downloaded by CI. GitHub Actions reruns the portable
 Rust, Java, native-frontend, extension, release-contract, formatting, lint, and
 dependency-audit checks against the exact tag.
 
-Create and push an annotated tag that exactly matches the workspace version:
+Then prepare the coordinated release from the same clean worktree:
 
 ```bash
-git tag -a v0.5.0 -m "JMAN 0.5.0"
-git push origin v0.5.0
+make prepare-release VERSION=0.5.1
 ```
+
+The command synchronizes the Rust workspace, Cargo lockfile, VS Code manifests,
+changelogs, workflow example, and versioned documentation. After validation it
+asks whether to create `chore(release): prepare v0.5.1` and the annotated tag
+`git tag -a v0.5.1 -m "v0.5.1"`. A separate final confirmation can atomically
+push both the current branch and tag to `origin`. Declining either confirmation
+never pushes anything and leaves the prepared state available for review.
 
 Tags whose version contains a hyphen, such as `-rc.1`, become GitHub
 pre-releases. Stable semantic versions become normal releases. A failed or
@@ -95,7 +99,7 @@ After downloading an artifact, verify both controls:
 
 ```bash
 sha256sum --check SHA256SUMS
-gh attestation verify jman-0.5.0-linux-x86_64.tar.gz \
+gh attestation verify jman-0.5.1-linux-x86_64.tar.gz \
   --repo zonnedev/jman
 ```
 
@@ -127,7 +131,7 @@ release:
 ```bash
 make release
 make package-vscode
-make stage-release TAG=v0.5.0
+make stage-release TAG=v0.5.1
 (cd target/github-release && sha256sum --check SHA256SUMS)
 ```
 

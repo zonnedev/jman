@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.5.0 - 2026-09-20
+## 0.5.1 - 2026-09-20
 
 - Added Maven and Gradle check, build, run, and test operations with wrapper
   preference and the language server's compatible build JDK.

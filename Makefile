@@ -7,7 +7,7 @@ NATIVE_FRONTEND_INPUTS := \
 	scripts/build-native.sh \
 	scripts/use-sdkman-java.sh
 
-.PHONY: gates ci test test-rust test-java test-jman-runner test-processor-worker vineflower test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-micronaut-correctness test-vscode-extension test-neovim-plugin test-release-automation package-vscode release stage-release native test-native clean clear
+.PHONY: gates ci test test-rust test-java test-jman-runner test-processor-worker vineflower test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-micronaut-correctness test-vscode-extension test-neovim-plugin test-release-automation prepare-release package-vscode release stage-release native test-native clean clear
 
 gates: test test-native test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-vscode-extension test-neovim-plugin
 
@@ -106,7 +106,12 @@ test-neovim-plugin:
 	done
 
 test-release-automation:
+	./scripts/test-prepare-release.sh
 	./scripts/test-release-automation.sh
+
+prepare-release:
+	@test -n "$(VERSION)" || { echo "usage: make prepare-release VERSION=<version>" >&2; exit 2; }
+	./scripts/prepare-release.sh "$(VERSION)"
 
 test-micronaut-correctness: native test-java test-processor-worker
 	./scripts/test-micronaut-correctness.sh
