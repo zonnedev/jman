@@ -55,6 +55,21 @@ jobs:
           node-version: "24"
           package-manager-cache: false
 
+      - name: Set up Neovim
+        run: |
+          archive="${RUNNER_TEMP}/nvim-linux-x86_64.tar.gz"
+          install_dir="${RUNNER_TEMP}/neovim-0.11.7"
+          curl --fail --location --silent --show-error \
+            https://github.com/neovim/neovim/releases/download/v0.11.7/nvim-linux-x86_64.tar.gz \
+            --output "${archive}"
+          printf '%s  %s\n' \
+            38a7c6317f94503841096c00e8fde05ef04b9472fc9d7d62b6e033cecd6f7991 \
+            "${archive}" | sha256sum --check -
+          mkdir -p "${install_dir}"
+          tar -xzf "${archive}" -C "${install_dir}" --strip-components=1
+          "${install_dir}/bin/nvim" --version
+          echo "${install_dir}/bin" >> "${GITHUB_PATH}"
+
       - name: Set up Rust
         run: |
           rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy

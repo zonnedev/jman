@@ -92,6 +92,11 @@ done
 for workflow in ci.yml release.yml; do
   grep -Eq "rustup toolchain install ${workspace_rust_version}([.]|[[:space:]])" \
     "${workflow_dir}/${workflow}"
+  grep -q 'neovim/releases/download/v0.11.7/nvim-linux-x86_64.tar.gz' \
+    "${workflow_dir}/${workflow}"
+  grep -q '38a7c6317f94503841096c00e8fde05ef04b9472fc9d7d62b6e033cecd6f7991' \
+    "${workflow_dir}/${workflow}"
+  grep -q 'GITHUB_PATH' "${workflow_dir}/${workflow}"
 done
 if grep -R -Eq '^rust-version[[:space:]]*=[[:space:]]*"' \
   "${project_dir}/crates"/*/Cargo.toml; then
