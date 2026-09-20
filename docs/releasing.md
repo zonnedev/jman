@@ -66,13 +66,13 @@ dependency-audit checks against the exact tag.
 Then prepare the coordinated release from the same clean worktree:
 
 ```bash
-make prepare-release VERSION=0.5.1
+make prepare-release VERSION=0.5.2
 ```
 
 The command synchronizes the Rust workspace, Cargo lockfile, VS Code manifests,
 changelogs, workflow example, and versioned documentation. After validation it
-asks whether to create `chore(release): prepare v0.5.1` and the annotated tag
-`git tag -a v0.5.1 -m "v0.5.1"`. A separate final confirmation can atomically
+asks whether to create `chore(release): prepare v0.5.2` and the annotated tag
+`git tag -a v0.5.2 -m "v0.5.2"`. A separate final confirmation can atomically
 push both the current branch and tag to `origin`. Declining either confirmation
 never pushes anything and leaves the prepared state available for review.
 
@@ -99,7 +99,7 @@ After downloading an artifact, verify both controls:
 
 ```bash
 sha256sum --check SHA256SUMS
-gh attestation verify jman-0.5.1-linux-x86_64.tar.gz \
+gh attestation verify jman-0.5.2-linux-x86_64.tar.gz \
   --repo zonnedev/jman
 ```
 
@@ -131,7 +131,7 @@ release:
 ```bash
 make release
 make package-vscode
-make stage-release TAG=v0.5.1
+make stage-release TAG=v0.5.2
 (cd target/github-release && sha256sum --check SHA256SUMS)
 ```
 

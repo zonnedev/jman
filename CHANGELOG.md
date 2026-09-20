@@ -5,6 +5,8 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-09-20
+
 ## [0.5.1] - 2026-09-20
 
 ### Added
