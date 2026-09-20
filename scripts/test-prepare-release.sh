@@ -103,7 +103,13 @@ chmod +x "${fixture_dir}/scripts/prepare-release.sh" "${fixture_dir}/scripts/ver
   git restore docs/jman-java.md
 
   initial_commit="$(git rev-parse HEAD)"
-  JMAN_RELEASE_DATE=2026-09-20 ./scripts/prepare-release.sh 0.5.1 <<<'n'
+  decline_output="$(
+    JMAN_RELEASE_DATE=2026-09-20 ./scripts/prepare-release.sh 0.5.1 <<<'n'
+  )"
+  printf '%s\n' "${decline_output}"
+  grep -Fqx 'Would you like to commit and tag v0.5.1? [y/N]' <<<"${decline_output}"
+  grep -Fqx 'Release files remain uncommitted for review; no tag was created.' \
+    <<<"${decline_output}"
   grep -q '^version = "0.5.1"$' Cargo.toml
   grep -A2 '^name = "demo"$' Cargo.lock | grep -q '^version = "0.5.1"$'
   test "$(node -p 'require("./editors/vscode/package.json").version')" = 0.5.1
@@ -119,10 +125,15 @@ chmod +x "${fixture_dir}/scripts/prepare-release.sh" "${fixture_dir}/scripts/ver
   fi
 
   git restore .
-  JMAN_RELEASE_DATE=2026-09-20 ./scripts/prepare-release.sh v0.5.1 <<'EOF'
+  publish_output="$(
+    JMAN_RELEASE_DATE=2026-09-20 ./scripts/prepare-release.sh v0.5.1 <<'EOF'
 yes
 yes
 EOF
+  )"
+  printf '%s\n' "${publish_output}"
+  grep -Fqx 'Would you like to commit and tag v0.5.1? [y/N]' <<<"${publish_output}"
+  grep -Fqx 'Would you like to push release v0.5.1? [y/N]' <<<"${publish_output}"
   test "$(git log -1 --pretty=%s)" = 'chore(release): prepare v0.5.1'
   test "$(git cat-file -t v0.5.1)" = tag
   test "$(git tag -l v0.5.1 --format='%(contents:subject)')" = v0.5.1

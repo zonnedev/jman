@@ -193,7 +193,7 @@ trap - ERR
 
 printf '\nPrepared release %s.\n' "${tag}"
 git status --short
-printf '\nWould you like to commit and tag %s? [y/N] ' "${tag}"
+printf '\nWould you like to commit and tag %s? [y/N]\n' "${tag}"
 if ! read -r answer; then
   answer=''
 fi
@@ -202,7 +202,7 @@ case "${answer}" in
     git add -- "${versioned_files[@]}"
     git commit -m "chore(release): prepare ${tag}"
     git tag -a "${tag}" -m "${tag}"
-    printf '\nWould you like to push release %s? [y/N] ' "${tag}"
+    printf '\nWould you like to push release %s? [y/N]\n' "${tag}"
     if ! read -r push_answer; then
       push_answer=''
     fi
