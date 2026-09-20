@@ -1070,6 +1070,7 @@ mod tests {
             toolchain: None,
             maven: None,
             build: None,
+            test: None,
             publishing: Some(Publishing {
                 name: Some("Demo & API".to_owned()),
                 description: Some("Fast <Java> library".to_owned()),

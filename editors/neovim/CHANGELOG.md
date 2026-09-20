@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added all-tests, nearest-test, and exact-pattern coverage commands for native
+  JMAN workspaces.
+
 ## 0.5.2 - 2026-09-20
 
 ## 0.5.1 - 2026-09-20

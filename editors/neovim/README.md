@@ -81,6 +81,9 @@ compatible build JDK selected by the language server.
 | `:JmanTests` | Discover and select a test class or method through the LSP |
 | `:JmanTestPattern [selector]` | Run an exact LSP-prepared test selector |
 | `:JmanTestNearest` | Run the test nearest the cursor |
+| `:JmanCoverage` | Run all native JMAN tests with coverage |
+| `:JmanCoveragePattern [selector]` | Cover an exact LSP-prepared test selector |
+| `:JmanCoverageNearest` | Cover the test nearest the cursor |
 | `:JmanCodeAction` | Select a JMAN code action |
 | `:JmanOrganizeImports` | Apply the organize-imports source action |
 | `:JmanChangeSignature` | Change a method signature and update call sites |
@@ -103,6 +106,8 @@ their live human-readable test tree in the terminal.
 | `<leader>jr` | Run |
 | `<leader>jt` | Test nearest |
 | `<leader>jT` | Test all |
+| `<leader>jv` | Cover nearest test |
+| `<leader>jV` | Cover all tests |
 | `<leader>jl` | Select test |
 | `<leader>ji` | Show status |
 | `<leader>ja` | Code action |

@@ -17,7 +17,8 @@ keeps editor analysis aligned with the project's real build model.
 - Java diagnostics, completion, hover, signature help, navigation, references,
   symbols, semantic highlighting, inlay hints, formatting, and code actions.
 - Workspace import for `jman.toml`, Maven, and Gradle projects.
-- Native VS Code Test Explorer integration for unit and integration tests.
+- Native VS Code Test Explorer integration for unit and integration tests,
+  including a JMAN coverage profile and the Test Coverage view.
 - Commands for project checks, builds, runs, tests, synchronization, indexing,
   cache maintenance, server status, and restart.
 - A bundled `jman` server: no separate JMAN installation is required for normal
@@ -91,7 +92,9 @@ tool versions isolated from the Java 25 runtime used by JMAN's native frontend.
 | **JMAN Java: Restart Server** | Restart the bundled language server. |
 
 Individual tests and classes can also be run from VS Code's Test Explorer and
-from test code lenses.
+from test code lenses. Native `jman.toml` workspaces expose **Run with JMAN
+Coverage** in Test Explorer and write HTML, XML, and JSON reports beneath
+`.jman/reports/coverage/`.
 
 ## Compatibility and limitations
 

@@ -14,6 +14,8 @@ those terms.
   <https://github.com/Leonidas-from-XIV/node-xml2js>
 - **Vineflower** — Apache-2.0; Copyright the Vineflower contributors;
   <https://github.com/Vineflower/vineflower>
+- **JaCoCo 0.8.15** — EPL-2.0; Copyright the JaCoCo contributors;
+  <https://www.jacoco.org/jacoco/>
 - **Rust crates linked into JMAN and the native compiler frontend** — licenses
   and exact versions are recorded by `Cargo.lock`; package sources and license
   metadata are available through <https://crates.io/>.

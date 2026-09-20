@@ -188,9 +188,12 @@ retain a stable selector plus a unique display/invocation identity, exact failur
 message/details, duration, and retry attempt. Class-container events report total
 suite time and lifecycle time outside child test methods, including shared setup
 and teardown. JUnit XML remains the authoritative reconciliation fallback.
-Reruns use exact class or `Class#method` selectors. The protocol exposes debug
-descriptors and an explicit unsupported coverage response instead of silently
-pretending coverage was collected.
+Reruns use exact class or `Class#method` selectors. `jman test --coverage`
+attaches JMAN's pinned JaCoCo agent to each isolated module JVM, aggregates a
+provider-neutral coverage model, prints line/branch/method trees, writes
+HTML/XML/JSON reports, and enforces optional line and branch thresholds. JSON
+test streams add `coverage-file` and `coverage-summary` records for editor
+integrations. See [the coverage guide](docs/coverage.md).
 
 Tests receive `-Djman.test.port=0` by default. Applications that need an HTTP port
 must read `jman.test.port` and bind port zero so the operating system chooses an
@@ -206,7 +209,6 @@ host crashes, and disabled reapers can still leave resources behind.
 
 ## MVP limitations
 
-- Coverage collection is not bundled.
 - Cancellation is best effort across operating-system process boundaries.
 - Generated source metadata is read-only guidance; clients enforce editing UX.
 - Workspace file notifications trigger a safe reindex and never perform an

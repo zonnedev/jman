@@ -126,6 +126,12 @@ pub struct TestModuleResult {
     pub output: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TestRunResult {
+    pub modules: Vec<TestModuleResult>,
+    pub coverage: Option<CoverageReport>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TestCaseResult {
@@ -217,6 +223,134 @@ pub struct TestOptions {
     pub console_arguments: Vec<String>,
     pub source_set: TestSourceSet,
     pub debug: bool,
+    pub coverage: Option<CoverageOptions>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CoverageOptions {
+    pub output_directory: PathBuf,
+    pub formats: BTreeSet<CoverageOutputFormat>,
+    pub minimum_line: Option<u8>,
+    pub minimum_branch: Option<u8>,
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum CoverageOutputFormat {
+    Summary,
+    Json,
+    Xml,
+    Html,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageCount {
+    pub missed: u64,
+    pub covered: u64,
+}
+
+impl CoverageCount {
+    #[must_use]
+    pub const fn total(&self) -> u64 {
+        self.missed + self.covered
+    }
+
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn percentage(&self) -> f64 {
+        let total = self.total();
+        if total == 0 {
+            100.0
+        } else {
+            self.covered as f64 * 100.0 / total as f64
+        }
+    }
+
+    fn add(&mut self, other: &Self) {
+        self.missed += other.missed;
+        self.covered += other.covered;
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageCounters {
+    pub instruction: CoverageCount,
+    pub line: CoverageCount,
+    pub branch: CoverageCount,
+    pub complexity: CoverageCount,
+    pub method: CoverageCount,
+    pub class: CoverageCount,
+}
+
+impl CoverageCounters {
+    fn add(&mut self, other: &Self) {
+        self.instruction.add(&other.instruction);
+        self.line.add(&other.line);
+        self.branch.add(&other.branch);
+        self.complexity.add(&other.complexity);
+        self.method.add(&other.method);
+        self.class.add(&other.class);
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageLine {
+    pub number: u32,
+    pub instruction: CoverageCount,
+    pub branch: CoverageCount,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageFile {
+    pub module: String,
+    pub package: String,
+    pub name: String,
+    pub path: PathBuf,
+    pub counters: CoverageCounters,
+    pub lines: Vec<CoverageLine>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageModule {
+    pub module: String,
+    pub counters: CoverageCounters,
+    pub files: Vec<CoverageFile>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageThresholdFailure {
+    pub metric: String,
+    pub required: u8,
+    pub actual_basis_points: u64,
+}
+
+impl CoverageThresholdFailure {
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn actual_percentage(&self) -> f64 {
+        self.actual_basis_points as f64 / 100.0
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverageReport {
+    pub protocol_version: u16,
+    pub engine: String,
+    pub output_directory: PathBuf,
+    pub html: Option<PathBuf>,
+    pub xml: Option<PathBuf>,
+    pub json: Option<PathBuf>,
+    pub modules: Vec<CoverageModule>,
+    pub totals: CoverageCounters,
+    pub threshold_failures: Vec<CoverageThresholdFailure>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -532,7 +666,7 @@ pub async fn test_workspace(
     offline: bool,
     options: &TestOptions,
     events: Option<mpsc::UnboundedSender<TestEvent>>,
-) -> Result<Vec<TestModuleResult>, BuildError> {
+) -> Result<TestRunResult, BuildError> {
     let modules = discover_modules(root).await?;
     validate_test_modules(&modules, &options.modules)?;
     let selection = junit_selection(&options.patterns)?;
@@ -542,6 +676,11 @@ pub async fn test_workspace(
         || PathBuf::from(executable),
         |parent| parent.join(executable),
     );
+    let coverage_runtime = if options.coverage.is_some() {
+        Some(prepare_coverage_runtime(root, cache_dir).await?)
+    } else {
+        None
+    };
     let mut results = stream::iter(modules.iter().enumerate())
         .map(|(index, module)| {
             run_test_module(
@@ -553,6 +692,7 @@ pub async fn test_workspace(
                 &java,
                 &selection,
                 options,
+                coverage_runtime.as_ref(),
                 events.clone(),
             )
         })
@@ -563,7 +703,41 @@ pub async fn test_workspace(
         .flatten()
         .collect::<Vec<_>>();
     results.sort_by(|left, right| left.module.cmp(&right.module));
-    Ok(results)
+    let coverage = if let (Some(coverage_options), Some(runtime)) =
+        (&options.coverage, coverage_runtime.as_ref())
+    {
+        if results.is_empty() {
+            None
+        } else {
+            Some(
+                generate_coverage_report(
+                    &modules,
+                    &build,
+                    &results,
+                    &java,
+                    runtime,
+                    coverage_options,
+                )
+                .await?,
+            )
+        }
+    } else {
+        None
+    };
+    if let Some(runtime) = coverage_runtime {
+        let _ = fs::remove_dir_all(runtime.work_directory).await;
+    }
+    Ok(TestRunResult {
+        modules: results,
+        coverage,
+    })
+}
+
+#[derive(Clone, Debug)]
+struct CoverageRuntime {
+    agent: PathBuf,
+    cli: PathBuf,
+    work_directory: PathBuf,
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -576,6 +750,7 @@ async fn run_test_module(
     java: &Path,
     selection: &JunitSelection,
     options: &TestOptions,
+    coverage: Option<&CoverageRuntime>,
     events: Option<mpsc::UnboundedSender<TestEvent>>,
 ) -> Result<Option<TestModuleResult>, BuildError> {
     if module.manifest.project.packaging == "pom"
@@ -624,6 +799,34 @@ async fn run_test_module(
     command.kill_on_drop(true).current_dir(&module.directory);
     if options.debug {
         command.arg("-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=0");
+    }
+    if let Some(coverage) = coverage {
+        let execution_file = coverage.work_directory.join(format!(
+            "{}.exec",
+            safe_file_name(&module.manifest.project.name)
+        ));
+        let mut agent_options = vec![
+            format!("destfile={}", execution_file.display()),
+            "append=false".to_owned(),
+            "dumponexit=true".to_owned(),
+            format!(
+                "sessionid={}",
+                safe_file_name(&module.manifest.project.name)
+            ),
+        ];
+        if let Some(options) = &options.coverage {
+            if !options.include.is_empty() {
+                agent_options.push(format!("includes={}", options.include.join(":")));
+            }
+            if !options.exclude.is_empty() {
+                agent_options.push(format!("excludes={}", options.exclude.join(":")));
+            }
+        }
+        command.arg(format!(
+            "-javaagent:{}={}",
+            coverage.agent.display(),
+            agent_options.join(",")
+        ));
     }
     command
         .arg(format!("-Djman.test.port={port}"))
@@ -744,6 +947,451 @@ async fn read_test_stderr<R: AsyncRead + Unpin>(mut reader: R) -> Result<Vec<u8>
         .await
         .map_err(|source| io_error(Path::new("JUnit worker stderr"), source))?;
     Ok(output)
+}
+
+async fn prepare_coverage_runtime(
+    root: &Path,
+    cache_dir: &Path,
+) -> Result<CoverageRuntime, BuildError> {
+    let (agent, cli) = coverage_tool_paths()?;
+    let identity = hex::encode(Sha256::digest(root.to_string_lossy().as_bytes()));
+    let work_directory = cache_dir.join("tools/coverage/runs").join(format!(
+        "{}-{}",
+        std::process::id(),
+        &identity[..12]
+    ));
+    if work_directory.exists() {
+        fs::remove_dir_all(&work_directory)
+            .await
+            .map_err(|source| io_error(&work_directory, source))?;
+    }
+    fs::create_dir_all(&work_directory)
+        .await
+        .map_err(|source| io_error(&work_directory, source))?;
+    Ok(CoverageRuntime {
+        agent,
+        cli,
+        work_directory,
+    })
+}
+
+fn coverage_tool_paths() -> Result<(PathBuf, PathBuf), BuildError> {
+    match (
+        env::var_os("JMAN_JACOCO_AGENT"),
+        env::var_os("JMAN_JACOCO_CLI"),
+    ) {
+        (Some(agent), Some(cli)) => {
+            let agent = PathBuf::from(agent);
+            let cli = PathBuf::from(cli);
+            if agent.is_file() && cli.is_file() {
+                return Ok((agent, cli));
+            }
+            return Err(BuildError::Invalid(format!(
+                "configured JaCoCo tools are missing: {} and {}",
+                agent.display(),
+                cli.display()
+            )));
+        }
+        (None, None) => {}
+        _ => {
+            return Err(BuildError::Invalid(
+                "JMAN_JACOCO_AGENT and JMAN_JACOCO_CLI must be configured together".to_owned(),
+            ));
+        }
+    }
+    if let Ok(executable) = env::current_exe() {
+        if let Some(directory) = executable.parent() {
+            let agent = directory.join("jacocoagent.jar");
+            let cli = directory.join("jacococli.jar");
+            if agent.is_file() && cli.is_file() {
+                return Ok((agent, cli));
+            }
+        }
+    }
+    let project = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let agent = project.join("target/jacoco-0.8.15-agent.jar");
+    let cli = project.join("target/jacoco-0.8.15-cli.jar");
+    if agent.is_file() && cli.is_file() {
+        return Ok((agent, cli));
+    }
+    Err(BuildError::Invalid(
+        "JaCoCo coverage tools are unavailable; reinstall JMAN or run `make jacoco`".to_owned(),
+    ))
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+async fn generate_coverage_report(
+    modules: &[Module],
+    build: &CheckResult,
+    results: &[TestModuleResult],
+    java: &Path,
+    runtime: &CoverageRuntime,
+    options: &CoverageOptions,
+) -> Result<CoverageReport, BuildError> {
+    let output_directory = &options.output_directory;
+    fs::create_dir_all(output_directory)
+        .await
+        .map_err(|source| io_error(output_directory, source))?;
+
+    let mut coverage_modules = Vec::new();
+    let mut execution_files = Vec::new();
+    let mut class_files = Vec::new();
+    let mut source_directories = Vec::new();
+    for result in results {
+        let Some((index, module)) = modules
+            .iter()
+            .enumerate()
+            .find(|(_, module)| module.manifest.project.name == result.module)
+        else {
+            return Err(BuildError::Invalid(format!(
+                "coverage module `{}` disappeared from the workspace",
+                result.module
+            )));
+        };
+        let execution_file = runtime
+            .work_directory
+            .join(format!("{}.exec", safe_file_name(&result.module)));
+        if !execution_file.is_file() {
+            return Err(BuildError::Invalid(format!(
+                "JaCoCo did not produce execution data for module `{}`",
+                result.module
+            )));
+        }
+        let module_classes = coverage_class_files(
+            &build.modules[index].output,
+            &options.include,
+            &options.exclude,
+        )
+        .await?;
+        if module_classes.is_empty() {
+            coverage_modules.push(CoverageModule {
+                module: result.module.clone(),
+                counters: CoverageCounters::default(),
+                files: Vec::new(),
+            });
+            continue;
+        }
+        let source_directory = module.directory.join("src/main/java");
+        let module_xml = runtime
+            .work_directory
+            .join(format!("{}.xml", safe_file_name(&result.module)));
+        run_jacoco_report(
+            java,
+            &runtime.cli,
+            std::slice::from_ref(&execution_file),
+            &module_classes,
+            std::slice::from_ref(&source_directory),
+            Some(&module_xml),
+            None,
+            &result.module,
+        )
+        .await?;
+        let xml = fs::read_to_string(&module_xml)
+            .await
+            .map_err(|source| io_error(&module_xml, source))?;
+        coverage_modules.push(parse_jacoco_xml(&result.module, &source_directory, &xml)?);
+        execution_files.push(execution_file);
+        class_files.extend(module_classes);
+        if source_directory.is_dir() {
+            source_directories.push(source_directory);
+        }
+    }
+    coverage_modules.sort_by(|left, right| left.module.cmp(&right.module));
+    let mut totals = CoverageCounters::default();
+    for module in &coverage_modules {
+        totals.add(&module.counters);
+    }
+
+    let xml = options
+        .formats
+        .contains(&CoverageOutputFormat::Xml)
+        .then(|| output_directory.join("coverage.xml"));
+    let html = options
+        .formats
+        .contains(&CoverageOutputFormat::Html)
+        .then(|| output_directory.join("index.html"));
+    if !execution_files.is_empty() && (xml.is_some() || html.is_some()) {
+        run_jacoco_report(
+            java,
+            &runtime.cli,
+            &execution_files,
+            &class_files,
+            &source_directories,
+            xml.as_deref(),
+            html.as_ref().map(|_| output_directory.as_path()),
+            "JMAN workspace",
+        )
+        .await?;
+    }
+    let json = options
+        .formats
+        .contains(&CoverageOutputFormat::Json)
+        .then(|| output_directory.join("coverage.json"));
+    let threshold_failures =
+        coverage_threshold_failures(&totals, options.minimum_line, options.minimum_branch);
+    let report = CoverageReport {
+        protocol_version: 1,
+        engine: "jacoco".to_owned(),
+        output_directory: output_directory.clone(),
+        html,
+        xml,
+        json: json.clone(),
+        modules: coverage_modules,
+        totals,
+        threshold_failures,
+    };
+    if let Some(json) = json {
+        let bytes = serde_json::to_vec_pretty(&report).map_err(|error| {
+            BuildError::Invalid(format!("could not serialize coverage report: {error}"))
+        })?;
+        fs::write(&json, bytes)
+            .await
+            .map_err(|source| io_error(&json, source))?;
+    }
+    Ok(report)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_jacoco_report(
+    java: &Path,
+    cli: &Path,
+    execution_files: &[PathBuf],
+    class_files: &[PathBuf],
+    source_directories: &[PathBuf],
+    xml: Option<&Path>,
+    html: Option<&Path>,
+    name: &str,
+) -> Result<(), BuildError> {
+    let mut command = Command::new(java);
+    command.arg("-jar").arg(cli).arg("report");
+    for execution_file in execution_files {
+        command.arg(execution_file);
+    }
+    for class_file in class_files {
+        command.arg("--classfiles").arg(class_file);
+    }
+    for source_directory in source_directories {
+        if source_directory.is_dir() {
+            command.arg("--sourcefiles").arg(source_directory);
+        }
+    }
+    command.args(["--name", name, "--quiet"]);
+    if let Some(xml) = xml {
+        command.arg("--xml").arg(xml);
+    }
+    if let Some(html) = html {
+        command.arg("--html").arg(html);
+    }
+    let result = command.output().await.map_err(|source| BuildError::Javac {
+        path: java.to_owned(),
+        source,
+    })?;
+    if !result.status.success() {
+        return Err(BuildError::Invalid(format!(
+            "JaCoCo report generation failed: {}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        )));
+    }
+    Ok(())
+}
+
+async fn coverage_class_files(
+    output: &Path,
+    includes: &[String],
+    excludes: &[String],
+) -> Result<Vec<PathBuf>, BuildError> {
+    let mut classes = Vec::new();
+    for path in input_files(output, Some("class")).await? {
+        let name = path
+            .strip_prefix(output)
+            .map_err(|error| BuildError::Invalid(error.to_string()))?
+            .with_extension("")
+            .to_string_lossy()
+            .replace(['/', '\\'], ".");
+        let matches_include = includes.is_empty()
+            || includes
+                .iter()
+                .any(|pattern| wildcard_matches(pattern, &name));
+        let matches_exclude = excludes
+            .iter()
+            .any(|pattern| wildcard_matches(pattern, &name));
+        if matches_include && !matches_exclude {
+            classes.push(path);
+        }
+    }
+    classes.sort();
+    Ok(classes)
+}
+
+fn wildcard_matches(pattern: &str, value: &str) -> bool {
+    let pattern = pattern.replace(['/', '\\'], ".");
+    let pattern = pattern.as_bytes();
+    let value = value.as_bytes();
+    let (mut pattern_index, mut value_index) = (0, 0);
+    let (mut star, mut retry) = (None, 0);
+    while value_index < value.len() {
+        if pattern_index < pattern.len()
+            && (pattern[pattern_index] == b'?' || pattern[pattern_index] == value[value_index])
+        {
+            pattern_index += 1;
+            value_index += 1;
+        } else if pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+            star = Some(pattern_index);
+            pattern_index += 1;
+            retry = value_index;
+        } else if let Some(star_index) = star {
+            pattern_index = star_index + 1;
+            retry += 1;
+            value_index = retry;
+        } else {
+            return false;
+        }
+    }
+    while pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+        pattern_index += 1;
+    }
+    pattern_index == pattern.len()
+}
+
+fn parse_jacoco_xml(
+    module: &str,
+    source_directory: &Path,
+    xml: &str,
+) -> Result<CoverageModule, BuildError> {
+    let document = roxmltree::Document::parse_with_options(
+        xml,
+        roxmltree::ParsingOptions {
+            allow_dtd: true,
+            ..roxmltree::ParsingOptions::default()
+        },
+    )
+    .map_err(|error| BuildError::Invalid(format!("invalid JaCoCo XML: {error}")))?;
+    let report = document.root_element();
+    let mut files = Vec::new();
+    for package in report
+        .children()
+        .filter(|node| node.has_tag_name("package"))
+    {
+        let package_name = package.attribute("name").unwrap_or_default();
+        for source_file in package
+            .children()
+            .filter(|node| node.has_tag_name("sourcefile"))
+        {
+            let name = source_file.attribute("name").unwrap_or_default().to_owned();
+            let mut path = source_directory.to_owned();
+            if !package_name.is_empty() {
+                path.push(package_name);
+            }
+            path.push(&name);
+            let mut lines = source_file
+                .children()
+                .filter(|node| node.has_tag_name("line"))
+                .map(|line| {
+                    Ok(CoverageLine {
+                        number: xml_u32(&line, "nr")?,
+                        instruction: CoverageCount {
+                            missed: xml_u64(&line, "mi")?,
+                            covered: xml_u64(&line, "ci")?,
+                        },
+                        branch: CoverageCount {
+                            missed: xml_u64(&line, "mb")?,
+                            covered: xml_u64(&line, "cb")?,
+                        },
+                    })
+                })
+                .collect::<Result<Vec<_>, BuildError>>()?;
+            lines.sort_by_key(|line| line.number);
+            files.push(CoverageFile {
+                module: module.to_owned(),
+                package: package_name.replace('/', "."),
+                name,
+                path,
+                counters: xml_counters(&source_file)?,
+                lines,
+            });
+        }
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(CoverageModule {
+        module: module.to_owned(),
+        counters: xml_counters(&report)?,
+        files,
+    })
+}
+
+fn xml_counters(node: &roxmltree::Node<'_, '_>) -> Result<CoverageCounters, BuildError> {
+    let mut counters = CoverageCounters::default();
+    for counter in node
+        .children()
+        .filter(|child| child.has_tag_name("counter"))
+    {
+        let value = CoverageCount {
+            missed: xml_u64(&counter, "missed")?,
+            covered: xml_u64(&counter, "covered")?,
+        };
+        match counter.attribute("type") {
+            Some("INSTRUCTION") => counters.instruction = value,
+            Some("LINE") => counters.line = value,
+            Some("BRANCH") => counters.branch = value,
+            Some("COMPLEXITY") => counters.complexity = value,
+            Some("METHOD") => counters.method = value,
+            Some("CLASS") => counters.class = value,
+            _ => {}
+        }
+    }
+    Ok(counters)
+}
+
+fn xml_u64(node: &roxmltree::Node<'_, '_>, attribute: &str) -> Result<u64, BuildError> {
+    node.attribute(attribute)
+        .ok_or_else(|| BuildError::Invalid(format!("JaCoCo XML is missing `{attribute}`")))?
+        .parse()
+        .map_err(|error| BuildError::Invalid(format!("invalid JaCoCo `{attribute}`: {error}")))
+}
+
+fn xml_u32(node: &roxmltree::Node<'_, '_>, attribute: &str) -> Result<u32, BuildError> {
+    let value = xml_u64(node, attribute)?;
+    u32::try_from(value)
+        .map_err(|error| BuildError::Invalid(format!("invalid JaCoCo `{attribute}`: {error}")))
+}
+
+fn coverage_threshold_failures(
+    counters: &CoverageCounters,
+    minimum_line: Option<u8>,
+    minimum_branch: Option<u8>,
+) -> Vec<CoverageThresholdFailure> {
+    let mut failures = Vec::new();
+    for (metric, minimum, count) in [
+        ("line", minimum_line, &counters.line),
+        ("branch", minimum_branch, &counters.branch),
+    ] {
+        let Some(required) = minimum else {
+            continue;
+        };
+        let total = count.total();
+        if total > 0 && count.covered * 100 < u64::from(required) * total {
+            failures.push(CoverageThresholdFailure {
+                metric: metric.to_owned(),
+                required,
+                actual_basis_points: count.covered * 10_000 / total,
+            });
+        }
+    }
+    failures
+}
+
+fn safe_file_name(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn validate_test_modules(
@@ -2520,6 +3168,7 @@ mod tests {
             toolchain: None,
             maven: None,
             build: None,
+            test: None,
             publishing: None,
             audit: None,
             repositories: Vec::new(),
@@ -2883,6 +3532,79 @@ Test run finished after 758 ms
             b"\x1enot-json\n\x1e{\"protocolVersion\":99}\n"
         );
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn coverage_parses_jacoco_xml_into_provider_neutral_model() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<report name="app">
+  <package name="com/example">
+    <sourcefile name="Greeting.java">
+      <line nr="4" mi="0" ci="3" mb="1" cb="1"/>
+      <line nr="5" mi="2" ci="0" mb="0" cb="0"/>
+      <counter type="INSTRUCTION" missed="2" covered="3"/>
+      <counter type="LINE" missed="1" covered="1"/>
+      <counter type="BRANCH" missed="1" covered="1"/>
+      <counter type="COMPLEXITY" missed="1" covered="1"/>
+      <counter type="METHOD" missed="0" covered="1"/>
+      <counter type="CLASS" missed="0" covered="1"/>
+    </sourcefile>
+  </package>
+  <counter type="INSTRUCTION" missed="2" covered="3"/>
+  <counter type="LINE" missed="1" covered="1"/>
+  <counter type="BRANCH" missed="1" covered="1"/>
+  <counter type="COMPLEXITY" missed="1" covered="1"/>
+  <counter type="METHOD" missed="0" covered="1"/>
+  <counter type="CLASS" missed="0" covered="1"/>
+</report>"#;
+        let report = parse_jacoco_xml("app", Path::new("/workspace/src/main/java"), xml)
+            .expect("coverage report");
+
+        assert_eq!(report.module, "app");
+        assert_eq!(report.counters.line.covered, 1);
+        assert_eq!(report.counters.line.missed, 1);
+        assert!((report.counters.branch.percentage() - 50.0).abs() < f64::EPSILON);
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files[0].package, "com.example");
+        assert_eq!(
+            report.files[0].path,
+            PathBuf::from("/workspace/src/main/java/com/example/Greeting.java")
+        );
+        assert_eq!(report.files[0].lines[0].number, 4);
+        assert_eq!(report.files[0].lines[0].branch.covered, 1);
+    }
+
+    #[test]
+    fn coverage_thresholds_use_exact_integer_comparisons() {
+        let counters = CoverageCounters {
+            line: CoverageCount {
+                missed: 1,
+                covered: 2,
+            },
+            branch: CoverageCount {
+                missed: 1,
+                covered: 3,
+            },
+            ..CoverageCounters::default()
+        };
+        let failures = coverage_threshold_failures(&counters, Some(67), Some(75));
+
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].metric, "line");
+        assert_eq!(failures[0].required, 67);
+        assert_eq!(failures[0].actual_basis_points, 6_666);
+        assert!((failures[0].actual_percentage() - 66.66).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn coverage_class_patterns_support_jacoco_wildcards() {
+        assert!(wildcard_matches("com.example.*", "com.example.Service"));
+        assert!(wildcard_matches("com/example/*", "com.example.Service"));
+        assert!(wildcard_matches("*Service?", "com.example.Service1"));
+        assert!(!wildcard_matches(
+            "com.example.api.*",
+            "com.example.Service"
+        ));
     }
 
     #[tokio::test]

@@ -15,6 +15,7 @@ fi
 "${project_dir}/scripts/test-java.sh"
 "${project_dir}/scripts/build-processor-worker.sh"
 "${project_dir}/scripts/build-vineflower.sh"
+"${project_dir}/scripts/build-jacoco.sh"
 JAVAC_FRONTEND_LIB_DIR="${native_dir}" \
   LD_LIBRARY_PATH="${native_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
   cargo build --manifest-path "${project_dir}/Cargo.toml" --release -p jman-cli
@@ -37,6 +38,8 @@ cp "${project_dir}/target/release/jman" "${stage}/jman"
 cp "${native_library}" "${stage}/libjman_javac_frontend.so"
 cp "${project_dir}/target/processor-worker.jar" "${stage}/processor-worker.jar"
 cp "${project_dir}/target/vineflower-1.12.0.jar" "${stage}/vineflower.jar"
+cp "${project_dir}/target/jacoco-0.8.15-agent.jar" "${stage}/jacocoagent.jar"
+cp "${project_dir}/target/jacoco-0.8.15-cli.jar" "${stage}/jacococli.jar"
 cp "${project_dir}/resources/icons/jman.svg" "${stage}/resources/icons/jman.svg"
 cp -R "${project_dir}/tools/gradle-importer" "${stage}/tools/gradle-importer"
 jar --create \
@@ -45,7 +48,7 @@ jar --create \
   -C "${project_dir}/target/java-test-classes" \
   io/github/zonnedev/jman/maven/importer
 cp "${project_dir}/README.md" "${project_dir}/CHANGELOG.md" \
-  "${project_dir}/LICENSE" "${stage}/"
+  "${project_dir}/LICENSE" "${project_dir}/THIRD_PARTY_NOTICES.md" "${stage}/"
 
 tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
   -C "${stage_root}" -cf - "${name}" | gzip -n > "${archive}"

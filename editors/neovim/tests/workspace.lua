@@ -38,6 +38,11 @@ assert(
 )
 assert(jman._test.operation_arguments.maven.build[1] == "package", "Maven builds must use package")
 assert(jman._test.operation_arguments.maven.run == nil, "Unsupported Maven run must stay disabled")
+assert(
+	vim.deep_equal(jman._test.operation_arguments.jman.coverage, { "test", "--coverage" }),
+	"Native JMAN coverage operation was not registered"
+)
+assert(jman._test.operation_arguments.gradle.coverage == nil, "External coverage must stay disabled")
 
 local environment = jman._test.build_tool_environment("/jdks/21")
 assert(environment.JAVA_HOME == "/jdks/21", "Prepared build Java home was not applied")
@@ -51,6 +56,14 @@ local arguments = jman._test.human_test_arguments({
 assert(
 	table.concat(arguments, " ") == "--no-progress test --tests demo.AppTest#works",
 	"Neovim test terminals must receive human-readable JMAN output"
+)
+local coverage_arguments = jman._test.human_test_arguments({
+	report = "json-lines",
+	arguments = { "--no-progress", "test", "--report", "json", "--tests", "demo.AppTest#works", "--coverage" },
+})
+assert(
+	table.concat(coverage_arguments, " ") == "--no-progress test --tests demo.AppTest#works --coverage",
+	"Neovim coverage terminals must retain the coverage flag"
 )
 local external_arguments = { "test", "--tests", "demo.AppTest.works" }
 local preserved = jman._test.human_test_arguments({ report = "junit-xml", arguments = external_arguments })

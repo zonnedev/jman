@@ -36,6 +36,17 @@ fn test_command_exposes_native_module_and_test_selectors() {
     assert!(help.contains("--tests <PATTERN>"));
     assert!(help.contains("--source-set <SOURCE_SET>"));
     assert!(help.contains("--debug"));
+    for option in [
+        "--coverage",
+        "--coverage-format <COVERAGE_FORMATS>",
+        "--coverage-output <COVERAGE_OUTPUT>",
+        "--coverage-min-line <COVERAGE_MIN_LINE>",
+        "--coverage-min-branch <COVERAGE_MIN_BRANCH>",
+        "--coverage-include <COVERAGE_INCLUDE>",
+        "--coverage-exclude <COVERAGE_EXCLUDE>",
+    ] {
+        assert!(help.contains(option), "missing {option} in:\n{help}");
+    }
 }
 
 #[test]
@@ -851,6 +862,9 @@ public final class ConsoleLauncher {
     if (arguments.stream().anyMatch(value -> value.contains("MissingTest"))) {
       System.exit(arguments.contains("--fail-if-no-tests") ? 1 : 3);
     }
+    Class.forName("com.example.App")
+        .getMethod("greeting", boolean.class)
+        .invoke(null, true);
     var report = arguments.stream()
         .filter(value -> value.startsWith("--reports-dir="))
         .findFirst().orElseThrow().substring("--reports-dir=".length());
@@ -1058,7 +1072,15 @@ public final class TestGenerator extends AbstractProcessor {
         .expect("integration test sources");
     fs::write(
         project.path().join("src/main/java/com/example/App.java"),
-        "package com.example; public final class App {}",
+        r#"package com.example;
+public final class App {
+  public static String greeting(boolean formal) {
+    if (formal) {
+      return "Hello";
+    }
+    return "Hi";
+}
+}"#,
     )
     .expect("main source");
     fs::write(
@@ -1262,6 +1284,102 @@ processors = ["sha256:{digest}"]
         .join(".jman/output/test-classes/com/example/AppIntegrationTest.class")
         .exists());
 
+    if coverage_tools_available() {
+        let coverage_directory = project.path().join("coverage-report");
+        fs::create_dir_all(&coverage_directory).expect("coverage report directory");
+        fs::write(
+            coverage_directory.join("keep-me.txt"),
+            "unrelated user content\n",
+        )
+        .expect("coverage output sentinel");
+        let coverage = Command::new(env!("CARGO_BIN_EXE_jman"))
+            .env("JMAN_CACHE_DIR", cache.path())
+            .env("TESTCONTAINERS_RYUK_DISABLED", "false")
+            .args([
+                "--no-progress",
+                "test",
+                project.path().to_str().expect("UTF-8 path"),
+                "--report",
+                "json",
+                "--coverage",
+                "--coverage-output",
+                coverage_directory.to_str().expect("UTF-8 coverage path"),
+                "--coverage-min-line",
+                "1",
+            ])
+            .output()
+            .expect("run tests with coverage");
+        assert!(
+            coverage.status.success(),
+            "{}",
+            String::from_utf8_lossy(&coverage.stderr)
+        );
+        let coverage_events = String::from_utf8(coverage.stdout)
+            .expect("coverage events")
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("coverage event"))
+            .collect::<Vec<_>>();
+        assert!(coverage_events
+            .iter()
+            .any(|event| event["reason"] == "coverage-file"));
+        assert!(coverage_events
+            .iter()
+            .any(|event| event["reason"] == "coverage-summary"));
+        for report in ["index.html", "coverage.xml", "coverage.json"] {
+            assert!(
+                coverage_directory.join(report).is_file(),
+                "missing {report}"
+            );
+        }
+        assert_eq!(
+            fs::read_to_string(coverage_directory.join("keep-me.txt"))
+                .expect("preserved coverage output sentinel"),
+            "unrelated user content\n"
+        );
+        let report: serde_json::Value = serde_json::from_slice(
+            &fs::read(coverage_directory.join("coverage.json")).expect("coverage JSON"),
+        )
+        .expect("parse coverage JSON");
+        assert_eq!(report["engine"], "jacoco");
+        assert_eq!(report["modules"][0]["module"], "app");
+        assert!(
+            report["totals"]["line"]["covered"]
+                .as_u64()
+                .unwrap_or_default()
+                > 0
+        );
+        assert_eq!(
+            report["modules"][0]["files"][0]["path"],
+            project
+                .path()
+                .join("src/main/java/com/example/App.java")
+                .to_string_lossy()
+                .as_ref()
+        );
+
+        let threshold = Command::new(env!("CARGO_BIN_EXE_jman"))
+            .env("JMAN_CACHE_DIR", cache.path())
+            .env("TESTCONTAINERS_RYUK_DISABLED", "false")
+            .args([
+                "--no-progress",
+                "test",
+                project.path().to_str().expect("UTF-8 path"),
+                "--coverage",
+                "--coverage-format",
+                "summary",
+                "--coverage-min-line",
+                "100",
+            ])
+            .output()
+            .expect("enforce coverage threshold");
+        assert!(!threshold.status.success());
+        let threshold_output = String::from_utf8_lossy(&threshold.stderr);
+        assert!(threshold_output.contains("Coverage\n"));
+        assert!(threshold_output.contains("├─ app\n"));
+        assert!(threshold_output.contains("└─ workspace\n"));
+        assert!(threshold_output.contains("coverage threshold failed: line"));
+    }
+
     let missing = Command::new(env!("CARGO_BIN_EXE_jman"))
         .env("JMAN_CACHE_DIR", cache.path())
         .env("TESTCONTAINERS_RYUK_DISABLED", "false")
@@ -1276,6 +1394,16 @@ processors = ["sha256:{digest}"]
         .expect("run missing test selector");
     assert!(!missing.status.success());
     assert!(String::from_utf8_lossy(&missing.stderr).contains("tests failed in app"));
+}
+
+fn coverage_tools_available() -> bool {
+    let configured = ["JMAN_JACOCO_AGENT", "JMAN_JACOCO_CLI"].iter().all(|name| {
+        std::env::var_os(name).is_some_and(|path| std::path::Path::new(&path).is_file())
+    });
+    let project = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    configured
+        || (project.join("target/jacoco-0.8.15-agent.jar").is_file()
+            && project.join("target/jacoco-0.8.15-cli.jar").is_file())
 }
 
 #[test]

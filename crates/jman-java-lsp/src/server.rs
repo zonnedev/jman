@@ -434,7 +434,7 @@ impl<'backend> Server<'backend> {
                                     "parameterizedTests": true,
                                     "rerun": true,
                                     "debugDescriptors": true,
-                                    "coverage": false
+                                    "coverage": true
                                 },
                                 "jmanJavaSourceMetadata": {
                                     "protocolVersion": 1,
@@ -2843,6 +2843,9 @@ impl<'backend> Server<'backend> {
 
     fn prepare_test_run(&self, id: Value, params: Option<&Value>) -> Dispatch {
         let uri = params.and_then(|value| value["uri"].as_str());
+        let coverage_requested = params
+            .and_then(|value| value["coverage"].as_bool())
+            .unwrap_or(false);
         let selectors: Vec<_> = params
             .and_then(|value| value["selectors"].as_array())
             .into_iter()
@@ -2865,7 +2868,7 @@ impl<'backend> Server<'backend> {
             .backend
             .as_ref()
             .and_then(|backend| backend.build_java_home_for(uri));
-        let (program, args, report) = match build_system.as_str() {
+        let (program, mut args, report) = match build_system.as_str() {
             "gradle" => {
                 let mut args = vec!["test".to_owned()];
                 for selector in &selectors {
@@ -2897,6 +2900,9 @@ impl<'backend> Server<'backend> {
                 ("jman", args, "json-lines")
             }
         };
+        if coverage_requested && build_system == "jman" {
+            args.push("--coverage".to_owned());
+        }
         let mut debug_args = args.clone();
         if build_system == "jman" {
             debug_args.insert(2, "--debug".to_owned());
@@ -2930,8 +2936,14 @@ impl<'backend> Server<'backend> {
                     }
                 },
                 "coverage": {
-                    "supported": false,
-                    "reason": "Coverage collection is not bundled in the MVP runner"
+                    "supported": build_system == "jman",
+                    "engine": if build_system == "jman" { json!("jacoco") } else { Value::Null },
+                    "protocolVersion": if build_system == "jman" { json!(1) } else { Value::Null },
+                    "reason": if build_system == "jman" {
+                        Value::Null
+                    } else {
+                        json!("Coverage descriptors are currently available for native JMAN tests")
+                    }
                 }
             }),
         ))
@@ -7075,6 +7087,10 @@ mod tests {
             capabilities["experimental"]["jmanJavaTesting"]["protocolVersion"],
             2
         );
+        assert_eq!(
+            capabilities["experimental"]["jmanJavaTesting"]["coverage"],
+            true
+        );
         server.dispatch(json!({
             "jsonrpc":"2.0","method":"textDocument/didOpen",
             "params":{"textDocument":{"uri":uri,"version":1,"text":source}}
@@ -7127,6 +7143,27 @@ mod tests {
                 "com.example.jman_test.GreetingTest#greets"
             ])
         );
+        assert_eq!(reply(&run)["result"]["coverage"]["supported"], true);
+
+        let coverage = server.dispatch(json!({
+            "jsonrpc":"2.0","id":5,"method":"jman.java/tests/run",
+            "params":{
+                "selectors":["com.example.jman_test.GreetingTest#greets"],
+                "coverage":true
+            }
+        }));
+        assert_eq!(
+            reply(&coverage)["result"]["arguments"],
+            json!([
+                "--no-progress",
+                "test",
+                "--report",
+                "json",
+                "--tests",
+                "com.example.jman_test.GreetingTest#greets",
+                "--coverage"
+            ])
+        );
     }
 
     #[test]
@@ -7159,6 +7196,7 @@ mod tests {
             assert_eq!(reply(&run)["result"]["buildJavaHome"], "/jdks/21");
             assert_eq!(reply(&run)["result"]["arguments"], expected);
             assert_eq!(reply(&run)["result"]["report"], "junit-xml");
+            assert_eq!(reply(&run)["result"]["coverage"]["supported"], false);
         }
     }
 

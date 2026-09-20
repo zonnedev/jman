@@ -105,10 +105,17 @@ if grep -R -Eq '^rust-version[[:space:]]*=[[:space:]]*"' \
 fi
 grep -Eq '^test-rust:.*[[:space:]]vineflower([[:space:]]|$)' \
   "${project_dir}/Makefile"
+grep -Eq '^test-rust:.*[[:space:]]jacoco([[:space:]]|$)' \
+  "${project_dir}/Makefile"
 for packaging_target in release package-vscode; do
   if ! grep -Eq "^${packaging_target}:.*[[:space:]]native([[:space:]]|$)" \
     "${project_dir}/Makefile"; then
     echo "${packaging_target} must reuse Make's native frontend artifact" >&2
+    exit 1
+  fi
+  if ! grep -Eq "^${packaging_target}:.*[[:space:]]jacoco([[:space:]]|$)" \
+    "${project_dir}/Makefile"; then
+    echo "${packaging_target} must prepare pinned JaCoCo coverage tools" >&2
     exit 1
   fi
 done
@@ -118,6 +125,10 @@ if grep -q 'scripts/build-native.sh' \
   echo "Packaging scripts must not rebuild the native frontend" >&2
   exit 1
 fi
+for packaging_script in package-release.sh package-vscode.sh; do
+  grep -q 'jacoco-0.8.15-agent.jar' "${project_dir}/scripts/${packaging_script}"
+  grep -q 'jacoco-0.8.15-cli.jar' "${project_dir}/scripts/${packaging_script}"
+done
 while IFS= read -r action_reference; do
   if [[ ! "${action_reference}" =~ @[0-9a-f]{40}$ ]]; then
     echo "GitHub Action is not pinned to a full commit: ${action_reference}" >&2

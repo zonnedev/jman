@@ -34,6 +34,7 @@ fi
 
 "${project_dir}/scripts/build-processor-worker.sh"
 "${project_dir}/scripts/build-vineflower.sh"
+"${project_dir}/scripts/build-jacoco.sh"
 JAVAC_FRONTEND_LIB_DIR="${native_dir}" \
   CARGO_TARGET_DIR="${project_dir}/target" \
   cargo build \
@@ -48,6 +49,8 @@ strip --strip-unneeded "${server_dir}/jman"
 cp "${native_library}" "${server_dir}/libjman_javac_frontend.so"
 cp "${project_dir}/target/processor-worker.jar" "${server_dir}/processor-worker.jar"
 cp "${project_dir}/target/vineflower-1.12.0.jar" "${server_dir}/vineflower.jar"
+cp "${project_dir}/target/jacoco-0.8.15-agent.jar" "${server_dir}/jacocoagent.jar"
+cp "${project_dir}/target/jacoco-0.8.15-cli.jar" "${server_dir}/jacococli.jar"
 mkdir -p "${server_dir}/tools"
 cp -R "${project_dir}/tools/gradle-importer" "${server_dir}/tools/gradle-importer"
 jar --create \

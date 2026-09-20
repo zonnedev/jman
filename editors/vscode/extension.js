@@ -171,6 +171,8 @@ function parseTestEventLine(line) {
     if (event.reason === "test-case-started" && event.selector) return event;
     if (event.reason === "test-suite" && event.suite?.selector) return event;
     if (event.reason === "test-suite-started" && event.selector) return event;
+    if (event.reason === "coverage-file" && event.file?.path) return event;
+    if (event.reason === "coverage-summary" && event.coverage) return event;
     return undefined;
   } catch {
     return undefined;
@@ -262,7 +264,9 @@ async function configureTesting(context, command, environment, outputChannel) {
   controller.refreshHandler = refresh;
   await refresh();
 
-  const runRequest = async (request, token) => {
+  const coverageDetails = new WeakMap();
+  let coverageProfile;
+  const runRequest = async (request, token, collectCoverage = false) => {
     const run = controller.createTestRun(request);
     let executionTests = [];
     try {
@@ -283,7 +287,11 @@ async function configureTesting(context, command, environment, outputChannel) {
       const prepared = await client.sendRequest("jman.java/tests/run", {
         selectors: tests.map((item) => item.jmanSelector),
         uri: testUri?.toString(),
+        coverage: collectCoverage,
       });
+      if (collectCoverage && !prepared.coverage?.supported) {
+        throw new Error(prepared.coverage?.reason || "Coverage is unavailable for this workspace");
+      }
       const folder = workspaceRoot(testUri);
       const args = prepared.arguments;
       if (prepared.report !== "json-lines") {
@@ -303,6 +311,23 @@ async function configureTesting(context, command, environment, outputChannel) {
       const reported = new Set();
       let stdoutBuffer = "";
       const report = (event) => {
+        if (event.reason === "coverage-file") {
+          const file = event.file;
+          const count = (value) => ({
+            covered: value?.covered || 0,
+            total: (value?.covered || 0) + (value?.missed || 0),
+          });
+          const fileCoverage = new vscode.FileCoverage(
+            vscode.Uri.file(file.path),
+            count(file.counters.line),
+            count(file.counters.branch),
+            count(file.counters.method),
+          );
+          coverageDetails.set(fileCoverage, file.lines || []);
+          run.addCoverage(fileCoverage);
+          return;
+        }
+        if (event.reason === "coverage-summary") return;
         if (event.reason === "test-suite" || event.reason === "test-suite-started") return;
         const selector = event.reason === "test-case-started"
           ? event.selector
@@ -391,6 +416,27 @@ async function configureTesting(context, command, environment, outputChannel) {
     true,
   );
   context.subscriptions.push(profile);
+  if (vscode.TestRunProfileKind.Coverage !== undefined && vscode.FileCoverage) {
+    coverageProfile = controller.createRunProfile(
+      "Run with JMAN Coverage",
+      vscode.TestRunProfileKind.Coverage,
+      (request, token) => runRequest(request, token, true),
+      true,
+    );
+    coverageProfile.loadDetailedCoverage = async (_run, fileCoverage) =>
+      (coverageDetails.get(fileCoverage) || []).map((line) => {
+        const position = new vscode.Position(Math.max(0, line.number - 1), 0);
+        const totalBranches = (line.branch?.covered || 0) + (line.branch?.missed || 0);
+        const branches = Array.from({ length: totalBranches }, (_, index) =>
+          new vscode.BranchCoverage(index < (line.branch?.covered || 0), position));
+        return new vscode.StatementCoverage(
+          (line.instruction?.covered || 0) > 0,
+          position,
+          branches,
+        );
+      });
+    context.subscriptions.push(coverageProfile);
+  }
   const watcher = vscode.workspace.createFileSystemWatcher(
     "**/src/test/java/**/*.java",
   );

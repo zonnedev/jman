@@ -74,6 +74,12 @@ impl Ui {
         }
     }
 
+    pub fn line(&self, message: impl AsRef<str>) {
+        if !self.quiet && !self.structured {
+            eprintln!("{}", message.as_ref());
+        }
+    }
+
     pub fn is_verbose(&self) -> bool {
         self.verbose > 0
     }

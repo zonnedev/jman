@@ -4,6 +4,11 @@ All notable changes to the JMAN Java extension are documented here.
 
 ## Unreleased
 
+### Added
+
+- Added a Test Explorer coverage profile with workspace/file counters and
+  line-level coverage details for native JMAN projects.
+
 ## 0.5.2 - 2026-09-20
 
 ## 0.5.1 - 2026-09-20

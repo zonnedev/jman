@@ -12,9 +12,9 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use futures::{stream, StreamExt, TryStreamExt};
 use jman_config::{
-    Build, Dependencies, LockedClasspaths, LockedPackage, LockedToolchain, Lockfile, Manifest,
-    MavenCompatibility, MavenDependencyMetadata, MavenManagedDependency, Project, Repository,
-    Toolchain as ManifestToolchain, LOCK_VERSION, MANIFEST_VERSION,
+    Build, CoverageFormat, Dependencies, LockedClasspaths, LockedPackage, LockedToolchain,
+    Lockfile, Manifest, MavenCompatibility, MavenDependencyMetadata, MavenManagedDependency,
+    Project, Repository, Toolchain as ManifestToolchain, LOCK_VERSION, MANIFEST_VERSION,
 };
 use jman_resolver::{
     plugin_coordinates, AnnotationProcessor, Coordinate, Dependency, DependencyResolver,
@@ -404,6 +404,27 @@ struct TestCommand {
     /// Start each test JVM suspended on an ephemeral JDWP port.
     #[arg(long)]
     debug: bool,
+    /// Collect code coverage for project classes.
+    #[arg(long)]
+    coverage: bool,
+    /// Coverage output format. May be repeated.
+    #[arg(long = "coverage-format", value_enum)]
+    coverage_formats: Vec<CoverageFormatArgument>,
+    /// Coverage report directory; defaults to .jman/reports/coverage.
+    #[arg(long)]
+    coverage_output: Option<PathBuf>,
+    /// Fail when aggregate line coverage is below this percentage.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(0..=100))]
+    coverage_min_line: Option<u8>,
+    /// Fail when aggregate branch coverage is below this percentage.
+    #[arg(long, value_parser = clap::value_parser!(u8).range(0..=100))]
+    coverage_min_branch: Option<u8>,
+    /// `JaCoCo` class-name pattern to include. May be repeated.
+    #[arg(long)]
+    coverage_include: Vec<String>,
+    /// `JaCoCo` class-name pattern to exclude. May be repeated.
+    #[arg(long)]
+    coverage_exclude: Vec<String>,
     /// Test result report format.
     #[arg(long, value_enum, default_value_t = ReportFormat::Human)]
     report: ReportFormat,
@@ -542,6 +563,34 @@ enum TestSourceSetArgument {
     Integration,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, ValueEnum)]
+enum CoverageFormatArgument {
+    Summary,
+    Json,
+    Xml,
+    Html,
+}
+
+impl From<CoverageFormatArgument> for jman_build::CoverageOutputFormat {
+    fn from(value: CoverageFormatArgument) -> Self {
+        match value {
+            CoverageFormatArgument::Summary => Self::Summary,
+            CoverageFormatArgument::Json => Self::Json,
+            CoverageFormatArgument::Xml => Self::Xml,
+            CoverageFormatArgument::Html => Self::Html,
+        }
+    }
+}
+
+fn configured_coverage_format(value: CoverageFormat) -> jman_build::CoverageOutputFormat {
+    match value {
+        CoverageFormat::Summary => jman_build::CoverageOutputFormat::Summary,
+        CoverageFormat::Json => jman_build::CoverageOutputFormat::Json,
+        CoverageFormat::Xml => jman_build::CoverageOutputFormat::Xml,
+        CoverageFormat::Html => jman_build::CoverageOutputFormat::Html,
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -609,6 +658,7 @@ fn lsp_command(_arguments: &Lsp) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn test_project(arguments: &TestCommand, ui: &Ui) -> Result<()> {
     let target = absolute_path(&arguments.path)?;
     if !target.join("jman.toml").is_file() {
@@ -627,6 +677,7 @@ async fn test_project(arguments: &TestCommand, ui: &Ui) -> Result<()> {
         .await
         .context("Java compilation failed")?;
     activity.finish("Main sources compiled");
+    let coverage = coverage_options(arguments, &workspace_root)?;
     let test_options = jman_build::TestOptions {
         modules: arguments.modules.iter().cloned().collect(),
         patterns: arguments.tests.clone(),
@@ -637,6 +688,7 @@ async fn test_project(arguments: &TestCommand, ui: &Ui) -> Result<()> {
             TestSourceSetArgument::Integration => jman_build::TestSourceSet::Integration,
         },
         debug: arguments.debug,
+        coverage,
     };
     let (event_sender, mut event_receiver) = tokio::sync::mpsc::unbounded_channel();
     let test_activity = ui.activity("Compiling test sources");
@@ -654,7 +706,7 @@ async fn test_project(arguments: &TestCommand, ui: &Ui) -> Result<()> {
     let mut started_modules = BTreeSet::new();
     let mut streamed_tests = BTreeSet::new();
     let mut human_tree = HumanTestTree::default();
-    let results = loop {
+    let test_run = loop {
         tokio::select! {
             result = &mut tests => break result.context("JUnit test execution failed")?,
             event = event_receiver.recv() => {
@@ -685,11 +737,12 @@ async fn test_project(arguments: &TestCommand, ui: &Ui) -> Result<()> {
             &mut human_tree,
         )?;
     }
+    let results = &test_run.modules;
     if results.is_empty() {
         test_activity.finish("No test sources found");
         return Ok(());
     }
-    for result in &results {
+    for result in results {
         report_test_module(
             result,
             arguments.report,
@@ -701,7 +754,82 @@ async fn test_project(arguments: &TestCommand, ui: &Ui) -> Result<()> {
         )?;
     }
     test_activity.finish("Test execution finished");
-    finish_test_results(arguments, ui, &results)
+    let coverage_result = if let Some(coverage) = &test_run.coverage {
+        report_coverage(coverage, arguments.report, &test_options, ui)
+    } else {
+        Ok(())
+    };
+    finish_test_results(arguments, ui, results)?;
+    coverage_result
+}
+
+fn coverage_options(
+    arguments: &TestCommand,
+    workspace_root: &Path,
+) -> Result<Option<jman_build::CoverageOptions>> {
+    let manifest = Manifest::read(&workspace_root.join("jman.toml"))?;
+    let configured = manifest.test.and_then(|test| test.coverage);
+    let explicitly_requested = arguments.coverage
+        || !arguments.coverage_formats.is_empty()
+        || arguments.coverage_output.is_some()
+        || arguments.coverage_min_line.is_some()
+        || arguments.coverage_min_branch.is_some()
+        || !arguments.coverage_include.is_empty()
+        || !arguments.coverage_exclude.is_empty();
+    if !explicitly_requested && !configured.as_ref().is_some_and(|coverage| coverage.enabled) {
+        return Ok(None);
+    }
+    let configured = configured.unwrap_or_default();
+    let formats = if !arguments.coverage_formats.is_empty() {
+        arguments
+            .coverage_formats
+            .iter()
+            .copied()
+            .map(Into::into)
+            .collect()
+    } else if !configured.formats.is_empty() {
+        configured
+            .formats
+            .iter()
+            .copied()
+            .map(configured_coverage_format)
+            .collect()
+    } else {
+        [
+            jman_build::CoverageOutputFormat::Summary,
+            jman_build::CoverageOutputFormat::Json,
+            jman_build::CoverageOutputFormat::Xml,
+            jman_build::CoverageOutputFormat::Html,
+        ]
+        .into_iter()
+        .collect()
+    };
+    let output_directory = arguments.coverage_output.as_ref().map_or_else(
+        || workspace_root.join(".jman/reports/coverage"),
+        |path| {
+            if path.is_absolute() {
+                path.clone()
+            } else {
+                workspace_root.join(path)
+            }
+        },
+    );
+    Ok(Some(jman_build::CoverageOptions {
+        output_directory,
+        formats,
+        minimum_line: arguments.coverage_min_line.or(configured.minimum_line),
+        minimum_branch: arguments.coverage_min_branch.or(configured.minimum_branch),
+        include: if arguments.coverage_include.is_empty() {
+            configured.include
+        } else {
+            arguments.coverage_include.clone()
+        },
+        exclude: if arguments.coverage_exclude.is_empty() {
+            configured.exclude
+        } else {
+            arguments.coverage_exclude.clone()
+        },
+    }))
 }
 
 #[derive(Clone, Debug)]
@@ -1050,8 +1178,9 @@ fn report_test_module_started(
                 "suspend": true
             },
             "coverage": {
-                "supported": false,
-                "reason": "Coverage collection is not bundled in the MVP runner"
+                "supported": true,
+                "engine": "jacoco",
+                "protocolVersion": 1
             }
         }))?;
     }
@@ -1144,6 +1273,100 @@ fn report_test_module(
         human_tree.module_finished(&result.module, summary, activity);
     }
     Ok(())
+}
+
+fn report_coverage(
+    coverage: &jman_build::CoverageReport,
+    report_format: ReportFormat,
+    test_options: &jman_build::TestOptions,
+    ui: &Ui,
+) -> Result<()> {
+    if report_format == ReportFormat::Json {
+        for module in &coverage.modules {
+            for file in &module.files {
+                print_test_json(&serde_json::json!({
+                    "protocolVersion": 3,
+                    "reason": "coverage-file",
+                    "file": file
+                }))?;
+            }
+        }
+        print_test_json(&serde_json::json!({
+            "protocolVersion": 3,
+            "reason": "coverage-summary",
+            "coverage": coverage
+        }))?;
+    } else if test_options.coverage.as_ref().is_some_and(|options| {
+        options
+            .formats
+            .contains(&jman_build::CoverageOutputFormat::Summary)
+    }) {
+        ui.line("");
+        ui.line("Coverage");
+        for module in &coverage.modules {
+            ui.line(format!("├─ {}", module.module));
+            ui.line(format!(
+                "│  ├─ lines       {}",
+                format_coverage_count(&module.counters.line)
+            ));
+            ui.line(format!(
+                "│  ├─ branches    {}",
+                format_coverage_count(&module.counters.branch)
+            ));
+            ui.line(format!(
+                "│  └─ methods     {}",
+                format_coverage_count(&module.counters.method)
+            ));
+        }
+        ui.line("└─ workspace");
+        ui.line(format!(
+            "   ├─ lines       {}",
+            format_coverage_count(&coverage.totals.line)
+        ));
+        ui.line(format!(
+            "   ├─ branches    {}",
+            format_coverage_count(&coverage.totals.branch)
+        ));
+        ui.line(format!(
+            "   └─ methods     {}",
+            format_coverage_count(&coverage.totals.method)
+        ));
+        if let Some(html) = &coverage.html {
+            ui.line(format!("HTML report: {}", html.display()));
+        }
+        if let Some(xml) = &coverage.xml {
+            ui.line(format!("XML report: {}", xml.display()));
+        }
+        if let Some(json) = &coverage.json {
+            ui.line(format!("JSON report: {}", json.display()));
+        }
+    }
+    if coverage.threshold_failures.is_empty() {
+        return Ok(());
+    }
+    let failures = coverage
+        .threshold_failures
+        .iter()
+        .map(|failure| {
+            format!(
+                "{} {:.2}% is below {}%",
+                failure.metric,
+                failure.actual_percentage(),
+                failure.required
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    bail!("coverage threshold failed: {failures}")
+}
+
+fn format_coverage_count(count: &jman_build::CoverageCount) -> String {
+    format!(
+        "{:>5.1}%  {}/{}",
+        count.percentage(),
+        count.covered,
+        count.total()
+    )
 }
 
 fn finish_test_results(
@@ -2242,6 +2465,7 @@ fn scaffold_manifest(
             encoding: "UTF-8".to_owned(),
             compiler_args: Vec::new(),
         }),
+        test: None,
         publishing: None,
         audit: None,
         repositories: Vec::new(),
@@ -4456,6 +4680,7 @@ fn manifest_from_maven(effective: &EffectivePom, maven_authoritative: bool) -> R
                 .map(ToString::to_string)
                 .collect(),
         }),
+        test: None,
         build: Some(Build {
             encoding: effective
                 .properties

@@ -27,12 +27,13 @@ async function main() {
   const requests = [];
   let shownMessage;
   const watcherPatterns = [];
-  let runProfileHandler;
+  const runProfileHandlers = new Map();
   let testingController;
   const testStates = new Map();
   const testRunSelectors = [];
   const testRunUris = [];
   const spawnedProcesses = [];
+  const coverageFiles = [];
   const collection = () => {
     const values = new Map();
     return {
@@ -82,8 +83,12 @@ async function main() {
         testRunSelectors.push(params.selectors);
         testRunUris.push(params.uri);
         return {
-          arguments: ["--no-progress", "test", "--report", "json"],
+          arguments: [
+            "--no-progress", "test", "--report", "json",
+            ...(params.coverage ? ["--coverage"] : []),
+          ],
           buildJavaHome: "/build-jdk",
+          coverage: { supported: true, engine: "jacoco", protocolVersion: 1 },
         };
       }
       assert.equal(method, "workspace/executeCommand");
@@ -122,14 +127,33 @@ async function main() {
   }
 
   const vscode = {
-    Uri: { parse(value) { return { value, toString() { return value; } }; } },
+    Uri: {
+      parse(value) { return { value, toString() { return value; } }; },
+      file(value) { return { fsPath: value, toString() { return `file://${value}`; } }; },
+    },
+    Position: class Position {
+      constructor(line, character) { this.line = line; this.character = character; }
+    },
     Range: class Range {
       constructor(start, end) { this.start = start; this.end = end; }
     },
     TestMessage: class TestMessage {
       constructor(message) { this.message = message; }
     },
-    TestRunProfileKind: { Run: 1 },
+    FileCoverage: class FileCoverage {
+      constructor(uri, statementCoverage, branchCoverage, declarationCoverage) {
+        Object.assign(this, { uri, statementCoverage, branchCoverage, declarationCoverage });
+      }
+    },
+    StatementCoverage: class StatementCoverage {
+      constructor(executed, location, branches) {
+        Object.assign(this, { executed, location, branches });
+      }
+    },
+    BranchCoverage: class BranchCoverage {
+      constructor(executed, location) { Object.assign(this, { executed, location }); }
+    },
+    TestRunProfileKind: { Run: 1, Coverage: 3 },
     tests: {
       createTestController() {
         testingController = {
@@ -137,9 +161,10 @@ async function main() {
           createTestItem(id, label, uri) {
             return { id, label, uri, children: collection() };
           },
-          createRunProfile(_name, _kind, handler) {
-            runProfileHandler = handler;
-            return { dispose() {} };
+          createRunProfile(name, kind, handler) {
+            const profile = { name, kind, handler, dispose() {} };
+            runProfileHandlers.set(kind, profile);
+            return profile;
           },
           createTestRun() {
             return {
@@ -150,6 +175,7 @@ async function main() {
               skipped(item) { testStates.set(item.id, "skipped"); },
               errored(item, message) { testStates.set(item.id, `errored:${message.message}`); },
               appendOutput() {},
+              addCoverage(file) { coverageFiles.push(file); },
               end() { testStates.set("run", "ended"); },
             };
           },
@@ -252,6 +278,24 @@ async function main() {
           process.kill = () => {};
           queueMicrotask(() => {
             if (args.includes("test")) {
+              if (args.includes("--coverage")) {
+                process.stdout.emit("data", Buffer.from(`${JSON.stringify({
+                  reason: "coverage-file",
+                  file: {
+                    path: "/workspace/src/main/java/dev/Greeting.java",
+                    counters: {
+                      line: { covered: 2, missed: 1 },
+                      branch: { covered: 1, missed: 1 },
+                      method: { covered: 1, missed: 0 },
+                    },
+                    lines: [{
+                      number: 4,
+                      instruction: { covered: 3, missed: 0 },
+                      branch: { covered: 1, missed: 1 },
+                    }],
+                  },
+                })}\n`));
+              }
               process.stdout.emit("data", Buffer.from(`${JSON.stringify({
                 reason: "test-case",
                 test: {
@@ -454,6 +498,7 @@ async function main() {
   assert.equal(roots[0].jmanSelector, "dev.RefreshedTest");
   assert.deepEqual(clientOptions.initializationOptions, { buildSync: "prompt" });
   assert.equal(started, true);
+  const runProfileHandler = runProfileHandlers.get(vscode.TestRunProfileKind.Run)?.handler;
   assert(runProfileHandler, "native JMAN workspaces must register a test run profile");
   let classToRun;
   testingController.items.forEach((item) => { classToRun = item; });
@@ -471,6 +516,20 @@ async function main() {
     spawnedProcesses[0].options.env.PATH.startsWith(`/build-jdk/bin${path.delimiter}`),
     true,
   );
+  const coverageProfile = runProfileHandlers.get(vscode.TestRunProfileKind.Coverage);
+  assert(coverageProfile, "native JMAN workspaces must register a coverage profile");
+  await coverageProfile.handler(
+    { include: [classToRun], exclude: [] },
+    { onCancellationRequested() { return { dispose() {} }; } },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(spawnedProcesses[1].args.includes("--coverage"), true);
+  assert.deepEqual(testRunSelectors[1], ["dev.GreetingTest"]);
+  assert.equal(coverageFiles.length, 1);
+  assert.deepEqual(coverageFiles[0].statementCoverage, { covered: 2, total: 3 });
+  const details = await coverageProfile.loadDetailedCoverage(undefined, coverageFiles[0]);
+  assert.equal(details[0].location.line, 3);
+  assert.equal(details[0].branches.length, 2);
   testStates.clear();
   await commands.get("jman.java.test")("dev.GreetingTest#greets");
   await new Promise((resolve) => setImmediate(resolve));
@@ -480,7 +539,7 @@ async function main() {
     "the LSP CodeLens command must update the same TestController item",
   );
   assert.equal(testStates.get("run"), "ended");
-  assert.deepEqual(testRunSelectors[1], ["dev.GreetingTest#greets"]);
+  assert.deepEqual(testRunSelectors[2], ["dev.GreetingTest#greets"]);
   assert.equal(status.visible, true);
   assert.equal(status.text, "$(check) JMAN Java");
   assert.equal(status.command, "jmanJava.showStatus");

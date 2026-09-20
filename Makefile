@@ -7,15 +7,15 @@ NATIVE_FRONTEND_INPUTS := \
 	scripts/build-native.sh \
 	scripts/use-sdkman-java.sh
 
-.PHONY: gates ci test test-rust test-java test-jman-runner test-processor-worker vineflower test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-micronaut-correctness test-vscode-extension test-neovim-plugin test-release-automation prepare-release package-vscode release stage-release native test-native clean clear
+.PHONY: gates ci test test-rust test-java test-jman-runner test-processor-worker vineflower jacoco test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-micronaut-correctness test-vscode-extension test-neovim-plugin test-release-automation prepare-release package-vscode release stage-release native test-native clean clear
 
-gates: test test-native test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-vscode-extension test-neovim-plugin
+gates: test test-native test-coverage test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-vscode-extension test-neovim-plugin
 
-ci: test test-native test-publishing test-vscode-extension test-neovim-plugin test-release-automation
+ci: test test-native test-coverage test-publishing test-vscode-extension test-neovim-plugin test-release-automation
 
 test: test-rust test-java test-jman-runner
 
-test-rust: $(DEBUG_NATIVE_FRONTEND) vineflower
+test-rust: $(DEBUG_NATIVE_FRONTEND) vineflower jacoco
 	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
 	LD_LIBRARY_PATH="$(CURDIR)/target/native$${LD_LIBRARY_PATH:+:$${LD_LIBRARY_PATH}}" \
 	cargo test --workspace
@@ -31,6 +31,21 @@ test-processor-worker:
 
 vineflower:
 	./scripts/build-vineflower.sh
+
+jacoco:
+	./scripts/build-jacoco.sh
+
+test-coverage: jacoco
+	JMAN_JACOCO_AGENT="$(CURDIR)/target/jacoco-0.8.15-agent.jar" \
+	JMAN_JACOCO_CLI="$(CURDIR)/target/jacoco-0.8.15-cli.jar" \
+	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
+	LD_LIBRARY_PATH="$(CURDIR)/target/native$${LD_LIBRARY_PATH:+:$${LD_LIBRARY_PATH}}" \
+	cargo test -p jman-build coverage_ -- --nocapture
+	JMAN_JACOCO_AGENT="$(CURDIR)/target/jacoco-0.8.15-agent.jar" \
+	JMAN_JACOCO_CLI="$(CURDIR)/target/jacoco-0.8.15-cli.jar" \
+	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
+	LD_LIBRARY_PATH="$(CURDIR)/target/native$${LD_LIBRARY_PATH:+:$${LD_LIBRARY_PATH}}" \
+	cargo test -p jman-cli compiles_tests_and_launches_junit_platform_console -- --nocapture
 
 test-vineflower: vineflower
 	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
@@ -122,10 +137,10 @@ test-jpms-correctness: native test-java test-processor-worker test-maven-import
 test-compatibility-matrix: test-java
 	./scripts/test-compatibility-matrix.sh
 
-package-vscode: native
+package-vscode: native jacoco
 	./scripts/package-vscode.sh
 
-release: native
+release: native jacoco
 	./scripts/package-release.sh
 
 stage-release:

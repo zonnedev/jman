@@ -30,6 +30,7 @@ local operation_arguments = {
 		check = { "check" },
 		build = { "build" },
 		test = { "test" },
+		coverage = { "test", "--coverage" },
 		run = { "run" },
 	},
 	gradle = {
@@ -514,6 +515,9 @@ end
 function M.test()
 	workspace_operation("test")
 end
+function M.coverage()
+	workspace_operation("coverage")
+end
 
 local function human_test_arguments(prepared)
 	local arguments = {}
@@ -534,7 +538,7 @@ local function human_test_arguments(prepared)
 	return arguments
 end
 
-local function run_test_selectors(selectors, bufnr)
+local function run_test_selectors(selectors, bufnr, coverage)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 	if not vim.api.nvim_buf_is_valid(bufnr) then
 		notify("The Java buffer is no longer available", vim.log.levels.WARN)
@@ -553,6 +557,7 @@ local function run_test_selectors(selectors, bufnr)
 	client:request("jman.java/tests/run", {
 		selectors = selectors,
 		uri = uri ~= "" and uri or nil,
+		coverage = coverage == true,
 	}, function(error, prepared)
 		if error then
 			notify(error.message or tostring(error), vim.log.levels.ERROR)
@@ -567,7 +572,7 @@ local function run_test_selectors(selectors, bufnr)
 			terminal(
 				wrapper_command(prepared.program, root),
 				human_test_arguments(prepared),
-				"Test " .. table.concat(selectors, ", "),
+				(coverage and "Coverage " or "Test ") .. table.concat(selectors, ", "),
 				root,
 				operation_environment(prepared.program, prepared.buildJavaHome)
 			)
@@ -582,7 +587,14 @@ function M.test_pattern(pattern)
 	end
 end
 
-function M.test_nearest()
+function M.coverage_pattern(pattern)
+	pattern = pattern or vim.fn.input("JMAN coverage test pattern: ")
+	if pattern and pattern ~= "" then
+		run_test_selectors({ pattern }, nil, true)
+	end
+end
+
+local function run_nearest_test(coverage)
 	local bufnr = vim.api.nvim_get_current_buf()
 	local client = client_for_buffer(bufnr)
 	if not client then
@@ -598,12 +610,12 @@ function M.test_nearest()
 		end
 		local item = not error and nearest_test_item(json_object(json_object(result).items), cursor[1] - 1, cursor[2])
 		if item then
-			run_test_selectors({ item.selector }, bufnr)
+			run_test_selectors({ item.selector }, bufnr, coverage)
 			return
 		end
 		local selector, fallback_error = test_selector(bufnr, cursor[1])
 		if selector then
-			run_test_selectors({ selector }, bufnr)
+			run_test_selectors({ selector }, bufnr, coverage)
 		else
 			notify(
 				error and (error.message or tostring(error)) or fallback_error or "No test was found at the cursor",
@@ -611,6 +623,14 @@ function M.test_nearest()
 			)
 		end
 	end, bufnr)
+end
+
+function M.test_nearest()
+	run_nearest_test(false)
+end
+
+function M.coverage_nearest()
+	run_nearest_test(true)
 end
 
 function M.tests()
@@ -731,6 +751,8 @@ local function create_commands()
 		JmanBuild = M.build,
 		JmanRun = M.run,
 		JmanTest = M.test,
+		JmanCoverage = M.coverage,
+		JmanCoverageNearest = M.coverage_nearest,
 		JmanTests = M.tests,
 		JmanTestNearest = M.test_nearest,
 		JmanRebuildIndex = M.rebuild_index,
@@ -747,6 +769,9 @@ local function create_commands()
 	end
 	vim.api.nvim_create_user_command("JmanTestPattern", function(command)
 		M.test_pattern(command.args)
+	end, { nargs = "?", force = true })
+	vim.api.nvim_create_user_command("JmanCoveragePattern", function(command)
+		M.coverage_pattern(command.args)
 	end, { nargs = "?", force = true })
 end
 
@@ -826,6 +851,8 @@ local function configure_keymaps()
 		{ "<leader>jr", M.run, "JMAN Run" },
 		{ "<leader>jt", M.test_nearest, "JMAN Test Nearest" },
 		{ "<leader>jT", M.test, "JMAN Test All" },
+		{ "<leader>jv", M.coverage_nearest, "JMAN Coverage Nearest" },
+		{ "<leader>jV", M.coverage, "JMAN Coverage All" },
 		{ "<leader>jl", M.tests, "JMAN List Tests" },
 		{ "<leader>ji", M.show_status, "JMAN Status" },
 		{

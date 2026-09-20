@@ -45,7 +45,11 @@ The initialization result advertises these extensions under
 as JUnit executes tests and class containers. Suite records distinguish total
 container duration from shared lifecycle time outside child methods. Editors use
 these records instead of inferring results from console text, while JUnit XML
-remains available for final reconciliation.
+remains available for final reconciliation. Native JMAN coverage runs add
+`coverage-file` records with source counters and line details, followed by a
+`coverage-summary` record with workspace totals, report paths, and threshold
+results. Clients request this mode with `coverage: true` in
+`jman.java/tests/run`.
 
 Editor integrations own only process startup, initialization options, file
 watchers, command UI, and status presentation. Java analysis, workspace

@@ -43,6 +43,8 @@ for (const relative of [
   "server/maven-importer.jar",
   "server/processor-worker.jar",
   "server/vineflower.jar",
+  "server/jacocoagent.jar",
+  "server/jacococli.jar",
   "server/tools/gradle-importer/javac-frontend-model.init.gradle",
 ]) {
   releasePath(relative);
@@ -52,6 +54,8 @@ for (const relative of [
   "server/maven-importer.jar",
   "server/processor-worker.jar",
   "server/vineflower.jar",
+  "server/jacocoagent.jar",
+  "server/jacococli.jar",
 ]) {
   const signature = fs.readFileSync(path.join(extensionRoot, relative)).subarray(0, 4);
   assert.equal(signature[0], 0x50, `${relative} is not a ZIP/JAR archive`);

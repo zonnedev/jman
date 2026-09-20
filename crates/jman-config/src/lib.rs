@@ -51,6 +51,8 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<Build>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test: Option<Test>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publishing: Option<Publishing>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audit: Option<Audit>,
@@ -153,6 +155,55 @@ pub struct Build {
     pub encoding: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub compiler_args: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Test {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<Coverage>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Coverage {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub enabled: bool,
+    #[serde(default = "default_coverage_engine", skip_serializing_if = "is_jacoco")]
+    pub engine: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub formats: Vec<CoverageFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_line: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_branch: Option<u8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+}
+
+impl Default for Coverage {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            engine: default_coverage_engine(),
+            formats: Vec::new(),
+            minimum_line: None,
+            minimum_branch: None,
+            include: Vec::new(),
+            exclude: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CoverageFormat {
+    Summary,
+    Json,
+    Xml,
+    Html,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -395,6 +446,9 @@ impl Manifest {
         if let Some(audit) = &self.audit {
             validate_audit(audit)?;
         }
+        if let Some(coverage) = self.test.as_ref().and_then(|test| test.coverage.as_ref()) {
+            validate_coverage(coverage)?;
+        }
         Ok(())
     }
 
@@ -607,6 +661,45 @@ fn validate_audit(audit: &Audit) -> Result<(), ConfigError> {
     Ok(())
 }
 
+fn validate_coverage(coverage: &Coverage) -> Result<(), ConfigError> {
+    if coverage.engine != "jacoco" {
+        return Err(ConfigError::Validation(format!(
+            "unsupported coverage engine `{}`; expected `jacoco`",
+            coverage.engine
+        )));
+    }
+    for (label, threshold) in [
+        ("line", coverage.minimum_line),
+        ("branch", coverage.minimum_branch),
+    ] {
+        if threshold.is_some_and(|threshold| threshold > 100) {
+            return Err(ConfigError::Validation(format!(
+                "coverage minimum-{label} must be between 0 and 100"
+            )));
+        }
+    }
+    if coverage
+        .include
+        .iter()
+        .chain(&coverage.exclude)
+        .any(|pattern| pattern.trim().is_empty())
+    {
+        return Err(ConfigError::Validation(
+            "coverage include and exclude patterns cannot be empty".to_owned(),
+        ));
+    }
+    let unique_formats = coverage
+        .formats
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    if unique_formats.len() != coverage.formats.len() {
+        return Err(ConfigError::Validation(
+            "coverage formats cannot contain duplicates".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn is_iso_date(value: &str) -> bool {
     let mut parts = value.split('-');
     let Some(year) = parts.next().and_then(|part| part.parse::<u32>().ok()) else {
@@ -645,6 +738,14 @@ fn default_dependency_type() -> String {
 
 fn default_compile_scope() -> String {
     "compile".to_owned()
+}
+
+fn default_coverage_engine() -> String {
+    "jacoco".to_owned()
+}
+
+fn is_jacoco(value: &str) -> bool {
+    value == "jacoco"
 }
 
 fn default_jdk_vendor() -> String {
@@ -686,6 +787,7 @@ mod tests {
                 encoding: "UTF-8".to_owned(),
                 compiler_args: vec!["-parameters".to_owned()],
             }),
+            test: None,
             publishing: Some(Publishing {
                 name: Some("Demo".to_owned()),
                 description: Some("Example project".to_owned()),
@@ -858,6 +960,7 @@ mod tests {
             toolchain: None,
             maven: None,
             build: None,
+            test: None,
             publishing: None,
             audit: None,
             repositories: Vec::new(),
@@ -865,5 +968,43 @@ mod tests {
             annotation_processors: BTreeMap::new(),
             path_dependencies: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn coverage_configuration_round_trips_and_validates_thresholds() {
+        let mut manifest = minimal_manifest();
+        manifest.test = Some(Test {
+            coverage: Some(Coverage {
+                enabled: true,
+                engine: "jacoco".to_owned(),
+                formats: vec![CoverageFormat::Summary, CoverageFormat::Html],
+                minimum_line: Some(80),
+                minimum_branch: Some(70),
+                include: vec!["com.example.*".to_owned()],
+                exclude: vec!["com.example.generated.*".to_owned()],
+            }),
+        });
+
+        let serialized = manifest.to_toml().expect("serialize coverage");
+        assert!(serialized.contains("[test.coverage]"));
+        assert!(serialized.contains("formats = ["));
+        assert!(serialized.contains("\"summary\""));
+        assert!(serialized.contains("\"html\""));
+        assert_eq!(
+            toml::from_str::<Manifest>(&serialized).expect("parse coverage"),
+            manifest
+        );
+
+        manifest
+            .test
+            .as_mut()
+            .and_then(|test| test.coverage.as_mut())
+            .expect("coverage")
+            .minimum_line = Some(101);
+        assert!(manifest
+            .validate()
+            .expect_err("reject threshold")
+            .to_string()
+            .contains("between 0 and 100"));
     }
 }

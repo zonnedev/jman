@@ -5,6 +5,13 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ## [Unreleased]
 
+### Added
+
+- `jman test --coverage` now provides pinned JaCoCo instrumentation, isolated
+  multi-module collection, provider-neutral line/branch/method reports,
+  HTML/XML/JSON output, include/exclude filters, CI thresholds, structured
+  editor events, and native VS Code and Neovim coverage workflows.
+
 ## [0.5.2] - 2026-09-20
 
 ## [0.5.1] - 2026-09-20
