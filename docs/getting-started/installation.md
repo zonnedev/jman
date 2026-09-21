@@ -29,7 +29,6 @@ Vineflower.
 
    ```bash
    jman --version
-   jman doctor
    ```
 
 Do not move only the `jman` executable out of the extracted directory. JMAN
@@ -38,29 +37,31 @@ locates its bundled runtime files relative to that executable.
 ## Requirements
 
 - Linux on an x86-64 processor with glibc.
-- A supported JDK for project compilation. JMAN can install and pin one with
-  `jman java install` and `jman java use`.
+- A supported JDK for project compilation. JMAN can install and select one with
+  `jman java install --global`.
 - Java 25 GraalVM when using the Java language server. This runtime is separate
   from the JDK used to compile a project.
 - Network access for uncached Maven artifacts, the JDK catalog, vulnerability
   data, or publication. Locked, cached builds can run offline.
 
-## Install a project JDK
+## Make JMAN your Java manager
 
-List the compact multi-vendor catalog, install Java 21, and make it the current
-project's toolchain:
+List the compact multi-vendor catalog, install Java 21 as your user-wide
+default, and create project-aware command shims:
 
 ```bash
 jman java list --lts
-jman java install 21
-jman java use 21
+jman java install 21 --global
+jman java setup
+eval "$(jman shell init zsh)" # use bash or fish when appropriate
 jman java which
+jman doctor
 ```
 
 Temurin is the default distribution. Pass `--vendor <name>` consistently to
 install and select another distribution, for example `zulu` or `corretto`.
 See [Java toolchains](../guides/java-toolchains.md) for catalog filters,
-verification, cache behavior, and project pinning.
+verification, cache behavior, project overrides, and shell integration.
 
 ## Upgrade or remove JMAN
 

@@ -19,10 +19,10 @@ The default table combines local and remote releases, marks installed entries,
 and shows only the latest matching release per vendor. `--all` expands every
 matching remote release. Filters compose.
 
-For local state only, with no network access:
+To show only installed JDKs, with no network access:
 
 ```bash
-jman java list --local
+jman java list --installed
 ```
 
 For scripts and editor integrations:
@@ -34,22 +34,73 @@ jman java list --format json
 JSON retains the complete matching catalog even when the human table would be
 compact.
 
-## Install and select a JDK
+## Choose the user-wide Java
 
 ```bash
-jman java install 21
-jman java install 21 --vendor corretto
-jman java use 21 --vendor corretto
+jman java install 21 --global
 jman java which
+jman java setup
 ```
 
 Temurin is the default vendor. Installation resolves the platform archive and
 SHA-256 digest from the provider, requires HTTPS, validates every initial and
 redirected host, verifies the downloaded bytes, and only then makes the JDK
-available. `java use` records both version and vendor in the current project.
+available. `--global` also selects the exact installed release as the current
+user's default. The selection is durable: catalog and artifact cache cleanup
+does not delete installed JDKs.
 
-`jman java which` explains the JDK selected for a project. The project pin wins
-over ambient shell defaults, keeping CLI, CI, and editor actions aligned.
+`jman java setup` creates project-aware shims for the commands supplied by that
+JDK and prints the one line to add to Bash, Zsh, or Fish. For example:
+
+```bash
+eval "$(jman shell init zsh)"
+```
+
+After shell initialization, `java`, `javac`, `jar`, and the other JDK commands
+follow JMAN's effective selection. `JAVA_HOME` is refreshed when the working
+directory changes.
+
+To switch to another JDK that is already installed:
+
+```bash
+jman java use 21 --vendor corretto --global
+```
+
+`java use` never downloads. This keeps selection predictable; use `java
+install ... --global` when one command should both install and select.
+
+## Override Java for one project
+
+From a JMAN project:
+
+```bash
+jman java install 17 --vendor zulu
+jman java use 17 --vendor zulu
+jman java which
+```
+
+Without `--global`, `java use` writes the version and vendor to the nearest
+project's `jman.toml`. A project selection wins over the user-wide selection.
+Nested directories discover the nearest manifest automatically, so the same
+selection is used by JMAN builds, shell shims, and editor processes.
+
+`jman java which` explains the effective JDK by default, including its exact
+version, installation path, and whether it came from `jman.toml` or the global
+configuration. Machine-oriented forms are also available:
+
+```bash
+jman java which --format json
+jman java which --format home
+jman java which --format shell
+```
+
+Run an individual command with the effective JDK without changing the parent
+shell:
+
+```bash
+jman java exec -- java -version
+jman java exec 17 --vendor zulu -- java -version
+```
 
 ## Remove installations safely
 
@@ -60,9 +111,10 @@ jman java remove 21 --dry-run
 jman java remove 21 --vendor corretto
 ```
 
-Use `--all` to remove all matching installations and `--force` only when JMAN
-reports that a safety check needs an explicit override. `--path` selects the
-project context used by the operation.
+Use `--all` to remove all matching installations and `--force` only to override
+a project-pin safety check. A globally selected JDK cannot be removed, even
+with `--force`; select another global JDK first. `--path` selects the project
+context used by the operation.
 
 ## Catalog caching and refresh
 
@@ -76,7 +128,8 @@ jman java list --refresh
 ```
 
 `--refresh` bypasses the freshness window but still permits conditional HTTP
-revalidation. `--local` is the strict no-network alternative.
+revalidation. `--installed` is the strict no-network alternative and composes
+with `--major`, `--lts`, `--vendor`, and `--format`.
 
 ## Build-tool JDK versus project JDK
 
@@ -86,5 +139,8 @@ for example, Gradle 8.7 cannot run on Java 25. JMAN selects a compatible
 installed LTS runtime or accepts an explicit editor `buildJavaHome`; Gradle or
 Maven still owns the project's language target.
 
+The global JMAN selection is considered before automatically discovered SDKMAN,
+`JAVA_HOME`, or `PATH` candidates, provided it is compatible with the build
+tool. Explicit editor `buildJavaHome` and Gradle daemon criteria still win.
 JMAN never installs a JDK implicitly for editor import. Install the suggested
 runtime explicitly, then synchronize the workspace again.

@@ -5,6 +5,22 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ## [Unreleased]
 
+### Added
+
+- JMAN can now own the current user's Java selection: `java install --global`
+  installs and selects, `java use --global` switches among installed JDKs,
+  project selections override the global default, and `java which` explains
+  the effective source. Durable JDK storage, atomic configuration/current-link
+  updates, project-aware JDK command shims, Bash/Zsh/Fish initialization,
+  scoped `java exec`, doctor diagnostics, and editor build-runtime integration
+  keep CLI, shell, build, and language-server behavior aligned.
+
+### Changed
+
+- `jman java list --installed` replaces the ambiguous `--local` filter. It
+  lists only JMAN-installed JDKs, performs no catalog network request, and
+  composes with the existing release, LTS, vendor, and output-format filters.
+
 ## [0.6.0] - 2026-09-20
 
 ### Added

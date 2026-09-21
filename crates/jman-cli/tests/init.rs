@@ -2,6 +2,7 @@ use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
     net::TcpListener,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
@@ -622,14 +623,19 @@ java-release = 17
     assert_eq!(report["dryRun"], true);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
-fn local_java_list_json_is_machine_readable_without_network() {
+fn installed_java_list_json_is_machine_readable_without_network() {
     let cache = tempfile::tempdir().expect("temporary cache");
+    let data = tempfile::tempdir().expect("temporary data");
+    fake_managed_jdk(data.path(), "21.0.8+9", 21, "lts-21");
+    fake_managed_jdk(data.path(), "22.0.2+9", 22, "feature-22");
     let output = Command::new(env!("CARGO_BIN_EXE_jman"))
         .env("JMAN_CACHE_DIR", cache.path())
-        .args(["java", "list", "--local", "--format", "json"])
+        .env("JMAN_DATA_DIR", data.path())
+        .args(["java", "list", "--lts", "--installed", "--format", "json"])
         .output()
-        .expect("list local JDKs as JSON");
+        .expect("list installed JDKs as JSON");
 
     assert!(
         output.status.success(),
@@ -639,7 +645,8 @@ fn local_java_list_json_is_machine_readable_without_network() {
     assert!(output.stderr.is_empty());
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid JSON");
     assert!(report["catalog"].is_null());
-    assert_eq!(report["installed"], serde_json::json!([]));
+    assert_eq!(report["installed"].as_array().map(Vec::len), Some(1));
+    assert_eq!(report["installed"][0]["major"], 21);
     assert_eq!(report["available"], serde_json::json!([]));
     assert!(!cache.path().join("catalog").exists());
 }
@@ -2183,9 +2190,13 @@ packaging = "jar"
 }
 
 #[test]
-fn java_use_pins_toolchain_without_installing_it() {
+fn java_use_selects_an_installed_project_toolchain() {
     let project = tempfile::tempdir().expect("temporary project");
-    let cache = tempfile::tempdir().expect("temporary cache");
+    let root = tempfile::tempdir().expect("isolated Java home");
+    let cache = root.path().join("cache");
+    let data = root.path().join("data");
+    let config = root.path().join("config");
+    let java_17 = fake_managed_jdk(&data, "17.0.12+7", 17, "project-17");
     fs::write(
         project.path().join("jman.toml"),
         r#"manifest-version = 1
@@ -2198,17 +2209,18 @@ packaging = "jar"
 "#,
     )
     .expect("manifest");
-    let output = Command::new(env!("CARGO_BIN_EXE_jman"))
-        .env("JMAN_CACHE_DIR", cache.path())
+    let nested = project.path().join("src/main/java");
+    fs::create_dir_all(&nested).expect("nested project directory");
+    let output = isolated_jman(&cache, &data, &config)
         .args([
             "--quiet",
             "java",
             "use",
             "17",
             "--vendor",
-            "zulu",
+            "temurin",
             "--path",
-            project.path().to_str().expect("UTF-8 path"),
+            nested.to_str().expect("UTF-8 path"),
         ])
         .output()
         .expect("pin Java");
@@ -2220,19 +2232,24 @@ packaging = "jar"
     let manifest = fs::read_to_string(project.path().join("jman.toml")).expect("manifest");
     assert!(manifest.contains("[toolchain]"));
     assert!(manifest.contains("jdk = \"17\""));
-    assert!(manifest.contains("vendor = \"zulu\""));
+    assert!(manifest.contains("vendor = \"temurin\""));
 
-    let which = Command::new(env!("CARGO_BIN_EXE_jman"))
-        .env("JMAN_CACHE_DIR", cache.path())
+    let which = isolated_jman(&cache, &data, &config)
         .args([
             "java",
             "which",
             project.path().to_str().expect("UTF-8 path"),
+            "--format",
+            "json",
         ])
         .output()
         .expect("find Java");
-    assert!(!which.status.success());
-    assert!(String::from_utf8_lossy(&which.stderr).contains("jman java install 17 --vendor zulu"));
+    assert!(which.status.success());
+    let selected: serde_json::Value =
+        serde_json::from_slice(&which.stdout).expect("project selection JSON");
+    assert_eq!(selected["version"], "17.0.12+7");
+    assert_eq!(selected["source"], "project");
+    assert_eq!(selected["home"], java_17.to_string_lossy().as_ref());
 }
 
 #[test]
@@ -2541,4 +2558,278 @@ fn serve_osv_audit_fixture(listener: &TcpListener) {
         )
         .expect("OSV response");
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[allow(clippy::too_many_lines)]
+fn java_global_project_exec_and_shims_share_one_selection_model() {
+    let root = tempfile::tempdir().expect("isolated Java home");
+    let cache = root.path().join("cache");
+    let data = root.path().join("data");
+    let config = root.path().join("config");
+    let outside = root.path().join("outside");
+    let project = root.path().join("project");
+    fs::create_dir_all(&outside).expect("outside directory");
+    fs::create_dir_all(&project).expect("project directory");
+    let java_21 = fake_managed_jdk(&data, "21.0.8+9", 21, "global-21");
+    let java_17 = fake_managed_jdk(&data, "17.0.12+7", 17, "project-17");
+
+    let installed = isolated_jman(&cache, &data, &config)
+        .current_dir(&outside)
+        .args([
+            "java",
+            "install",
+            "21",
+            "--offline",
+            "--global",
+            "--no-progress",
+        ])
+        .output()
+        .expect("install and select global Java");
+    assert!(
+        installed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    assert_eq!(
+        fs::read_link(data.join("current")).expect("current symlink"),
+        java_21
+    );
+    let user_config = fs::read_to_string(config.join("config.toml")).expect("user config");
+    assert!(user_config.contains("jdk = \"21.0.8+9\""));
+    assert!(user_config.contains("vendor = \"temurin\""));
+
+    let global = isolated_jman(&cache, &data, &config)
+        .args([
+            "java",
+            "which",
+            outside.to_str().expect("outside path"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("inspect global Java");
+    assert!(global.status.success());
+    let global: serde_json::Value =
+        serde_json::from_slice(&global.stdout).expect("global selection JSON");
+    assert_eq!(global["version"], "21.0.8+9");
+    assert_eq!(global["source"], "global");
+    assert_eq!(global["home"], java_21.to_string_lossy().as_ref());
+
+    fs::write(
+        project.join("jman.toml"),
+        r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "project"
+version = "1"
+java-release = 17
+packaging = "jar"
+
+[toolchain]
+jdk = "17"
+vendor = "temurin"
+"#,
+    )
+    .expect("project manifest");
+    let selected = isolated_jman(&cache, &data, &config)
+        .args([
+            "java",
+            "which",
+            project.to_str().expect("project path"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("inspect project Java");
+    assert!(selected.status.success());
+    let selected: serde_json::Value =
+        serde_json::from_slice(&selected.stdout).expect("project selection JSON");
+    assert_eq!(selected["version"], "17.0.12+7");
+    assert_eq!(selected["source"], "project");
+    assert_eq!(selected["home"], java_17.to_string_lossy().as_ref());
+
+    let executed = isolated_jman(&cache, &data, &config)
+        .current_dir(&outside)
+        .args(["java", "exec", "17", "--", "java"])
+        .output()
+        .expect("execute explicit Java");
+    assert!(executed.status.success());
+    let executed = String::from_utf8(executed.stdout).expect("exec output");
+    assert!(executed.contains("project-17"));
+    assert!(executed.contains(java_17.to_string_lossy().as_ref()));
+
+    let global_exec = isolated_jman(&cache, &data, &config)
+        .current_dir(&outside)
+        .args(["java", "exec", "--", "java"])
+        .output()
+        .expect("execute effective global Java");
+    assert!(global_exec.status.success());
+    let global_exec = String::from_utf8(global_exec.stdout).expect("global exec output");
+    assert!(global_exec.contains("global-21"));
+    assert!(global_exec.contains(java_21.to_string_lossy().as_ref()));
+
+    let setup = isolated_jman(&cache, &data, &config)
+        .current_dir(&outside)
+        .args(["java", "setup", "--shell", "zsh", "--no-progress"])
+        .output()
+        .expect("install Java shims");
+    assert!(
+        setup.status.success(),
+        "{}",
+        String::from_utf8_lossy(&setup.stderr)
+    );
+    assert!(data.join("shims/java").is_symlink());
+    assert!(String::from_utf8_lossy(&setup.stdout).contains("jman shell init zsh"));
+
+    let shim = Command::new(data.join("shims/java"))
+        .current_dir(&project)
+        .env("JMAN_CACHE_DIR", &cache)
+        .env("JMAN_DATA_DIR", &data)
+        .env("JMAN_CONFIG_DIR", &config)
+        .output()
+        .expect("run project-aware Java shim");
+    assert!(
+        shim.status.success(),
+        "{}",
+        String::from_utf8_lossy(&shim.stderr)
+    );
+    let shim = String::from_utf8(shim.stdout).expect("shim output");
+    assert!(shim.contains("project-17"));
+    assert!(shim.contains(java_17.to_string_lossy().as_ref()));
+
+    let protected = isolated_jman(&cache, &data, &config)
+        .current_dir(&outside)
+        .args(["java", "remove", "21", "--force", "--no-progress"])
+        .output()
+        .expect("protect global Java");
+    assert!(!protected.status.success());
+    assert!(String::from_utf8_lossy(&protected.stderr).contains("selected globally"));
+
+    let switched = isolated_jman(&cache, &data, &config)
+        .current_dir(&outside)
+        .args(["java", "use", "17", "--global", "--no-progress"])
+        .output()
+        .expect("switch global Java");
+    assert!(
+        switched.status.success(),
+        "{}",
+        String::from_utf8_lossy(&switched.stderr)
+    );
+    assert_eq!(
+        fs::read_link(data.join("current")).expect("switched current symlink"),
+        java_17
+    );
+    let switched_config = fs::read_to_string(config.join("config.toml")).expect("user config");
+    assert!(switched_config.contains("jdk = \"17.0.12+7\""));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn java_use_requires_an_install_and_shell_initializers_are_valid() {
+    let root = tempfile::tempdir().expect("isolated Java home");
+    let cache = root.path().join("cache");
+    let data = root.path().join("data");
+    let config = root.path().join("config");
+
+    let missing = isolated_jman(&cache, &data, &config)
+        .args(["java", "use", "25", "--global", "--no-progress"])
+        .output()
+        .expect("reject missing Java");
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr)
+        .contains("run `jman java install 25 --vendor temurin`"));
+
+    for shell in ["bash", "zsh", "fish"] {
+        let output = isolated_jman(&cache, &data, &config)
+            .args(["shell", "init", shell])
+            .output()
+            .expect("render shell initialization");
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).expect("shell initialization");
+        assert!(text.contains("jman java which"));
+        assert!(text.contains("shims"));
+        if shell == "bash" {
+            let check = Command::new("bash")
+                .arg("-n")
+                .stdin(Stdio::piped())
+                .spawn()
+                .and_then(|mut child| {
+                    child
+                        .stdin
+                        .take()
+                        .expect("bash stdin")
+                        .write_all(text.as_bytes())?;
+                    child.wait()
+                })
+                .expect("validate bash initialization");
+            assert!(check.success());
+        }
+        if shell == "zsh" {
+            let check = Command::new("zsh")
+                .arg("-n")
+                .stdin(Stdio::piped())
+                .spawn()
+                .and_then(|mut child| {
+                    child
+                        .stdin
+                        .take()
+                        .expect("zsh stdin")
+                        .write_all(text.as_bytes())?;
+                    child.wait()
+                })
+                .expect("validate zsh initialization");
+            assert!(check.success());
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn isolated_jman(cache: &Path, data: &Path, config: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_jman"));
+    command
+        .env("JMAN_CACHE_DIR", cache)
+        .env("JMAN_DATA_DIR", data)
+        .env("JMAN_CONFIG_DIR", config)
+        .env_remove("JAVA_HOME");
+    command
+}
+
+#[cfg(target_os = "linux")]
+fn fake_managed_jdk(data: &Path, version: &str, major: u16, label: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = data
+        .join("jdks")
+        .join(format!("temurin-{}-linux-x64", version.replace('+', "_")));
+    fs::create_dir_all(home.join("bin")).expect("managed JDK bin");
+    for executable in ["java", "javac", "jar"] {
+        let path = home.join("bin").join(executable);
+        fs::write(
+            &path,
+            format!("#!/bin/sh\nprintf '%s|%s\\n' '{label}' \"$JAVA_HOME\"\n"),
+        )
+        .expect("fake Java executable");
+        let mut permissions = fs::metadata(&path)
+            .expect("executable metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).expect("executable permissions");
+    }
+    let metadata = jman_build::toolchain::ManagedJdk {
+        vendor: "temurin".to_owned(),
+        version: version.to_owned(),
+        major,
+        os: "linux".to_owned(),
+        architecture: "x64".to_owned(),
+        checksum: "sha256:test".to_owned(),
+        home: home.clone(),
+    };
+    fs::write(
+        home.join(".jman-toolchain.json"),
+        serde_json::to_vec_pretty(&metadata).expect("managed JDK metadata"),
+    )
+    .expect("write managed JDK metadata");
+    home
 }

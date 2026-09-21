@@ -43,7 +43,7 @@ workspaces.
 | Build | Checks, thin and executable fat JARs, source JARs, Javadocs, annotation processors |
 | Test | Live JUnit tree, selectors, unit/integration source sets, parallel modules, coverage |
 | Supply chain | Upgrade discovery, transactional updates, OSV audits, signed publishing |
-| Java | Multi-vendor JDK catalog, verified installation, project toolchain pinning |
+| Java | Multi-vendor JDK catalog, verified installation, global/project selection, project-aware shims |
 | Editors | Native Java LSP, VS Code Test Explorer, Neovim commands and CodeLens |
 
 The [documentation home](docs/index.md) contains task-oriented tutorials,

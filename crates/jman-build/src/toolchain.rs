@@ -27,6 +27,115 @@ const CATALOG_CACHE_SCHEMA: u32 = 2;
 const CATALOG_CACHE_TTL: Duration = Duration::from_mins(15);
 const KNOWN_LTS_MAJORS: &[u16] = &[8, 11, 17, 21, 25];
 
+/// User-wide Java configuration stored under JMAN's configuration directory.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UserJavaConfig {
+    pub java: JavaSelections,
+}
+
+/// Java selections belonging to the current user.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct JavaSelections {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global: Option<GlobalJavaSelection>,
+}
+
+/// An exact JDK installation selected as the user-wide default.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlobalJavaSelection {
+    pub jdk: String,
+    pub vendor: String,
+}
+
+/// Return JMAN's shared cache directory.
+#[must_use]
+pub fn default_cache_dir() -> PathBuf {
+    std::env::var_os("JMAN_CACHE_DIR").map_or_else(
+        || {
+            dirs::cache_dir()
+                .unwrap_or_else(|| PathBuf::from(".jman-cache"))
+                .join("jman")
+        },
+        PathBuf::from,
+    )
+}
+
+/// Return JMAN's durable user-data directory.
+#[must_use]
+pub fn default_data_dir() -> PathBuf {
+    std::env::var_os("JMAN_DATA_DIR").map_or_else(
+        || {
+            dirs::data_dir()
+                .unwrap_or_else(|| PathBuf::from(".jman-data"))
+                .join("jman")
+        },
+        PathBuf::from,
+    )
+}
+
+/// Return JMAN's user configuration directory.
+#[must_use]
+pub fn default_config_dir() -> PathBuf {
+    std::env::var_os("JMAN_CONFIG_DIR").map_or_else(
+        || {
+            dirs::config_dir()
+                .unwrap_or_else(|| PathBuf::from(".jman-config"))
+                .join("jman")
+        },
+        PathBuf::from,
+    )
+}
+
+/// Return the user-wide configuration file.
+#[must_use]
+pub fn default_config_file() -> PathBuf {
+    default_config_dir().join("config.toml")
+}
+
+/// Read a user Java configuration file. A missing file is an empty configuration.
+///
+/// # Errors
+///
+/// Returns an error when an existing file cannot be read or parsed.
+pub fn read_user_config(path: &Path) -> Result<UserJavaConfig, BuildError> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            return Ok(UserJavaConfig::default());
+        }
+        Err(source) => return Err(io_error(path, source)),
+    };
+    toml::from_str(&text).map_err(|error| {
+        BuildError::Invalid(format!(
+            "could not parse user configuration {}: {error}",
+            path.display()
+        ))
+    })
+}
+
+/// Read the configured user-wide Java selection.
+///
+/// # Errors
+///
+/// Returns an error when the user configuration cannot be read or parsed.
+pub fn global_java_selection() -> Result<Option<GlobalJavaSelection>, BuildError> {
+    Ok(read_user_config(&default_config_file())?.java.global)
+}
+
+/// Encode user Java configuration as deterministic TOML.
+///
+/// # Errors
+///
+/// Returns an error when serialization fails.
+pub fn user_config_toml(config: &UserJavaConfig) -> Result<String, BuildError> {
+    toml::to_string_pretty(config).map_err(|error| {
+        BuildError::Invalid(format!("could not encode user configuration: {error}"))
+    })
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ToolchainRequest {
     pub version: String,
@@ -171,18 +280,28 @@ pub struct ToolchainManager {
 }
 
 impl ToolchainManager {
-    /// Create a manager rooted in JMAN's shared cache.
+    /// Create a manager using JMAN's durable JDK store and the supplied cache.
     ///
     /// # Errors
     ///
     /// Returns an error when the HTTP client cannot be initialized.
     pub fn new(cache_dir: &Path) -> Result<Self, BuildError> {
-        Self::with_provider(cache_dir, Box::new(FoojayProvider::new()?))
+        Self::new_with_data(cache_dir, &default_data_dir())
+    }
+
+    /// Create a manager with explicit cache and durable-data roots.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the HTTP client cannot be initialized.
+    pub fn new_with_data(cache_dir: &Path, data_dir: &Path) -> Result<Self, BuildError> {
+        Self::with_provider(cache_dir, data_dir, Box::new(FoojayProvider::new()?))
     }
 
     #[cfg(test)]
     fn with_api_root(cache_dir: &Path, api_root: &str) -> Result<Self, BuildError> {
         Self::with_provider(
+            cache_dir,
             cache_dir,
             Box::new(FoojayProvider::with_api_root(api_root)?),
         )
@@ -190,6 +309,7 @@ impl ToolchainManager {
 
     fn with_provider(
         cache_dir: &Path,
+        data_dir: &Path,
         provider: Box<dyn JdkCatalogProvider>,
     ) -> Result<Self, BuildError> {
         let client = reqwest::Client::builder()
@@ -202,11 +322,17 @@ impl ToolchainManager {
                 BuildError::Invalid(format!("could not create JDK client: {error}"))
             })?;
         Ok(Self {
-            root: cache_dir.join("jdks"),
+            root: data_dir.join("jdks"),
             catalog_root: cache_dir.join("catalog"),
             client,
             provider,
         })
+    }
+
+    /// Return the durable directory containing managed JDK installations.
+    #[must_use]
+    pub fn installation_root(&self) -> &Path {
+        &self.root
     }
 
     /// List valid JMAN-managed JDK installations.
@@ -778,6 +904,20 @@ pub async fn resolve_default(
     requested_release: u16,
     cache_dir: &Path,
 ) -> Result<Toolchain, BuildError> {
+    if let Some(selection) = global_java_selection()? {
+        let request = ToolchainRequest {
+            version: selection.jdk,
+            vendor: normalize_vendor(&selection.vendor),
+        };
+        let store = ToolchainManager::new(cache_dir)?;
+        let Some(jdk) = store.find(&request).await? else {
+            return Err(BuildError::Invalid(format!(
+                "globally selected {} JDK {} is not installed; run `jman java install {} --vendor {} --global`",
+                request.vendor, request.version, request.version, request.vendor
+            )));
+        };
+        return managed_toolchain(jdk, requested_release).await;
+    }
     let request = ToolchainRequest {
         version: requested_release.to_string(),
         vendor: "temurin".to_owned(),
@@ -1185,8 +1325,9 @@ mod tests {
     #[tokio::test]
     async fn manager_consumes_the_provider_neutral_catalog_contract() {
         let cache = tempfile::tempdir().expect("cache");
-        let manager = ToolchainManager::with_provider(cache.path(), Box::new(StaticProvider))
-            .expect("manager");
+        let manager =
+            ToolchainManager::with_provider(cache.path(), cache.path(), Box::new(StaticProvider))
+                .expect("manager");
 
         let available = manager
             .available(None, false, false)
@@ -1413,7 +1554,7 @@ mod tests {
     #[tokio::test]
     async fn removes_only_newest_major_match_and_reports_size() {
         let cache = tempfile::tempdir().expect("cache");
-        let manager = ToolchainManager::new(cache.path()).expect("manager");
+        let manager = ToolchainManager::new_with_data(cache.path(), cache.path()).expect("manager");
         let older = fake_install(cache.path(), "17.0.9+9", 17, 7).await;
         let newer = fake_install(cache.path(), "17.0.20+8", 17, 11).await;
         let request = ToolchainRequest {
@@ -1428,6 +1569,46 @@ mod tests {
         assert!(result.reclaimed_bytes >= 11);
         assert!(older.is_dir());
         assert!(!newer.exists());
+    }
+
+    #[test]
+    fn user_java_configuration_round_trips_exact_global_selection() {
+        let directory = tempfile::tempdir().expect("configuration directory");
+        let path = directory.path().join("config.toml");
+        assert_eq!(
+            read_user_config(&path).expect("missing configuration"),
+            UserJavaConfig::default()
+        );
+
+        let config = UserJavaConfig {
+            java: JavaSelections {
+                global: Some(GlobalJavaSelection {
+                    jdk: "21.0.8+9".to_owned(),
+                    vendor: "temurin".to_owned(),
+                }),
+            },
+        };
+        let text = user_config_toml(&config).expect("configuration TOML");
+        assert_eq!(
+            text,
+            "[java.global]\njdk = \"21.0.8+9\"\nvendor = \"temurin\"\n"
+        );
+        std::fs::write(&path, text).expect("write configuration");
+        assert_eq!(read_user_config(&path).expect("read configuration"), config);
+    }
+
+    #[test]
+    fn user_java_configuration_rejects_unknown_fields() {
+        let directory = tempfile::tempdir().expect("configuration directory");
+        let path = directory.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[java.global]\njdk = \"21\"\nvendor = \"temurin\"\nunsafe = true\n",
+        )
+        .expect("write configuration");
+
+        let error = read_user_config(&path).expect_err("unknown field must fail");
+        assert!(error.to_string().contains("unknown field `unsafe`"));
     }
 
     async fn fake_install(cache: &Path, version: &str, major: u16, payload_size: usize) -> PathBuf {

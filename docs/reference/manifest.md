@@ -92,7 +92,8 @@ vendor = "temurin"
 ```
 
 `jdk` accepts a feature release or exact version. `vendor` defaults to
-`temurin`. Prefer `jman java use` so the selected identifiers match the catalog.
+`temurin`. Prefer `jman java use` so the selection is validated against an
+installed JDK. This project selection overrides the user's global Java.
 
 ## Dependencies
 

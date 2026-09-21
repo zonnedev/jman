@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     fmt::Write as _,
     io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
@@ -79,6 +79,8 @@ enum Command {
     Doctor(ProjectPath),
     /// Install, select, and inspect Java toolchains.
     Java(Java),
+    /// Print shell integration for project-aware Java selection.
+    Shell(Shell),
     /// Start the bundled Java language server.
     Lsp(Lsp),
 }
@@ -447,10 +449,14 @@ enum JavaCommand {
     List(JavaList),
     /// Remove a JDK installed by JMAN.
     Remove(JavaRemove),
-    /// Pin this project to a JDK version.
+    /// Select an installed JDK for this project or the current user.
     Use(JavaUse),
-    /// Print the managed JDK selected for this project.
-    Which(ProjectPath),
+    /// Print the effective JDK and where it was selected.
+    Which(JavaWhich),
+    /// Execute a command with a selected JDK without changing configuration.
+    Exec(JavaExec),
+    /// Create project-aware Java shims and print shell setup instructions.
+    Setup(JavaSetup),
 }
 
 #[derive(Debug, Args)]
@@ -467,7 +473,7 @@ struct JavaList {
     #[arg(long)]
     vendor: Option<String>,
     /// Revalidate the remote catalog even when the cache is still fresh.
-    #[arg(long, conflicts_with = "local")]
+    #[arg(long, conflicts_with = "installed")]
     refresh: bool,
     /// Output format.
     #[arg(long, value_enum, default_value_t = ReportFormat::Human)]
@@ -478,9 +484,9 @@ struct JavaList {
 struct JavaListScope {
     /// List only JDKs installed by JMAN without contacting the remote catalog.
     #[arg(long)]
-    local: bool,
+    installed: bool,
     /// Show every catalog release instead of one latest release per vendor.
-    #[arg(long, conflicts_with = "local")]
+    #[arg(long, conflicts_with = "installed")]
     all: bool,
 }
 
@@ -494,18 +500,100 @@ struct JavaVersion {
     /// Resolve only from installed JDKs.
     #[arg(long)]
     offline: bool,
+    /// Select the exact installed release as the user-wide default.
+    #[arg(long)]
+    global: bool,
 }
 
 #[derive(Debug, Args)]
 struct JavaUse {
     /// JDK major or exact version, such as 17 or 17.0.20+8.
     version: String,
-    /// JDK vendor to pin.
+    /// JDK vendor to select.
     #[arg(long, default_value = "temurin")]
     vendor: String,
     /// Project directory.
+    #[arg(long, default_value = ".", conflicts_with = "global")]
+    path: PathBuf,
+    /// Select the matching installed JDK as the user-wide default.
+    #[arg(long)]
+    global: bool,
+}
+
+#[derive(Debug, Args)]
+struct JavaWhich {
+    /// Directory used to discover the nearest JMAN project.
+    #[arg(default_value = ".")]
+    path: PathBuf,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = JavaWhichFormat::Human)]
+    format: JavaWhichFormat,
+}
+
+#[derive(Debug, Args)]
+struct JavaExec {
+    /// Installed JDK major or exact version; omit to use the effective selection.
+    version: Option<String>,
+    /// JDK vendor used with an explicit version.
+    #[arg(long, default_value = "temurin", requires = "version")]
+    vendor: String,
+    /// Directory used to discover the effective project selection.
     #[arg(long, default_value = ".")]
     path: PathBuf,
+    /// Command and arguments to execute.
+    #[arg(last = true, required = true)]
+    command: Vec<OsString>,
+}
+
+#[derive(Debug, Args)]
+struct JavaSetup {
+    /// Shell for the printed activation instruction; detected from SHELL by default.
+    #[arg(long, value_enum)]
+    shell: Option<ShellKind>,
+}
+
+#[derive(Debug, Args)]
+struct Shell {
+    #[command(subcommand)]
+    command: ShellCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ShellCommand {
+    /// Print the activation code for a supported shell.
+    Init(ShellInit),
+}
+
+#[derive(Debug, Args)]
+struct ShellInit {
+    /// Shell receiving the activation code.
+    #[arg(value_enum)]
+    shell: ShellKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum ShellKind {
+    Bash,
+    Zsh,
+    Fish,
+}
+
+impl ShellKind {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Bash => "bash",
+            Self::Zsh => "zsh",
+            Self::Fish => "fish",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum JavaWhichFormat {
+    Human,
+    Json,
+    Home,
+    Shell,
 }
 
 #[derive(Debug, Args)]
@@ -593,6 +681,13 @@ fn configured_coverage_format(value: CoverageFormat) -> jman_build::CoverageOutp
 
 #[tokio::main]
 async fn main() {
+    if let Some(tool) = invoked_java_shim() {
+        if let Err(error) = run_java_shim(&tool).await {
+            eprintln!("error: {error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let cli = Cli::parse();
     let structured = matches!(
         &cli.command,
@@ -605,6 +700,9 @@ async fn main() {
         }) | Command::Java(Java {
             command: JavaCommand::List(JavaList {
                 format: ReportFormat::Json,
+                ..
+            }) | JavaCommand::Which(JavaWhich {
+                format: JavaWhichFormat::Json,
                 ..
             }),
         }) | Command::Publish(PublishCommand {
@@ -646,6 +744,10 @@ async fn run(cli: Cli, ui: &Ui) -> Result<()> {
         Command::Test(arguments) => test_project(&arguments, ui).await,
         Command::Doctor(arguments) => doctor_project(&arguments.path, ui).await,
         Command::Java(arguments) => java_command(arguments, ui).await,
+        Command::Shell(arguments) => {
+            shell_command(arguments);
+            Ok(())
+        }
         Command::Lsp(arguments) => lsp_command(&arguments),
     }
 }
@@ -1762,21 +1864,21 @@ async fn compile_project(
 
 async fn doctor_project(path: &Path, ui: &Ui) -> Result<()> {
     let target = absolute_path(path)?;
-    let manifest = Manifest::read(&target.join("jman.toml"))
-        .with_context(|| format!("could not read {}", target.join("jman.toml").display()))?;
     let activity = ui.activity("Inspecting Java toolchain");
-    let toolchain = if let Some(request) = manifest_toolchain_request(&manifest) {
-        jman_build::toolchain::resolve(&request, &default_cache_dir(), true, false).await?
-    } else {
-        jman_build::toolchain::resolve_default(manifest.project.java_release, &default_cache_dir())
-            .await?
-    };
+    let manager = jman_build::toolchain::ToolchainManager::new(&default_cache_dir())?;
+    let selection = effective_java(&manager, &target).await?;
     activity.finish(format!(
-        "{} at {} (project release {})",
-        toolchain.version,
-        toolchain.javac.display(),
-        manifest.project.java_release
+        "{} JDK {} from {} ({})",
+        selection.vendor,
+        selection.version,
+        selection.home.display(),
+        selection.source.label()
     ));
+    ui.detail(format!(
+        "Selection source: {}",
+        selection.source_path.display()
+    ));
+    inspect_java_environment(&selection, ui);
     let activity = ui.activity("Inspecting container runtime");
     if let Some(runtime) = detect_container_runtime().await {
         activity.finish(runtime);
@@ -1784,6 +1886,64 @@ async fn doctor_project(path: &Path, ui: &Ui) -> Result<()> {
         activity.finish("No reachable Docker or Podman service (optional for tests)".to_owned());
     }
     Ok(())
+}
+
+fn inspect_java_environment(selection: &EffectiveJava, ui: &Ui) {
+    match std::env::var_os("JAVA_HOME") {
+        Some(home) if Path::new(&home) == selection.home => {
+            ui.detail("JAVA_HOME matches the effective JMAN selection");
+        }
+        Some(home) => ui.warning(format!(
+            "JAVA_HOME={} differs from the effective JMAN home {}",
+            PathBuf::from(home).display(),
+            selection.home.display()
+        )),
+        None => ui.warning("JAVA_HOME is not set; run `eval \"$(jman shell init <shell>)\"`"),
+    }
+
+    let shims = jman_build::toolchain::default_data_dir().join("shims");
+    let path_entries = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if let Some(index) = path_entries.iter().position(|entry| entry == &shims) {
+        ui.detail(format!(
+            "JMAN shims are PATH entry {} ({})",
+            index + 1,
+            shims.display()
+        ));
+    } else {
+        ui.warning(format!(
+            "JMAN shims are not on PATH; run `jman java setup` ({})",
+            shims.display()
+        ));
+    }
+
+    if let Some(java) = executable_on_path("java", &path_entries) {
+        ui.detail(format!("PATH resolves java to {}", java.display()));
+        if !java.starts_with(&shims) {
+            ui.warning("another Java installation currently precedes JMAN's shims on PATH");
+        }
+    }
+
+    for (name, marker) in [
+        ("SDKMAN", "SDKMAN_DIR"),
+        ("asdf", "ASDF_DIR"),
+        ("mise", "MISE_SHELL"),
+        ("jenv", "JENV_ROOT"),
+    ] {
+        if std::env::var_os(marker).is_some() {
+            ui.warning(format!(
+                "{name} is active via {marker}; ensure it does not precede JMAN shims"
+            ));
+        }
+    }
+}
+
+fn executable_on_path(name: &str, entries: &[PathBuf]) -> Option<PathBuf> {
+    entries
+        .iter()
+        .map(|entry| entry.join(name))
+        .find(|candidate| candidate.is_file())
 }
 
 async fn detect_container_runtime() -> Option<String> {
@@ -1867,54 +2027,503 @@ async fn java_command(arguments: Java, ui: &Ui) -> Result<()> {
                 jdk.version,
                 jdk.home.display()
             ));
+            if arguments.global {
+                select_global_java(&jdk).await?;
+                ui.success(format!(
+                    "Selected {} JDK {} globally",
+                    jdk.vendor, jdk.version
+                ));
+            }
         }
         JavaCommand::List(arguments) => list_java(&manager, arguments, ui).await?,
         JavaCommand::Remove(arguments) => remove_java(&manager, arguments, ui).await?,
         JavaCommand::Use(arguments) => {
-            let target = absolute_path(&arguments.path)?;
-            let path = target.join("jman.toml");
-            let mut manifest = Manifest::read(&path)
-                .with_context(|| format!("could not read {}", path.display()))?;
-            let selected_version = arguments.version;
             let vendor = jman_build::toolchain::normalize_vendor(&arguments.vendor);
-            manifest.toolchain = Some(ManifestToolchain {
-                jdk: selected_version.clone(),
+            let request = ToolchainRequest {
+                version: arguments.version.clone(),
                 vendor: vendor.clone(),
-            });
-            let text = manifest
-                .to_toml()
-                .context("invalid JDK selection for this project")?;
-            write_atomically(&path, &text).await?;
-            ui.success(format!(
-                "Pinned {} to {} JDK {}",
-                manifest.project.name, vendor, selected_version
-            ));
+            };
+            let jdk = installed_java(&manager, &request).await?;
+            if arguments.global {
+                select_global_java(&jdk).await?;
+                ui.success(format!(
+                    "Selected {} JDK {} globally",
+                    jdk.vendor, jdk.version
+                ));
+            } else {
+                let target = absolute_path(&arguments.path)?;
+                let directory = if target.is_file() {
+                    target
+                        .parent()
+                        .context("Java selection path has no parent directory")?
+                } else {
+                    &target
+                };
+                let (path, mut manifest) = nearest_manifest(directory)?.with_context(|| {
+                    format!(
+                        "no jman.toml was found at or above {}; run this command inside a JMAN project",
+                        directory.display()
+                    )
+                })?;
+                manifest.toolchain = Some(ManifestToolchain {
+                    jdk: arguments.version.clone(),
+                    vendor: vendor.clone(),
+                });
+                let text = manifest
+                    .to_toml()
+                    .context("invalid JDK selection for this project")?;
+                write_atomically(&path, &text).await?;
+                ui.success(format!(
+                    "Pinned {} to {} JDK {}",
+                    manifest.project.name, vendor, arguments.version
+                ));
+            }
         }
         JavaCommand::Which(arguments) => {
-            let target = absolute_path(&arguments.path)?;
-            let manifest = Manifest::read(&target.join("jman.toml")).with_context(|| {
-                format!("could not read {}", target.join("jman.toml").display())
-            })?;
-            if let Some(request) = manifest_toolchain_request(&manifest) {
-                let toolchain =
-                    jman_build::toolchain::resolve(&request, &default_cache_dir(), false, true)
-                        .await?;
-                println!("{}", toolchain.javac.display());
-            } else {
-                println!(
-                    "{}",
-                    jman_build::toolchain::resolve_default(
-                        manifest.project.java_release,
-                        &default_cache_dir(),
-                    )
-                    .await?
-                    .javac
-                    .display()
-                );
+            let selection = effective_java(&manager, &arguments.path).await?;
+            print_effective_java(&selection, arguments.format)?;
+        }
+        JavaCommand::Exec(arguments) => java_exec(&manager, arguments).await?,
+        JavaCommand::Setup(arguments) => java_setup(&manager, arguments, ui).await?,
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum JavaSelectionSource {
+    Project,
+    Global,
+}
+
+impl JavaSelectionSource {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Global => "global configuration",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EffectiveJava {
+    vendor: String,
+    version: String,
+    major: u16,
+    home: PathBuf,
+    source: JavaSelectionSource,
+    source_path: PathBuf,
+}
+
+async fn installed_java(
+    manager: &jman_build::toolchain::ToolchainManager,
+    request: &jman_build::toolchain::ToolchainRequest,
+) -> Result<jman_build::toolchain::ManagedJdk> {
+    manager.find(request).await?.with_context(|| {
+        format!(
+            "{} JDK {} is not installed; run `jman java install {} --vendor {}`",
+            request.vendor, request.version, request.version, request.vendor
+        )
+    })
+}
+
+async fn effective_java(
+    manager: &jman_build::toolchain::ToolchainManager,
+    path: &Path,
+) -> Result<EffectiveJava> {
+    let target = absolute_path(path)?;
+    let directory = if target.is_file() {
+        target
+            .parent()
+            .context("Java selection path has no parent directory")?
+    } else {
+        &target
+    };
+    if let Some((manifest_path, manifest)) = nearest_manifest(directory)? {
+        if let Some(request) = manifest_toolchain_request(&manifest) {
+            let jdk = installed_java(manager, &request).await?;
+            return Ok(EffectiveJava {
+                vendor: jdk.vendor,
+                version: jdk.version,
+                major: jdk.major,
+                home: jdk.home,
+                source: JavaSelectionSource::Project,
+                source_path: manifest_path,
+            });
+        }
+    }
+
+    let config_path = jman_build::toolchain::default_config_file();
+    let selection = jman_build::toolchain::read_user_config(&config_path)?
+        .java
+        .global
+        .context("no project or global Java is selected; run `jman java install 21 --global`")?;
+    let request = jman_build::toolchain::ToolchainRequest {
+        version: selection.jdk,
+        vendor: jman_build::toolchain::normalize_vendor(&selection.vendor),
+    };
+    let jdk = installed_java(manager, &request).await?;
+    Ok(EffectiveJava {
+        vendor: jdk.vendor,
+        version: jdk.version,
+        major: jdk.major,
+        home: jdk.home,
+        source: JavaSelectionSource::Global,
+        source_path: config_path,
+    })
+}
+
+fn nearest_manifest(directory: &Path) -> Result<Option<(PathBuf, Manifest)>> {
+    for ancestor in directory.ancestors() {
+        let path = ancestor.join("jman.toml");
+        if path.is_file() {
+            let manifest = Manifest::read(&path)
+                .with_context(|| format!("could not read {}", path.display()))?;
+            return Ok(Some((path, manifest)));
+        }
+    }
+    Ok(None)
+}
+
+fn print_effective_java(selection: &EffectiveJava, format: JavaWhichFormat) -> Result<()> {
+    match format {
+        JavaWhichFormat::Human => {
+            println!("{} {}", selection.vendor, selection.version);
+            println!("{}", selection.home.display());
+            println!(
+                "Selected by {}: {}",
+                selection.source.label(),
+                selection.source_path.display()
+            );
+        }
+        JavaWhichFormat::Json => println!("{}", serde_json::to_string_pretty(selection)?),
+        JavaWhichFormat::Home => println!("{}", selection.home.display()),
+        JavaWhichFormat::Shell => println!(
+            "export JAVA_HOME={}",
+            posix_shell_quote(&selection.home.to_string_lossy())
+        ),
+    }
+    Ok(())
+}
+
+async fn select_global_java(jdk: &jman_build::toolchain::ManagedJdk) -> Result<()> {
+    let data_dir = absolute_path(&jman_build::toolchain::default_data_dir())?;
+    let installation_root = data_dir.join("jdks");
+    let jdk_home = absolute_path(&jdk.home)?;
+    if jdk_home.parent() != Some(installation_root.as_path()) || !jdk_home.is_dir() {
+        bail!(
+            "refusing to select JDK outside the managed store {}",
+            installation_root.display()
+        );
+    }
+
+    let current = data_dir.join("current");
+    let previous_target = std::fs::read_link(&current).ok();
+    replace_symlink(&jdk_home, &current)?;
+
+    let config_path = jman_build::toolchain::default_config_file();
+    let mut config = jman_build::toolchain::read_user_config(&config_path)?;
+    config.java.global = Some(jman_build::toolchain::GlobalJavaSelection {
+        jdk: jdk.version.clone(),
+        vendor: jdk.vendor.clone(),
+    });
+    let text = jman_build::toolchain::user_config_toml(&config)?;
+    if let Err(error) = write_user_config(&config_path, &text).await {
+        if let Some(previous) = previous_target {
+            let _ = replace_symlink(&previous, &current);
+        } else {
+            let _ = std::fs::remove_file(&current);
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+async fn write_user_config(path: &Path, contents: &str) -> Result<()> {
+    let parent = path
+        .parent()
+        .context("user configuration path has no parent directory")?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .with_context(|| format!("could not create {}", parent.display()))?;
+    write_atomically(path, contents).await
+}
+
+#[cfg(unix)]
+fn replace_symlink(target: &Path, link: &Path) -> Result<()> {
+    use std::os::unix::fs::symlink;
+
+    let parent = link
+        .parent()
+        .context("managed symlink has no parent directory")?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("could not create {}", parent.display()))?;
+    let temporary = parent.join(format!(
+        ".{}-{}.tmp",
+        link.file_name()
+            .and_then(OsStr::to_str)
+            .unwrap_or("jman-link"),
+        std::process::id()
+    ));
+    match std::fs::remove_file(&temporary) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("could not replace {}", temporary.display()));
+        }
+    }
+    symlink(target, &temporary)
+        .with_context(|| format!("could not create {}", temporary.display()))?;
+    std::fs::rename(&temporary, link)
+        .with_context(|| format!("could not install {}", link.display()))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn replace_symlink(_target: &Path, _link: &Path) -> Result<()> {
+    bail!("JMAN Java shims currently require a Unix-like platform")
+}
+
+async fn java_exec(
+    manager: &jman_build::toolchain::ToolchainManager,
+    arguments: JavaExec,
+) -> Result<()> {
+    let home = if let Some(version) = arguments.version {
+        let request = jman_build::toolchain::ToolchainRequest {
+            version,
+            vendor: jman_build::toolchain::normalize_vendor(&arguments.vendor),
+        };
+        installed_java(manager, &request).await?.home
+    } else {
+        effective_java(manager, &arguments.path).await?.home
+    };
+    let (program, command_arguments) = arguments
+        .command
+        .split_first()
+        .context("a command is required after `--`")?;
+    execute_with_java(&home, program, command_arguments)
+}
+
+fn execute_with_java(home: &Path, program: &OsStr, arguments: &[OsString]) -> Result<()> {
+    let direct = Path::new(program);
+    let executable = if direct.components().count() == 1 {
+        let candidate = home.join("bin").join(program);
+        if candidate.is_file() {
+            candidate.into_os_string()
+        } else {
+            program.to_owned()
+        }
+    } else {
+        program.to_owned()
+    };
+    let mut command = std::process::Command::new(executable);
+    command.args(arguments).env("JAVA_HOME", home);
+    let mut paths = vec![home.join("bin")];
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    command.env(
+        "PATH",
+        std::env::join_paths(paths).context("could not construct Java PATH")?,
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let error = command.exec();
+        Err(error).context("could not execute command with the selected Java")
+    }
+    #[cfg(not(unix))]
+    {
+        let status = command
+            .status()
+            .context("could not execute command with the selected Java")?;
+        if status.success() {
+            Ok(())
+        } else {
+            bail!("Java command exited with {status}")
+        }
+    }
+}
+
+async fn java_setup(
+    manager: &jman_build::toolchain::ToolchainManager,
+    arguments: JavaSetup,
+    ui: &Ui,
+) -> Result<()> {
+    let config_path = jman_build::toolchain::default_config_file();
+    let selection = jman_build::toolchain::read_user_config(&config_path)?
+        .java
+        .global
+        .context("no global Java is selected; run `jman java install 21 --global` first")?;
+    let request = jman_build::toolchain::ToolchainRequest {
+        version: selection.jdk,
+        vendor: jman_build::toolchain::normalize_vendor(&selection.vendor),
+    };
+    let jdk = installed_java(manager, &request).await?;
+    select_global_java(&jdk).await?;
+    let count = install_java_shims(&jdk.home).await?;
+    let shell = arguments
+        .shell
+        .or_else(detect_shell)
+        .unwrap_or(ShellKind::Bash);
+    let shims = jman_build::toolchain::default_data_dir().join("shims");
+    ui.success(format!(
+        "Installed {count} Java command shims in {}",
+        shims.display()
+    ));
+    println!();
+    println!("Add this to ~/.{}rc:", shell.name());
+    println!();
+    println!("  eval \"$(jman shell init {})\"", shell.name());
+    Ok(())
+}
+
+async fn install_java_shims(java_home: &Path) -> Result<usize> {
+    let executable = jman_executable()?;
+    let shims = jman_build::toolchain::default_data_dir().join("shims");
+    tokio::fs::create_dir_all(&shims)
+        .await
+        .with_context(|| format!("could not create {}", shims.display()))?;
+    let mut entries = tokio::fs::read_dir(java_home.join("bin"))
+        .await
+        .with_context(|| format!("could not inspect {}/bin", java_home.display()))?;
+    let mut count = 0;
+    while let Some(entry) = entries.next_entry().await? {
+        let name = entry.file_name();
+        let Some(name_text) = name.to_str() else {
+            continue;
+        };
+        let file_type = entry.file_type().await?;
+        if !valid_executable_name(name_text) || !(file_type.is_file() || file_type.is_symlink()) {
+            continue;
+        }
+        replace_symlink(&executable, &shims.join(name_text))?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+fn valid_executable_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('.')
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn jman_executable() -> Result<PathBuf> {
+    let invoked = std::env::args_os()
+        .next()
+        .context("could not determine the JMAN executable")?;
+    let invoked_path = PathBuf::from(&invoked);
+    if invoked_path.components().count() > 1 {
+        return absolute_path(&invoked_path);
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path) {
+            let candidate = directory.join(&invoked_path);
+            if candidate.is_file() {
+                return Ok(candidate);
             }
         }
     }
-    Ok(())
+    std::env::current_exe().context("could not locate the JMAN executable")
+}
+
+fn detect_shell() -> Option<ShellKind> {
+    let shell = std::env::var_os("SHELL")?;
+    match Path::new(&shell).file_name()?.to_str()? {
+        "bash" => Some(ShellKind::Bash),
+        "zsh" => Some(ShellKind::Zsh),
+        "fish" => Some(ShellKind::Fish),
+        _ => None,
+    }
+}
+
+fn invoked_java_shim() -> Option<String> {
+    let name = PathBuf::from(std::env::args_os().next()?)
+        .file_name()?
+        .to_str()?
+        .to_owned();
+    if name == "jman" || !valid_executable_name(&name) {
+        return None;
+    }
+    let shim = jman_build::toolchain::default_data_dir()
+        .join("shims")
+        .join(&name);
+    shim.is_symlink().then_some(name)
+}
+
+async fn run_java_shim(tool: &str) -> Result<()> {
+    let manager = jman_build::toolchain::ToolchainManager::new(&default_cache_dir())?;
+    let selection = effective_java(&manager, &std::env::current_dir()?).await?;
+    let executable = selection.home.join("bin").join(tool);
+    if !executable.is_file() {
+        bail!(
+            "{} JDK {} does not provide `{tool}`",
+            selection.vendor,
+            selection.version
+        );
+    }
+    let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    execute_with_java(&selection.home, executable.as_os_str(), &arguments)
+}
+
+fn shell_command(arguments: Shell) {
+    match arguments.command {
+        ShellCommand::Init(arguments) => print_shell_init(arguments.shell),
+    }
+}
+
+fn print_shell_init(shell: ShellKind) {
+    let shims = jman_build::toolchain::default_data_dir().join("shims");
+    let shims = posix_shell_quote(&shims.to_string_lossy());
+    match shell {
+        ShellKind::Bash => print!(
+            "export PATH={shims}:\"$PATH\"\n\
+             __jman_update_java_home() {{\n\
+             \x20 eval \"$(command jman java which --format shell 2>/dev/null)\"\n\
+             }}\n\
+             case \";${{PROMPT_COMMAND:-}};\" in\n\
+             \x20 *\";__jman_update_java_home;\"*) ;;\n\
+             \x20 *) PROMPT_COMMAND=\"__jman_update_java_home${{PROMPT_COMMAND:+;$PROMPT_COMMAND}}\" ;;\n\
+             esac\n\
+             __jman_update_java_home\n"
+        ),
+        ShellKind::Zsh => print!(
+            "export PATH={shims}:\"$PATH\"\n\
+             autoload -Uz add-zsh-hook\n\
+             __jman_update_java_home() {{\n\
+             \x20 eval \"$(command jman java which --format shell 2>/dev/null)\"\n\
+             }}\n\
+             add-zsh-hook chpwd __jman_update_java_home\n\
+             __jman_update_java_home\n"
+        ),
+        ShellKind::Fish => {
+            let fish_shims = fish_shell_quote(&jman_build::toolchain::default_data_dir().join("shims").to_string_lossy());
+            print!(
+                "fish_add_path --prepend {fish_shims}\n\
+                 function __jman_update_java_home --on-variable PWD\n\
+                 \x20 set -l jman_java_home (command jman java which --format home 2>/dev/null)\n\
+                 \x20 if test $status -eq 0\n\
+                 \x20   set -gx JAVA_HOME $jman_java_home\n\
+                 \x20 end\n\
+                 end\n\
+                 __jman_update_java_home\n"
+            );
+        }
+    }
+}
+
+fn posix_shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn fish_shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "\\'"))
 }
 
 async fn list_java(
@@ -1935,7 +2544,7 @@ async fn list_java(
         .filter(|jdk| !arguments.lts || jman_build::toolchain::is_lts_major(jdk.major))
         .collect::<Vec<_>>();
 
-    if arguments.scope.local {
+    if arguments.scope.installed {
         if arguments.format == ReportFormat::Json {
             print_java_list_json(&installed, &[], None)?;
             return Ok(());
@@ -1955,7 +2564,7 @@ async fn list_java(
     let catalog = manager
         .available(arguments.major, arguments.lts, arguments.refresh)
         .await
-        .context("could not load remote JDK catalog; use `jman java list --local` to list installed JDKs only")?;
+        .context("could not load remote JDK catalog; use `jman java list --installed` to list installed JDKs only")?;
     let remote = catalog
         .jdks
         .into_iter()
@@ -2203,6 +2812,7 @@ async fn remove_java(
             request.version
         );
     }
+    protect_global_toolchain(&candidates)?;
     if !arguments.force {
         protect_pinned_toolchain(&arguments.path, &candidates)?;
     }
@@ -2231,17 +2841,39 @@ async fn remove_java(
     Ok(())
 }
 
+fn protect_global_toolchain(candidates: &[jman_build::toolchain::ManagedJdk]) -> Result<()> {
+    let Some(selection) = jman_build::toolchain::global_java_selection()? else {
+        return Ok(());
+    };
+    let vendor = jman_build::toolchain::normalize_vendor(&selection.vendor);
+    if candidates
+        .iter()
+        .any(|jdk| jdk.vendor == vendor && jdk.version == selection.jdk)
+    {
+        bail!(
+            "{} JDK {} is selected globally; select another JDK with `jman java use <version> --global` before removing it",
+            vendor,
+            selection.jdk
+        );
+    }
+    Ok(())
+}
+
 fn protect_pinned_toolchain(
     project: &Path,
     candidates: &[jman_build::toolchain::ManagedJdk],
 ) -> Result<()> {
     let target = absolute_path(project)?;
-    let manifest_path = target.join("jman.toml");
-    if !manifest_path.is_file() {
+    let directory = if target.is_file() {
+        target
+            .parent()
+            .context("Java selection path has no parent directory")?
+    } else {
+        &target
+    };
+    let Some((_manifest_path, manifest)) = nearest_manifest(directory)? else {
         return Ok(());
-    }
-    let manifest = Manifest::read(&manifest_path)
-        .with_context(|| format!("could not read {}", manifest_path.display()))?;
+    };
     let Some(pin) = manifest.toolchain else {
         return Ok(());
     };
@@ -2273,14 +2905,7 @@ fn manifest_toolchain_request(
 }
 
 fn default_cache_dir() -> PathBuf {
-    std::env::var_os("JMAN_CACHE_DIR").map_or_else(
-        || {
-            dirs::cache_dir()
-                .unwrap_or_else(|| PathBuf::from(".jman-cache"))
-                .join("jman")
-        },
-        PathBuf::from,
-    )
+    jman_build::toolchain::default_cache_dir()
 }
 
 async fn init_project(arguments: &Init, ui: &Ui) -> Result<()> {
@@ -5151,7 +5776,7 @@ mod tests {
         else {
             panic!("expected java list command");
         };
-        assert!(!arguments.scope.local);
+        assert!(!arguments.scope.installed);
         assert!(!arguments.scope.all);
         assert_eq!(arguments.major, Some(21));
         assert!(arguments.lts);
@@ -5159,8 +5784,32 @@ mod tests {
         assert!(arguments.refresh);
         assert_eq!(arguments.format, ReportFormat::Json);
 
-        assert!(Cli::try_parse_from(["jman", "java", "list", "--local", "--refresh"]).is_err());
-        assert!(Cli::try_parse_from(["jman", "java", "list", "--local", "--all"]).is_err());
+        assert!(Cli::try_parse_from(["jman", "java", "list", "--installed", "--refresh"]).is_err());
+        assert!(Cli::try_parse_from(["jman", "java", "list", "--installed", "--all"]).is_err());
+        assert!(Cli::try_parse_from(["jman", "java", "list", "--local"]).is_err());
+
+        let installed = Cli::try_parse_from([
+            "jman",
+            "java",
+            "list",
+            "--lts",
+            "--installed",
+            "--major",
+            "21",
+            "--vendor",
+            "zulu",
+        ])
+        .expect("installed catalog filters");
+        let Command::Java(Java {
+            command: JavaCommand::List(installed),
+        }) = installed.command
+        else {
+            panic!("expected java list command");
+        };
+        assert!(installed.scope.installed);
+        assert!(installed.lts);
+        assert_eq!(installed.major, Some(21));
+        assert_eq!(installed.vendor.as_deref(), Some("zulu"));
 
         let all = Cli::try_parse_from(["jman", "java", "list", "--all"])
             .expect("complete catalog arguments");
@@ -5230,6 +5879,88 @@ mod tests {
             panic!("expected java install command");
         };
         assert_eq!(selected.vendor, "corretto");
+    }
+
+    #[test]
+    fn java_selection_has_one_install_and_use_command_model() {
+        let install = Cli::try_parse_from([
+            "jman", "java", "install", "21", "--vendor", "zulu", "--global",
+        ])
+        .expect("global install");
+        let Command::Java(Java {
+            command: JavaCommand::Install(install),
+        }) = install.command
+        else {
+            panic!("expected java install command");
+        };
+        assert!(install.global);
+        assert_eq!(install.vendor, "zulu");
+
+        let selection = Cli::try_parse_from(["jman", "java", "use", "17", "--global"])
+            .expect("global selection");
+        let Command::Java(Java {
+            command: JavaCommand::Use(selection),
+        }) = selection.command
+        else {
+            panic!("expected java use command");
+        };
+        assert!(selection.global);
+        assert_eq!(selection.path, PathBuf::from("."));
+
+        assert!(
+            Cli::try_parse_from(["jman", "java", "use", "17", "--global", "--path", "demo"])
+                .is_err()
+        );
+        assert!(Cli::try_parse_from(["jman", "java", "global", "17"]).is_err());
+    }
+
+    #[test]
+    fn java_inspection_execution_and_shell_setup_have_stable_syntax() {
+        let which = Cli::try_parse_from(["jman", "java", "which", "project", "--format", "shell"])
+            .expect("shell inspection");
+        let Command::Java(Java {
+            command: JavaCommand::Which(which),
+        }) = which.command
+        else {
+            panic!("expected java which command");
+        };
+        assert_eq!(which.path, PathBuf::from("project"));
+        assert_eq!(which.format, JavaWhichFormat::Shell);
+
+        let exec = Cli::try_parse_from([
+            "jman", "java", "exec", "21", "--vendor", "corretto", "--", "java", "-version",
+        ])
+        .expect("scoped Java execution");
+        let Command::Java(Java {
+            command: JavaCommand::Exec(exec),
+        }) = exec.command
+        else {
+            panic!("expected java exec command");
+        };
+        assert_eq!(exec.version.as_deref(), Some("21"));
+        assert_eq!(exec.vendor, "corretto");
+        assert_eq!(exec.command, ["java", "-version"]);
+
+        let effective = Cli::try_parse_from(["jman", "java", "exec", "--", "javac", "--version"])
+            .expect("effective Java execution");
+        let Command::Java(Java {
+            command: JavaCommand::Exec(effective),
+        }) = effective.command
+        else {
+            panic!("expected java exec command");
+        };
+        assert!(effective.version.is_none());
+        assert_eq!(effective.command, ["javac", "--version"]);
+
+        let shell =
+            Cli::try_parse_from(["jman", "shell", "init", "fish"]).expect("fish initialization");
+        let Command::Shell(Shell {
+            command: ShellCommand::Init(shell),
+        }) = shell.command
+        else {
+            panic!("expected shell init command");
+        };
+        assert_eq!(shell.shell, ShellKind::Fish);
     }
 
     #[test]

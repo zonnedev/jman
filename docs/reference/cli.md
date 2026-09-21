@@ -210,21 +210,24 @@ Run this first when a build behaves differently between machines.
 
 ```text
 jman java install VERSION [--vendor VENDOR] [--offline]
+                          [--global]
 ```
 
 `VERSION` can be a feature release such as `21` or an exact version such as
 `17.0.20+8`. Vendor defaults to `temurin`. Offline mode selects only an already
-installed match.
+installed match. `--global` selects the exact installed release as the
+current user's default after installation.
 
 ## jman java list
 
 ```text
-jman java list [--local] [--all] [--major RELEASE] [--lts]
+jman java list [--installed] [--all] [--major RELEASE] [--lts]
                [--vendor VENDOR] [--refresh] [--format human|json]
 ```
 
 The default merges installed and available releases into a compact table.
-`--local` never contacts the catalog. `--all` disables latest-per-vendor
+`--installed` filters the result to JDKs installed by JMAN and never contacts
+the remote catalog. `--all` disables latest-per-vendor
 compaction. `--refresh` revalidates even a fresh cache entry.
 
 ## jman java remove
@@ -235,23 +238,58 @@ jman java remove VERSION [--vendor VENDOR] [--all] [--dry-run]
 ```
 
 `--all` removes every installed match for the requested major. Pin-safety is
-checked against `--path`; `--force` overrides it.
+checked against the nearest project at `--path`; `--force` overrides a project
+pin. A globally selected JDK must be replaced before it can be removed.
 
 ## jman java use
 
 ```text
-jman java use VERSION [--vendor VENDOR] [--path PATH]
+jman java use VERSION [--vendor VENDOR] [--path PATH | --global]
 ```
 
-Write the selected version/vendor into the project's `[toolchain]` section.
+Select a JDK that is already installed. The default writes the version/vendor
+into the nearest project's `[toolchain]` section. `--global` instead records
+the exact installed release as the current user's default. This command never
+downloads a JDK.
 
 ## jman java which
 
 ```text
-jman java which [PATH]
+jman java which [PATH] [--format human|json|home|shell]
 ```
 
-Print the managed JDK selected for the project.
+Print the effective managed JDK and its selection source. The nearest project
+pin wins over the global selection. `home` prints only the JDK directory;
+`shell` prints a POSIX `JAVA_HOME` export.
+
+## jman java exec
+
+```text
+jman java exec [VERSION] [--vendor VENDOR] [--path PATH] -- COMMAND [ARGUMENTS...]
+```
+
+Execute a command with the effective JDK's `JAVA_HOME` and `bin` directory.
+Supplying `VERSION` selects a matching installed JDK for this invocation only.
+
+## jman java setup
+
+```text
+jman java setup [--shell bash|zsh|fish]
+```
+
+Create project-aware shims for every command supplied by the globally selected
+JDK, refresh the `current` link, and print the shell activation instruction.
+A global selection must already exist.
+
+## jman shell init
+
+```text
+jman shell init bash|zsh|fish
+```
+
+Print shell code that prepends JMAN's shims and keeps `JAVA_HOME` synchronized
+with the effective project-or-global selection. Evaluate it from the matching
+shell startup file; the command does not edit that file itself.
 
 ## jman lsp
 

@@ -72,7 +72,7 @@ struct JavaCandidate {
 #[derive(Clone, Debug)]
 struct RuntimeEnvironment {
     explicit_home: Option<PathBuf>,
-    cache_dir: PathBuf,
+    data_dir: PathBuf,
     sdkman_java_dir: Option<PathBuf>,
     java_home: Option<PathBuf>,
     path: Option<OsString>,
@@ -81,10 +81,10 @@ struct RuntimeEnvironment {
 impl RuntimeEnvironment {
     fn from_process() -> Self {
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        let cache_dir = std::env::var_os("JMAN_CACHE_DIR").map_or_else(
+        let data_dir = std::env::var_os("JMAN_DATA_DIR").map_or_else(
             || {
-                dirs::cache_dir()
-                    .unwrap_or_else(|| PathBuf::from(".jman-cache"))
+                dirs::data_dir()
+                    .unwrap_or_else(|| PathBuf::from(".jman-data"))
                     .join("jman")
             },
             PathBuf::from,
@@ -95,7 +95,7 @@ impl RuntimeEnvironment {
             .or_else(|| home.map(|directory| directory.join(".sdkman/candidates/java")));
         Self {
             explicit_home: std::env::var_os("JAVA_LSP_BUILD_JAVA_HOME").map(PathBuf::from),
-            cache_dir,
+            data_dir,
             sdkman_java_dir,
             java_home: std::env::var_os("JAVA_HOME").map(PathBuf::from),
             path: std::env::var_os("PATH"),
@@ -126,8 +126,14 @@ fn select_gradle_runtime_with(
     }
 
     let mut candidates = Vec::new();
+    add_candidate(
+        &environment.data_dir.join("current"),
+        "JMAN global",
+        5,
+        &mut candidates,
+    );
     collect_directory_candidates(
-        &environment.cache_dir.join("jdks"),
+        &environment.data_dir.join("jdks"),
         "JMAN-managed",
         4,
         &mut candidates,
@@ -171,7 +177,11 @@ fn select_gradle_runtime_with(
             ))
     });
 
-    let Some(candidate) = candidates.into_iter().next() else {
+    let global = candidates
+        .iter()
+        .position(|candidate| candidate.source == "JMAN global")
+        .map(|index| candidates.remove(index));
+    let Some(candidate) = global.or_else(|| candidates.into_iter().next()) else {
         let required_major = requested_major.or_else(|| {
             gradle_version.and_then(|version| {
                 KNOWN_LTS_JAVA_MAJORS
@@ -465,7 +475,7 @@ mod tests {
     fn environment(root: &Path) -> RuntimeEnvironment {
         RuntimeEnvironment {
             explicit_home: None,
-            cache_dir: root.join("cache"),
+            data_dir: root.join("data"),
             sdkman_java_dir: Some(root.join("sdkman")),
             java_home: None,
             path: None,
@@ -635,7 +645,7 @@ mod tests {
         wrapper(root.path(), "8.7");
         let environment = environment(root.path());
         let managed = jdk(
-            &environment.cache_dir.join("jdks"),
+            &environment.data_dir.join("jdks"),
             "temurin-21.0.2",
             "21.0.2",
         );
@@ -653,13 +663,43 @@ mod tests {
         assert_eq!(selected.source, "JMAN-managed");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn compatible_global_jman_selection_wins_over_newer_automatic_candidates() {
+        use std::os::unix::fs::symlink;
+
+        let root = fixture();
+        wrapper(root.path(), "8.7");
+        let environment = environment(root.path());
+        let global = jdk(
+            &environment.data_dir.join("jdks"),
+            "temurin-17.0.12",
+            "17.0.12+7",
+        );
+        fs::create_dir_all(&environment.data_dir).expect("JMAN data directory");
+        symlink(&global, environment.data_dir.join("current")).expect("global JDK symlink");
+        jdk(
+            environment.sdkman_java_dir.as_deref().expect("SDKMAN"),
+            "21.0.10-open",
+            "21.0.10+7",
+        );
+
+        let selected = select_gradle_runtime_with(root.path(), &environment)
+            .expect("selection")
+            .expect("runtime");
+
+        assert_eq!(selected.java_home, global);
+        assert_eq!(selected.java_major, 17);
+        assert_eq!(selected.source, "JMAN global");
+    }
+
     #[test]
     fn newest_patch_wins_before_source_priority() {
         let root = fixture();
         wrapper(root.path(), "8.7");
         let environment = environment(root.path());
         jdk(
-            &environment.cache_dir.join("jdks"),
+            &environment.data_dir.join("jdks"),
             "temurin-21.0.2",
             "21.0.2+13",
         );

@@ -1,7 +1,7 @@
 # Lockfile, cache, and outputs
 
-JMAN separates reviewable project state, shared downloaded data, and disposable
-build output.
+JMAN separates reviewable project state, durable user data, shared downloaded
+data, and disposable build output.
 
 ## `jman.lock`
 
@@ -26,7 +26,6 @@ The default root is `~/.cache/jman/`; `JMAN_CACHE_DIR` overrides it.
 | --- | --- |
 | `repository/` | Maven artifacts, POMs, and metadata. |
 | `catalog/` | Remote JDK catalog responses and validators. |
-| `jdks/` | JDKs installed and managed by JMAN. |
 | `audit/osv/` | Vulnerability responses keyed by the exact graph. |
 
 The cache is reusable across workspaces. Offline commands require the relevant
@@ -40,6 +39,26 @@ jman sync
 ```
 
 Do not commit the shared cache.
+
+## Durable Java data and configuration
+
+Installed JDKs and command shims are user data, not a cache. On Linux they are
+stored under `~/.local/share/jman/`; `JMAN_DATA_DIR` overrides the root.
+
+| Path | Contents |
+| --- | --- |
+| `jdks/` | Verified JDK installations managed by JMAN. |
+| `current` | Atomic link to the exact globally selected JDK. |
+| `shims/` | Project-aware JDK command links created by `jman java setup`. |
+
+The user-wide selection is stored separately in
+`~/.config/jman/config.toml`; `JMAN_CONFIG_DIR` overrides that configuration
+root. The file records an exact version and vendor. Do not manually edit the
+configuration or the `current` link; use `jman java install ... --global` or
+`jman java use ... --global` so they change together.
+
+Cache cleanup is safe for installed JDKs. Removing the data directory is not:
+it deletes the managed installations and shims.
 
 ## Project-local `.jman/`
 

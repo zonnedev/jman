@@ -101,7 +101,9 @@ See [security auditing](../security-auditing.md) and
 | TTL cache, ETag/Last-Modified revalidation, stale fallback | Supported |
 | Verified HTTPS downloads and redirect-host allowlists | Supported |
 | Exact or major-version install/select/remove | Supported |
-| Project version/vendor pin | Supported |
+| User-wide exact selection and project version/vendor override | Supported |
+| Project-aware `java`/`javac`/JDK command shims | Bash, Zsh, and Fish |
+| Scoped command execution with selected `JAVA_HOME` | Supported |
 | Automatic background JDK installation | Intentionally not performed |
 
 The current catalog provider is Foojay Disco. Temurin is the default vendor,

@@ -469,8 +469,9 @@ fn support_directory() -> PathBuf {
 
 fn build_java_home(default_sdkman_candidate: &str) -> Option<PathBuf> {
     std::env::var_os("JAVA_LSP_BUILD_JAVA_HOME")
-        .or_else(|| std::env::var_os("JAVA_HOME"))
         .map(PathBuf::from)
+        .or_else(jman_global_java_home)
+        .or_else(|| std::env::var_os("JAVA_HOME").map(PathBuf::from))
         .or_else(|| {
             std::env::var_os("HOME").map(|home| {
                 PathBuf::from(home)
@@ -479,6 +480,19 @@ fn build_java_home(default_sdkman_candidate: &str) -> Option<PathBuf> {
             })
         })
         .filter(|home| home.join("bin/java").is_file())
+}
+
+fn jman_global_java_home() -> Option<PathBuf> {
+    let data = std::env::var_os("JMAN_DATA_DIR").map_or_else(
+        || {
+            dirs::data_dir()
+                .unwrap_or_else(|| PathBuf::from(".jman-data"))
+                .join("jman")
+        },
+        PathBuf::from,
+    );
+    let current = data.join("current");
+    current.join("bin/java").is_file().then_some(current)
 }
 
 fn build_java_executable(default_sdkman_candidate: &str) -> PathBuf {

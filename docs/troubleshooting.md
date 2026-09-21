@@ -16,17 +16,35 @@ Inspect the pin and installed catalog:
 
 ```bash
 jman java which
-jman java list --local
+jman java list --installed
 ```
 
 Install the requested major/vendor explicitly, or select an existing one:
 
 ```bash
-jman java install 21 --vendor temurin
-jman java use 21 --vendor temurin
+jman java install 21 --vendor temurin --global
+jman java use 21 --vendor temurin --global
 ```
 
+Omit `--global` from `java use` when setting a project override. `java use`
+only selects an existing installation; `java install ... --global` performs
+both operations.
+
 JMAN does not install editor build runtimes implicitly.
+
+## The shell still runs another Java
+
+Inspect both the effective selection and shell integration:
+
+```bash
+jman java which
+jman doctor
+```
+
+If the shims are missing, run `jman java setup` and add the printed `jman shell
+init` line to the matching shell startup file. SDKMAN, asdf, mise, or jenv can
+override JMAN when their initialization prepends another Java directory later;
+load JMAN after those managers or disable their Java activation.
 
 ## Gradle reports an unsupported class-file major version
 

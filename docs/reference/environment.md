@@ -8,7 +8,9 @@ integration.
 
 | Variable | Purpose |
 | --- | --- |
-| `JMAN_CACHE_DIR` | Override the shared artifact, JDK, catalog, and audit cache root. |
+| `JMAN_CACHE_DIR` | Override the shared artifact, catalog, and audit cache root. |
+| `JMAN_DATA_DIR` | Override the durable managed-JDK, `current`, and shim root. |
+| `JMAN_CONFIG_DIR` | Override the user-wide configuration root. |
 | `JMAN_TEST_PORT` | Override the default `0` value of the `jman.test.port` system property. |
 | `DOCKER_HOST` | Docker endpoint inherited by tests and Testcontainers. |
 | `CONTAINER_HOST` | Alternative container endpoint inherited by tests. |
@@ -42,6 +44,11 @@ store rather than plain workflow variables.
 Prefer the editor's `buildJavaHome`/`build_java_home` setting over exporting
 `JAVA_LSP_BUILD_JAVA_HOME` interactively. Worker-count overrides are diagnostic
 tuning controls, not normal project configuration.
+
+Without an explicit build-runtime override or Gradle daemon criterion, editor
+imports consider JMAN's global Java before automatically discovered SDKMAN,
+`JAVA_HOME`, and `PATH` installations. The selected runtime still has to be
+compatible with the Maven or Gradle version.
 
 The VS Code `jman.java.server.extraEnv` and Neovim `extra_env` settings pass
 additional variables into the server and its build/test tasks. Treat their
