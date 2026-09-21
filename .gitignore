@@ -3,5 +3,6 @@
 /editors/vscode/dist/
 /editors/vscode/server/
 /.jman/
+/site/
 __pycache__/
 .local/

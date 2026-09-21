@@ -106,7 +106,7 @@ length-prefixed result before asking the native library to free it.
   `META-INF/versions/N` class, module descriptor, attached source, and
   decompiler input not newer than the owning compile unit's Java release.
   Version-selected class bytes also make decompiler caches release-safe.
-- The executable [compatibility matrix](docs/compatibility-matrix.md) imports
+- The executable [compatibility matrix](compatibility-matrix.md) imports
   modular Maven and Gradle projects across JDK 17, 21, and 25.
 - Gradle dependency resolution is isolated per compile unit. Broken optional
   source sets produce structured `resolutionErrors` and partial models instead

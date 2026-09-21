@@ -1,0 +1,74 @@
+site_name: JMAN Documentation
+site_description: Native Java builds, dependency management, testing, toolchains, and language support
+site_url: https://zonnedev.github.io/jman/
+repo_url: https://github.com/zonnedev/jman
+repo_name: zonnedev/jman
+edit_uri: edit/main/docs/
+
+theme:
+  name: mkdocs
+  locale: en
+  color_mode: auto
+  user_color_mode_toggle: true
+  nav_style: dark
+  highlightjs: true
+  hljs_languages:
+    - bash
+    - java
+    - json
+    - lua
+    - toml
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: getting-started/installation.md
+      - Your first project: getting-started/first-project.md
+      - Project layout: getting-started/project-layout.md
+  - Tutorials:
+      - Import a Maven project: tutorials/import-maven.md
+      - Build a multi-module workspace: tutorials/multi-module.md
+      - Test and measure coverage: tutorials/testing-coverage.md
+      - Publish a library: tutorials/publish-library.md
+  - Guides:
+      - Build and run: guides/build-and-run.md
+      - Dependencies: guides/dependencies.md
+      - Java toolchains: guides/java-toolchains.md
+      - Testing: guides/testing.md
+      - Editor integration: guides/editors.md
+      - Publishing reference: publishing.md
+      - Security auditing: security-auditing.md
+      - Dependency maintenance: dependency-maintenance.md
+      - Coverage: coverage.md
+  - Reference:
+      - Feature catalog: reference/features.md
+      - Command line: reference/cli.md
+      - Manifest: reference/manifest.md
+      - Lockfile, cache, and outputs: reference/storage.md
+      - Environment variables: reference/environment.md
+      - Compatibility: compatibility-matrix.md
+      - Product contract: product-contract.md
+      - Editor protocol: editor-integration.md
+      - Language-server architecture: jman-java.md
+  - Troubleshooting: troubleshooting.md
+  - Maintainers:
+      - Release process: releasing.md
+      - VS Code release checklist: vscode-release-checklist.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - fenced_code
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+extra_css:
+  - stylesheets/extra.css
+
+validation:
+  links:
+    absolute_links: relative_to_docs
+    anchors: warn
+    unrecognized_links: warn

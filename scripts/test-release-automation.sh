@@ -129,6 +129,8 @@ for packaging_script in package-release.sh package-vscode.sh; do
   grep -q 'jacoco-0.8.15-agent.jar' "${project_dir}/scripts/${packaging_script}"
   grep -q 'jacoco-0.8.15-cli.jar' "${project_dir}/scripts/${packaging_script}"
 done
+grep -Fq '"${project_dir}/docs" "${stage}/docs"' \
+  "${project_dir}/scripts/package-release.sh"
 while IFS= read -r action_reference; do
   if [[ ! "${action_reference}" =~ @[0-9a-f]{40}$ ]]; then
     echo "GitHub Action is not pinned to a full commit: ${action_reference}" >&2

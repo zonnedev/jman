@@ -1,4 +1,6 @@
 SHELL := /usr/bin/env bash
+UV ?= uv
+DOCS_RUN := $(UV) run --isolated --no-project --with-requirements docs/requirements.txt
 
 NATIVE_FRONTEND := $(CURDIR)/target/native/libjman_javac_frontend.so
 DEBUG_NATIVE_FRONTEND := $(CURDIR)/target/debug/libjman_javac_frontend.so
@@ -7,11 +9,11 @@ NATIVE_FRONTEND_INPUTS := \
 	scripts/build-native.sh \
 	scripts/use-sdkman-java.sh
 
-.PHONY: gates ci test test-rust test-java test-jman-runner test-processor-worker vineflower jacoco test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-micronaut-correctness test-vscode-extension test-neovim-plugin test-release-automation prepare-release package-vscode release stage-release native test-native clean clear
+.PHONY: gates ci test test-rust test-java test-jman-runner test-processor-worker vineflower jacoco test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-micronaut-correctness test-vscode-extension test-neovim-plugin test-release-automation test-docs docs serve-docs prepare-release package-vscode release stage-release native test-native clean clear
 
-gates: test test-native test-coverage test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-vscode-extension test-neovim-plugin
+gates: test test-native test-coverage test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-vscode-extension test-neovim-plugin test-docs
 
-ci: test test-native test-coverage test-publishing test-vscode-extension test-neovim-plugin test-release-automation
+ci: test test-native test-coverage test-publishing test-vscode-extension test-neovim-plugin test-release-automation test-docs
 
 test: test-rust test-java test-jman-runner
 
@@ -123,6 +125,15 @@ test-neovim-plugin:
 test-release-automation:
 	./scripts/test-prepare-release.sh
 	./scripts/test-release-automation.sh
+
+test-docs:
+	./scripts/test-docs.sh
+
+docs:
+	$(DOCS_RUN) mkdocs build --strict
+
+serve-docs:
+	$(DOCS_RUN) mkdocs serve
 
 prepare-release:
 	@test -n "$(VERSION)" || { echo "usage: make prepare-release VERSION=<version>" >&2; exit 2; }

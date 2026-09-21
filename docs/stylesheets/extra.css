@@ -1,0 +1,45 @@
+:root {
+  --jman-primary: #5b21b6;
+  --jman-accent: #7c3aed;
+}
+
+.navbar-default {
+  background-color: var(--jman-primary);
+  background-image: none;
+  border-color: #4c1d95;
+}
+
+.navbar-default .navbar-brand,
+.navbar-default .navbar-nav > li > a {
+  color: #fff;
+}
+
+.navbar-default .navbar-brand:hover,
+.navbar-default .navbar-nav > li > a:hover {
+  color: #ede9fe;
+}
+
+h1 {
+  color: var(--jman-primary);
+  font-weight: 750;
+  letter-spacing: -0.025em;
+}
+
+code,
+pre {
+  border-radius: 0.25rem;
+}
+
+.table > thead > tr > th {
+  border-bottom-color: var(--jman-accent);
+  white-space: nowrap;
+}
+
+a {
+  color: var(--jman-accent);
+}
+
+a:hover,
+a:focus {
+  color: var(--jman-primary);
+}

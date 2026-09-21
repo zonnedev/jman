@@ -49,6 +49,8 @@ jar --create \
   io/github/zonnedev/jman/maven/importer
 cp "${project_dir}/README.md" "${project_dir}/CHANGELOG.md" \
   "${project_dir}/LICENSE" "${project_dir}/THIRD_PARTY_NOTICES.md" "${stage}/"
+cp "${project_dir}/mkdocs.yml" "${stage}/mkdocs.yml"
+cp -R "${project_dir}/docs" "${stage}/docs"
 
 tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
   -C "${stage_root}" -cf - "${name}" | gzip -n > "${archive}"
