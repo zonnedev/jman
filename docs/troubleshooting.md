@@ -34,17 +34,46 @@ JMAN does not install editor build runtimes implicitly.
 
 ## The shell still runs another Java
 
-Inspect both the effective selection and shell integration:
+Check the complete path from configuration to the executable:
 
 ```bash
 jman java which
-jman doctor
+echo "$JAVA_HOME"
+command -v java
+java --version
 ```
 
-If the shims are missing, run `jman java setup` and add the printed `jman shell
-init` line to the matching shell startup file. SDKMAN, asdf, mise, or jenv can
-override JMAN when their initialization prepends another Java directory later;
-load JMAN after those managers or disable their Java activation.
+Then follow the first matching case:
+
+1. If `jman java which` reports a project selection, that project's
+   `[toolchain]` section overrides the global selection. Run `jman java use 25
+   --vendor <vendor>` without `--global` to change that project, or remove its
+   `[toolchain]` section to inherit the global selection.
+2. If `command -v java` does not report
+   `~/.local/share/jman/shims/java`, create the shims with `jman java setup`,
+   then evaluate `jman shell init` for the current shell. `shell init` prints
+   activation code; it does not create the shims.
+3. In an already-running Zsh session, run `rehash` after creating the shims so
+   Zsh forgets the previously cached Java path.
+4. If the shim directory is present but loses precedence later, move the JMAN
+   initialization near the end of the shell startup file. Any later `PATH` or
+   `JAVA_HOME` assignment can override it.
+
+For Zsh, the complete repair sequence is:
+
+```zsh
+jman java setup --shell zsh
+eval "$(jman shell init zsh)"
+rehash
+jman java which
+echo "$JAVA_HOME"
+command -v java
+java --version
+```
+
+When `JMAN_DATA_DIR` is configured, the expected shim path is
+`$JMAN_DATA_DIR/shims/java` instead of the default path. `jman doctor` reports
+selection and `PATH` disagreements after these checks.
 
 ## Gradle reports an unsupported class-file major version
 
@@ -52,7 +81,7 @@ The JDK running Gradle is newer than that Gradle version can parse. This is
 different from the Java release targeted by the source code.
 
 In VS Code set `jman.java.buildJavaHome`; in Neovim set `build_java_home` to a
-compatible installed JDK (often Java 17 or 21), then synchronize. The JMAN
+compatible installed JDK (often Java 21), then synchronize. The JMAN
 status report shows the selected Gradle version, Java version, home, and source
 of that selection.
 

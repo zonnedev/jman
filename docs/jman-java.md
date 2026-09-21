@@ -22,8 +22,8 @@ successfully imported model as stale. Clients choose
 executing build logic. Failed synchronization preserves the last working
 model, sessions, indexes, and diagnostics.
 
-The exploration currently targets Java 25. The scripts select the GraalVM
-declared in `.sdkmanrc` directly, so a fresh shell can run the complete gate:
+The exploration currently targets Java 25. The scripts select the configured
+GraalVM directly, so a fresh shell can run the complete gate:
 
 ```bash
 make gates
@@ -285,15 +285,15 @@ make package-vscode
 code --install-extension target/vscode/jman-java-0.6.0-linux-x64.vsix
 ```
 
-Set `jman.java.javaHome` to the SDKMAN Oracle GraalVM 25 installation. Leave
+Set `jman.java.javaHome` to an Oracle GraalVM 25 installation. Leave
 `jman.java.buildSystem` on `auto`, or select `maven`/`gradle` when the workspace
 contains both. Disable other Java language servers for the workspace during
 the first comparison. The **JMAN Java** output channel contains server
 startup and protocol failures.
 
 Gradle imports select a compatible installed JDK from the wrapper version,
-project daemon criteria, JMAN-managed installations, SDKMAN installations, and
-the environment. Set `jman.java.buildJavaHome` only when an explicit build-tool
+project daemon criteria, JMAN-managed installations, and the environment. Set
+`jman.java.buildJavaHome` only when an explicit build-tool
 runtime is required. Test Explorer and external Gradle/Maven project commands
 reuse the selected build runtime. JMAN does not download a JDK during project
 import.

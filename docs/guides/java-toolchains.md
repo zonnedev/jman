@@ -56,9 +56,30 @@ JDK and prints the one line to add to Bash, Zsh, or Fish. For example:
 eval "$(jman shell init zsh)"
 ```
 
+These commands have separate responsibilities: `java setup` creates links in
+the JMAN data directory, while `shell init` writes shell code to standard
+output. Evaluating `shell init` cannot create missing shims. Run `java setup`
+once before enabling the shell integration and again if a newly selected JDK
+provides additional commands. In an existing Zsh session, run `rehash` after
+the first setup so Zsh discards cached command locations.
+
 After shell initialization, `java`, `javac`, `jar`, and the other JDK commands
 follow JMAN's effective selection. `JAVA_HOME` is refreshed when the working
 directory changes.
+
+Verify all layers of the selection:
+
+```bash
+jman java which
+echo "$JAVA_HOME"
+command -v java
+java --version
+```
+
+`jman java which` shows the JDK JMAN intends to use. `JAVA_HOME` should be that
+JDK's directory, and `command -v java` should resolve to
+`~/.local/share/jman/shims/java` by default. The final command confirms what is
+actually executed.
 
 To switch to another JDK that is already installed:
 
@@ -74,8 +95,8 @@ install ... --global` when one command should both install and select.
 From a JMAN project:
 
 ```bash
-jman java install 17 --vendor zulu
-jman java use 17 --vendor zulu
+jman java install 25 --vendor zulu
+jman java use 25 --vendor zulu
 jman java which
 ```
 
@@ -83,6 +104,17 @@ Without `--global`, `java use` writes the version and vendor to the nearest
 project's `jman.toml`. A project selection wins over the user-wide selection.
 Nested directories discover the nearest manifest automatically, so the same
 selection is used by JMAN builds, shell shims, and editor processes.
+
+Consequently, changing the global selection does not override a project pin.
+To change the current project, omit `--global`:
+
+```bash
+jman java use 25 --vendor zulu
+```
+
+To return a project to the global fallback, remove its `[toolchain]` section
+from `jman.toml`. There is no hidden shell-level override in between these two
+selection scopes.
 
 `jman java which` explains the effective JDK by default, including its exact
 version, installation path, and whether it came from `jman.toml` or the global
@@ -99,7 +131,7 @@ shell:
 
 ```bash
 jman java exec -- java -version
-jman java exec 17 --vendor zulu -- java -version
+jman java exec 27 --vendor zulu -- java -version
 ```
 
 ## Remove installations safely
@@ -139,8 +171,8 @@ for example, Gradle 8.7 cannot run on Java 25. JMAN selects a compatible
 installed LTS runtime or accepts an explicit editor `buildJavaHome`; Gradle or
 Maven still owns the project's language target.
 
-The global JMAN selection is considered before automatically discovered SDKMAN,
-`JAVA_HOME`, or `PATH` candidates, provided it is compatible with the build
+The global JMAN selection is considered before automatically discovered
+`JAVA_HOME` or `PATH` candidates, provided it is compatible with the build
 tool. Explicit editor `buildJavaHome` and Gradle daemon criteria still win.
 JMAN never installs a JDK implicitly for editor import. Install the suggested
 runtime explicitly, then synchronize the workspace again.

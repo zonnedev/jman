@@ -46,8 +46,8 @@ Prefer the editor's `buildJavaHome`/`build_java_home` setting over exporting
 tuning controls, not normal project configuration.
 
 Without an explicit build-runtime override or Gradle daemon criterion, editor
-imports consider JMAN's global Java before automatically discovered SDKMAN,
-`JAVA_HOME`, and `PATH` installations. The selected runtime still has to be
+imports consider JMAN's global Java before automatically discovered
+`JAVA_HOME` and `PATH` installations. The selected runtime still has to be
 compatible with the Maven or Gradle version.
 
 The VS Code `jman.java.server.extraEnv` and Neovim `extra_env` settings pass

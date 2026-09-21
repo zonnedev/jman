@@ -58,6 +58,26 @@ jman java which
 jman doctor
 ```
 
+`jman java setup` creates the command shims. `jman shell init` only prints the
+shell code that adds those shims to `PATH` and updates `JAVA_HOME`; evaluating
+it does not create any files. Add the `eval` command near the end of the
+matching shell startup file. When creating the shims for the first time in an
+already-running Zsh session, run `rehash`.
+
+Verify the complete setup rather than relying only on the prompt's Java icon:
+
+```bash
+jman java which
+echo "$JAVA_HOME"
+command -v java
+java --version
+```
+
+`command -v java` should report `~/.local/share/jman/shims/java` unless
+`JMAN_DATA_DIR` changes the data location. Inside a project, `jman java which`
+may report a project selection instead of the global default; project
+configuration intentionally has higher precedence.
+
 Temurin is the default distribution. Pass `--vendor <name>` consistently to
 install and select another distribution, for example `zulu` or `corretto`.
 See [Java toolchains](../guides/java-toolchains.md) for catalog filters,

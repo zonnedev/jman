@@ -214,7 +214,7 @@ jman java install VERSION [--vendor VENDOR] [--offline]
 ```
 
 `VERSION` can be a feature release such as `21` or an exact version such as
-`17.0.20+8`. Vendor defaults to `temurin`. Offline mode selects only an already
+`25.0.1+8`. Vendor defaults to `temurin`. Offline mode selects only an already
 installed match. `--global` selects the exact installed release as the
 current user's default after installation.
 
@@ -279,7 +279,8 @@ jman java setup [--shell bash|zsh|fish]
 
 Create project-aware shims for every command supplied by the globally selected
 JDK, refresh the `current` link, and print the shell activation instruction.
-A global selection must already exist.
+A global selection must already exist. Run this before enabling shell
+integration; `shell init` does not create shims.
 
 ## jman shell init
 
@@ -289,7 +290,9 @@ jman shell init bash|zsh|fish
 
 Print shell code that prepends JMAN's shims and keeps `JAVA_HOME` synchronized
 with the effective project-or-global selection. Evaluate it from the matching
-shell startup file; the command does not edit that file itself.
+shell startup file; the command does not edit that file itself and does not
+create the shims. In Zsh, run `rehash` after the first `java setup` in an
+already-running session.
 
 ## jman lsp
 

@@ -24,6 +24,44 @@ normal build path does not invoke Maven or Gradle, but existing Maven projects
 can be imported and the language server understands JMAN, Maven, and Gradle
 workspaces.
 
+## Manage Java globally and per project
+
+JMAN can be the source of truth for Java across your shell, projects, builds,
+and editors. It discovers multiple vendors, verifies downloads, keeps installed
+JDKs outside disposable caches, and uses project-aware command shims so `java`,
+`javac`, `jar`, and the remaining JDK commands follow the effective selection.
+
+```console
+$ jman java list --lts
+$ jman java install 21 --global
+$ jman java setup --shell zsh
+$ eval "$(jman shell init zsh)"
+$ jman java which
+temurin 21.0.8+9
+/home/me/.local/share/jman/jdks/temurin-21.0.8_9-linux-x64
+Selected by global configuration: /home/me/.config/jman/config.toml
+$ java --version
+```
+
+Add the printed `eval` line near the end of your shell startup file.
+`jman java setup` creates the shims; `jman shell init` only prints the shell
+code that activates them.
+
+A project can override the global default without changing the rest of the
+machine:
+
+```console
+$ jman java install 27 --vendor zulu
+$ jman java use 27 --vendor zulu
+$ jman java which
+```
+
+Selection precedence is the nearest project's `[toolchain]` configuration,
+then the exact global selection. Use `jman java list --installed` for a
+network-free view of installed JDKs. The [Java toolchain guide](docs/guides/java-toolchains.md)
+covers vendors, shell setup, project overrides, scoped execution, storage, and
+troubleshooting.
+
 ## Start here
 
 - [Install JMAN](docs/getting-started/installation.md)
