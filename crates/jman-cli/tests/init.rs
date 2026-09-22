@@ -2681,7 +2681,10 @@ vendor = "temurin"
         String::from_utf8_lossy(&setup.stderr)
     );
     assert!(data.join("shims/java").is_symlink());
-    assert!(String::from_utf8_lossy(&setup.stdout).contains("jman shell init zsh"));
+    let setup_output = String::from_utf8_lossy(&setup.stdout);
+    assert!(setup_output.contains("jman shell init zsh"));
+    assert!(setup_output.contains("~/.zshrc"));
+    assert!(setup_output.contains("JMAN completion"));
 
     let shim = Command::new(data.join("shims/java"))
         .current_dir(&project)
@@ -2727,7 +2730,7 @@ vendor = "temurin"
 
 #[cfg(target_os = "linux")]
 #[test]
-fn java_use_requires_an_install_and_shell_initializers_are_valid() {
+fn java_use_requires_an_install_and_shell_initializers_include_completions() {
     let root = tempfile::tempdir().expect("isolated Java home");
     let cache = root.path().join("cache");
     let data = root.path().join("data");
@@ -2751,6 +2754,9 @@ fn java_use_requires_an_install_and_shell_initializers_are_valid() {
         assert!(text.contains("jman java which"));
         assert!(text.contains("shims"));
         if shell == "bash" {
+            assert!(text.contains("--installed"));
+            assert!(text.contains("complete"));
+            assert!(text.contains("_jman"));
             let check = Command::new("bash")
                 .arg("-n")
                 .stdin(Stdio::piped())
@@ -2767,6 +2773,9 @@ fn java_use_requires_an_install_and_shell_initializers_are_valid() {
             assert!(check.success());
         }
         if shell == "zsh" {
+            assert!(text.contains("--installed"));
+            assert!(text.contains("#compdef jman"));
+            assert!(text.contains("compinit"));
             let check = Command::new("zsh")
                 .arg("-n")
                 .stdin(Stdio::piped())
@@ -2781,6 +2790,10 @@ fn java_use_requires_an_install_and_shell_initializers_are_valid() {
                 })
                 .expect("validate zsh initialization");
             assert!(check.success());
+        }
+        if shell == "fish" {
+            assert!(text.contains("complete -c jman"));
+            assert!(text.contains("-l installed"));
         }
     }
 }

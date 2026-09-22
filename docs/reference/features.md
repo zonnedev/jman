@@ -103,6 +103,7 @@ See [security auditing](../security-auditing.md) and
 | Exact or major-version install/select/remove | Supported |
 | User-wide exact selection and project version/vendor override | Supported |
 | Project-aware `java`/`javac`/JDK command shims | Bash, Zsh, and Fish |
+| JMAN command and option completion | Bash, Zsh, and Fish |
 | Scoped command execution with selected `JAVA_HOME` | Supported |
 | Automatic background JDK installation | Intentionally not performed |
 

@@ -45,7 +45,8 @@ $ java --version
 
 Add the printed `eval` line near the end of your shell startup file.
 `jman java setup` creates the shims; `jman shell init` only prints the shell
-code that activates them.
+code that activates them, keeps `JAVA_HOME` synchronized, and enables JMAN
+command and option completion.
 
 A project can override the global default without changing the rest of the
 machine:

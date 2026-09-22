@@ -59,10 +59,13 @@ jman doctor
 ```
 
 `jman java setup` creates the command shims. `jman shell init` only prints the
-shell code that adds those shims to `PATH` and updates `JAVA_HOME`; evaluating
-it does not create any files. Add the `eval` command near the end of the
-matching shell startup file. When creating the shims for the first time in an
-already-running Zsh session, run `rehash`.
+shell code that adds those shims to `PATH`, updates `JAVA_HOME`, and enables
+JMAN command and option completion; evaluating it does not create any files.
+Completions come from the same command model as `jman --help`, so installed
+releases automatically expose their current commands, flags, and fixed-value
+choices. Add the `eval` command near the end of the matching shell startup
+file. When creating the shims for the first time in an already-running Zsh
+session, run `rehash`.
 
 Verify the complete setup rather than relying only on the prompt's Java icon:
 

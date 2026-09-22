@@ -289,10 +289,12 @@ jman shell init bash|zsh|fish
 ```
 
 Print shell code that prepends JMAN's shims and keeps `JAVA_HOME` synchronized
-with the effective project-or-global selection. Evaluate it from the matching
-shell startup file; the command does not edit that file itself and does not
-create the shims. In Zsh, run `rehash` after the first `java setup` in an
-already-running session.
+with the effective project-or-global selection. The generated Bash, Zsh, or
+Fish code also registers completion for JMAN commands, options, and fixed-value
+arguments directly from the current CLI definition. Evaluate it from the
+matching shell startup file; the command does not edit that file itself and
+does not create the shims. In Zsh, run `rehash` after the first `java setup` in
+an already-running session.
 
 ## jman lsp
 

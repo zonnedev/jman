@@ -58,10 +58,13 @@ eval "$(jman shell init zsh)"
 
 These commands have separate responsibilities: `java setup` creates links in
 the JMAN data directory, while `shell init` writes shell code to standard
-output. Evaluating `shell init` cannot create missing shims. Run `java setup`
-once before enabling the shell integration and again if a newly selected JDK
-provides additional commands. In an existing Zsh session, run `rehash` after
-the first setup so Zsh discards cached command locations.
+output. That code activates the shims, synchronizes `JAVA_HOME`, and registers
+JMAN command completion generated from the current CLI definition. It completes
+subcommands, flags, and fixed choices for Bash, Zsh, and Fish. Evaluating
+`shell init` cannot create missing shims. Run `java setup` once before enabling
+the shell integration and again if a newly selected JDK provides additional
+commands. In an existing Zsh session, run `rehash` after the first setup so Zsh
+discards cached command locations.
 
 After shell initialization, `java`, `javac`, `jar`, and the other JDK commands
 follow JMAN's effective selection. `JAVA_HOME` is refreshed when the working

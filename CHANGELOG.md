@@ -14,6 +14,9 @@ Versioning while it approaches a stable 0.3.0 release.
   updates, project-aware JDK command shims, Bash/Zsh/Fish initialization,
   scoped `java exec`, doctor diagnostics, and editor build-runtime integration
   keep CLI, shell, build, and language-server behavior aligned.
+- `jman shell init` now generates command and option completion for Bash, Zsh,
+  and Fish from JMAN's Clap command model alongside the Java shim and
+  `JAVA_HOME` integration.
 
 ### Changed
 

@@ -9,7 +9,8 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::{generate, shells};
 use futures::{stream, StreamExt, TryStreamExt};
 use jman_config::{
     Build, CoverageFormat, Dependencies, LockedClasspaths, LockedPackage, LockedToolchain,
@@ -79,7 +80,7 @@ enum Command {
     Doctor(ProjectPath),
     /// Install, select, and inspect Java toolchains.
     Java(Java),
-    /// Print shell integration for project-aware Java selection.
+    /// Print Java selection and command-completion shell integration.
     Shell(Shell),
     /// Start the bundled Java language server.
     Lsp(Lsp),
@@ -560,7 +561,7 @@ struct Shell {
 
 #[derive(Debug, Subcommand)]
 enum ShellCommand {
-    /// Print the activation code for a supported shell.
+    /// Print activation and JMAN completion code for a supported shell.
     Init(ShellInit),
 }
 
@@ -584,6 +585,14 @@ impl ShellKind {
             Self::Bash => "bash",
             Self::Zsh => "zsh",
             Self::Fish => "fish",
+        }
+    }
+
+    const fn config_file(self) -> &'static str {
+        match self {
+            Self::Bash => "~/.bashrc",
+            Self::Zsh => "~/.zshrc",
+            Self::Fish => "~/.config/fish/config.fish",
         }
     }
 }
@@ -744,10 +753,7 @@ async fn run(cli: Cli, ui: &Ui) -> Result<()> {
         Command::Test(arguments) => test_project(&arguments, ui).await,
         Command::Doctor(arguments) => doctor_project(&arguments.path, ui).await,
         Command::Java(arguments) => java_command(arguments, ui).await,
-        Command::Shell(arguments) => {
-            shell_command(arguments);
-            Ok(())
-        }
+        Command::Shell(arguments) => shell_command(arguments),
         Command::Lsp(arguments) => lsp_command(&arguments),
     }
 }
@@ -2375,7 +2381,10 @@ async fn java_setup(
         shims.display()
     ));
     println!();
-    println!("Add this to ~/.{}rc:", shell.name());
+    println!(
+        "Add this to {} to enable Java selection and JMAN completion:",
+        shell.config_file()
+    );
     println!();
     println!("  eval \"$(jman shell init {})\"", shell.name());
     Ok(())
@@ -2472,17 +2481,22 @@ async fn run_java_shim(tool: &str) -> Result<()> {
     execute_with_java(&selection.home, executable.as_os_str(), &arguments)
 }
 
-fn shell_command(arguments: Shell) {
+fn shell_command(arguments: Shell) -> Result<()> {
     match arguments.command {
         ShellCommand::Init(arguments) => print_shell_init(arguments.shell),
     }
 }
 
-fn print_shell_init(shell: ShellKind) {
+fn print_shell_init(shell: ShellKind) -> Result<()> {
+    print!("{}", shell_init_script(shell)?);
+    Ok(())
+}
+
+fn shell_init_script(shell: ShellKind) -> Result<String> {
     let shims = jman_build::toolchain::default_data_dir().join("shims");
     let shims = posix_shell_quote(&shims.to_string_lossy());
-    match shell {
-        ShellKind::Bash => print!(
+    let mut script = match shell {
+        ShellKind::Bash => format!(
             "export PATH={shims}:\"$PATH\"\n\
              __jman_update_java_home() {{\n\
              \x20 eval \"$(command jman java which --format shell 2>/dev/null)\"\n\
@@ -2493,18 +2507,22 @@ fn print_shell_init(shell: ShellKind) {
              esac\n\
              __jman_update_java_home\n"
         ),
-        ShellKind::Zsh => print!(
+        ShellKind::Zsh => format!(
             "export PATH={shims}:\"$PATH\"\n\
              autoload -Uz add-zsh-hook\n\
              __jman_update_java_home() {{\n\
              \x20 eval \"$(command jman java which --format shell 2>/dev/null)\"\n\
              }}\n\
              add-zsh-hook chpwd __jman_update_java_home\n\
-             __jman_update_java_home\n"
+             __jman_update_java_home\n\
+             autoload -Uz compinit\n\
+             if ! (( $+functions[compdef] )); then\n\
+             \x20 compinit\n\
+             fi\n"
         ),
         ShellKind::Fish => {
             let fish_shims = fish_shell_quote(&jman_build::toolchain::default_data_dir().join("shims").to_string_lossy());
-            print!(
+            format!(
                 "fish_add_path --prepend {fish_shims}\n\
                  function __jman_update_java_home --on-variable PWD\n\
                  \x20 set -l jman_java_home (command jman java which --format home 2>/dev/null)\n\
@@ -2513,9 +2531,22 @@ fn print_shell_init(shell: ShellKind) {
                  \x20 end\n\
                  end\n\
                  __jman_update_java_home\n"
-            );
+            )
         }
+    };
+    script.push('\n');
+
+    let mut completion = Vec::new();
+    let mut command = Cli::command();
+    match shell {
+        ShellKind::Bash => generate(shells::Bash, &mut command, "jman", &mut completion),
+        ShellKind::Zsh => generate(shells::Zsh, &mut command, "jman", &mut completion),
+        ShellKind::Fish => generate(shells::Fish, &mut command, "jman", &mut completion),
     }
+    script.push_str(
+        &String::from_utf8(completion).context("generated shell completion was not UTF-8")?,
+    );
+    Ok(script)
 }
 
 fn posix_shell_quote(value: &str) -> String {
@@ -5961,6 +5992,9 @@ mod tests {
             panic!("expected shell init command");
         };
         assert_eq!(shell.shell, ShellKind::Fish);
+        assert_eq!(ShellKind::Bash.config_file(), "~/.bashrc");
+        assert_eq!(ShellKind::Zsh.config_file(), "~/.zshrc");
+        assert_eq!(ShellKind::Fish.config_file(), "~/.config/fish/config.fish");
     }
 
     #[test]

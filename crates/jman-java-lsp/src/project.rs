@@ -933,8 +933,8 @@ processors = []
 
     #[test]
     fn captures_gradle_output_and_extracts_only_model_frames() {
-        let root = std::env::temp_dir().join(format!("jman-java-importer-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
+        let directory = tempfile::tempdir().expect("temporary Gradle project");
+        let root = directory.path().to_path_buf();
         let script = root.join("gradle");
         let cache = root.join("model.ndjson");
         std::fs::write(
@@ -957,13 +957,12 @@ processors = []
                 .len(),
             1
         );
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn gradle_import_receives_the_selected_build_java_home() {
-        let root =
-            std::env::temp_dir().join(format!("jman-java-importer-runtime-{}", std::process::id()));
+        let directory = tempfile::tempdir().expect("temporary Gradle project");
+        let root = directory.path().to_path_buf();
         let java_home = root.join("jdk-21");
         std::fs::create_dir_all(java_home.join("bin")).unwrap();
         std::fs::write(java_home.join("bin/java"), "runtime").unwrap();
@@ -1004,14 +1003,12 @@ processors = []
             std::fs::read_to_string(root.join("selected-java-home")).unwrap(),
             java_home.to_string_lossy()
         );
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn failed_import_preserves_and_uses_the_last_good_atomic_model() {
-        let root =
-            std::env::temp_dir().join(format!("jman-java-import-fallback-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
+        let directory = tempfile::tempdir().expect("temporary Gradle project");
+        let root = directory.path().to_path_buf();
         let script = root.join("gradle");
         let cache = root.join("model.ndjson");
         let model = r#"{"schemaVersion":2,"buildSystem":"gradle","projectPath":":","projectDirectory":"/work","taskPath":":compileJava","sourceFiles":[],"sourceRoots":[],"classpath":[],"annotationProcessorPath":[],"compilerArgs":[],"release":25,"encoding":"UTF-8","generatedSourcesDirectory":null,"destinationDirectory":null,"javaCompilerExecutable":null,"javaLanguageVersion":25}"#;
@@ -1032,6 +1029,5 @@ processors = []
         assert!(import_project(&tool, &root, &cache).is_ok());
         assert_eq!(std::fs::read_to_string(&cache).unwrap(), model);
         assert_eq!(parse_models(model).unwrap().len(), 1);
-        std::fs::remove_dir_all(root).unwrap();
     }
 }
