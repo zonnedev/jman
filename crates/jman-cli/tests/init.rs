@@ -2879,45 +2879,38 @@ fn java_use_requires_an_install_and_shell_initializers_include_completions() {
             assert!(text.contains("--installed"));
             assert!(text.contains("complete"));
             assert!(text.contains("_jman"));
-            let check = Command::new("bash")
-                .arg("-n")
-                .stdin(Stdio::piped())
-                .spawn()
-                .and_then(|mut child| {
-                    child
-                        .stdin
-                        .take()
-                        .expect("bash stdin")
-                        .write_all(text.as_bytes())?;
-                    child.wait()
-                })
-                .expect("validate bash initialization");
-            assert!(check.success());
+            validate_shell_syntax_if_available("bash", &text);
         }
         if shell == "zsh" {
             assert!(text.contains("--installed"));
             assert!(text.contains("#compdef jman"));
             assert!(text.contains("compinit"));
-            let check = Command::new("zsh")
-                .arg("-n")
-                .stdin(Stdio::piped())
-                .spawn()
-                .and_then(|mut child| {
-                    child
-                        .stdin
-                        .take()
-                        .expect("zsh stdin")
-                        .write_all(text.as_bytes())?;
-                    child.wait()
-                })
-                .expect("validate zsh initialization");
-            assert!(check.success());
+            validate_shell_syntax_if_available("zsh", &text);
         }
         if shell == "fish" {
             assert!(text.contains("complete -c jman"));
             assert!(text.contains("-l installed"));
         }
     }
+}
+
+fn validate_shell_syntax_if_available(shell: &str, script: &str) {
+    let mut child = match Command::new(shell).arg("-n").stdin(Stdio::piped()).spawn() {
+        Ok(child) => child,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("could not start {shell} syntax validation: {error}"),
+    };
+    child
+        .stdin
+        .take()
+        .expect("shell stdin")
+        .write_all(script.as_bytes())
+        .expect("write shell initialization");
+    let status = child.wait().expect("validate shell initialization");
+    assert!(
+        status.success(),
+        "{shell} rejected generated initialization"
+    );
 }
 
 #[cfg(target_os = "linux")]
