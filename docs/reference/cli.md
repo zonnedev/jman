@@ -214,9 +214,9 @@ jman java install VERSION [--vendor VENDOR] [--offline]
 ```
 
 `VERSION` can be a feature release such as `21` or an exact version such as
-`25.0.1+8`. Vendor defaults to `temurin`. Offline mode selects only an already
-installed match. `--global` selects the exact installed release as the
-current user's default after installation.
+`25.0.1+8`. Temurin is the default download vendor. Offline mode selects only
+an already installed match from that vendor. `--global` selects the exact
+installed release as the current user's default after installation.
 
 ## jman java list
 
@@ -239,7 +239,10 @@ jman java remove VERSION [--vendor VENDOR] [--all] [--dry-run]
 
 `--all` removes every installed match for the requested major. Pin-safety is
 checked against the nearest project at `--path`; `--force` overrides a project
-pin. A globally selected JDK must be replaced before it can be removed.
+pin. A globally selected JDK must be replaced before it can be removed. Without
+`--vendor`, JMAN uses a matching project selection, then a matching global
+selection, then a unique installed vendor; ambiguous matches require an
+explicit vendor.
 
 ## jman java use
 
@@ -249,8 +252,10 @@ jman java use VERSION [--vendor VENDOR] [--path PATH | --global]
 
 Select a JDK that is already installed. The default writes the version/vendor
 into the nearest project's `[toolchain]` section. `--global` instead records
-the exact installed release as the current user's default. This command never
-downloads a JDK.
+the exact installed release as the current user's default. When `--vendor` is
+omitted, JMAN uses a matching project selection, then a matching global
+selection, then a unique installed vendor. Ambiguous matches require an
+explicit vendor. This command never downloads a JDK.
 
 ## jman java which
 
@@ -270,6 +275,9 @@ jman java exec [VERSION] [--vendor VENDOR] [--path PATH] -- COMMAND [ARGUMENTS..
 
 Execute a command with the effective JDK's `JAVA_HOME` and `bin` directory.
 Supplying `VERSION` selects a matching installed JDK for this invocation only.
+Without `--vendor`, JMAN uses a matching project selection, then a matching
+global selection, then a unique installed vendor; ambiguous matches require an
+explicit vendor.
 
 ## jman java setup
 

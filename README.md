@@ -59,9 +59,11 @@ $ jman java which
 
 Selection precedence is the nearest project's `[toolchain]` configuration,
 then the exact global selection. Use `jman java list --installed` for a
-network-free view of installed JDKs. The [Java toolchain guide](docs/guides/java-toolchains.md)
-covers vendors, shell setup, project overrides, scoped execution, storage, and
-troubleshooting.
+network-free view of installed JDKs. Commands that operate on an installed JDK
+infer its vendor from the project selection, global selection, or a unique
+installed match; `--vendor` is only required when the choice is ambiguous. The
+[Java toolchain guide](docs/guides/java-toolchains.md) covers vendors, shell
+setup, project overrides, scoped execution, storage, and troubleshooting.
 
 ## Start here
 

@@ -511,8 +511,8 @@ struct JavaUse {
     /// JDK major or exact version, such as 17 or 17.0.20+8.
     version: String,
     /// JDK vendor to select.
-    #[arg(long, default_value = "temurin")]
-    vendor: String,
+    #[arg(long)]
+    vendor: Option<String>,
     /// Project directory.
     #[arg(long, default_value = ".", conflicts_with = "global")]
     path: PathBuf,
@@ -536,8 +536,8 @@ struct JavaExec {
     /// Installed JDK major or exact version; omit to use the effective selection.
     version: Option<String>,
     /// JDK vendor used with an explicit version.
-    #[arg(long, default_value = "temurin", requires = "version")]
-    vendor: String,
+    #[arg(long, requires = "version")]
+    vendor: Option<String>,
     /// Directory used to discover the effective project selection.
     #[arg(long, default_value = ".")]
     path: PathBuf,
@@ -610,8 +610,8 @@ struct JavaRemove {
     /// JDK major or exact installed version.
     version: String,
     /// JDK vendor to remove.
-    #[arg(long, default_value = "temurin")]
-    vendor: String,
+    #[arg(long)]
+    vendor: Option<String>,
     /// Remove every installed version of the requested major.
     #[arg(long)]
     all: bool,
@@ -2044,12 +2044,13 @@ async fn java_command(arguments: Java, ui: &Ui) -> Result<()> {
         JavaCommand::List(arguments) => list_java(&manager, arguments, ui).await?,
         JavaCommand::Remove(arguments) => remove_java(&manager, arguments, ui).await?,
         JavaCommand::Use(arguments) => {
-            let vendor = jman_build::toolchain::normalize_vendor(&arguments.vendor);
-            let request = ToolchainRequest {
-                version: arguments.version.clone(),
-                vendor: vendor.clone(),
-            };
-            let jdk = installed_java(&manager, &request).await?;
+            let jdk = resolve_installed_java(
+                &manager,
+                &arguments.version,
+                arguments.vendor.as_deref(),
+                &arguments.path,
+            )
+            .await?;
             if arguments.global {
                 select_global_java(&jdk).await?;
                 ui.success(format!(
@@ -2073,7 +2074,7 @@ async fn java_command(arguments: Java, ui: &Ui) -> Result<()> {
                 })?;
                 manifest.toolchain = Some(ManifestToolchain {
                     jdk: arguments.version.clone(),
-                    vendor: vendor.clone(),
+                    vendor: jdk.vendor.clone(),
                 });
                 let text = manifest
                     .to_toml()
@@ -2081,7 +2082,7 @@ async fn java_command(arguments: Java, ui: &Ui) -> Result<()> {
                 write_atomically(&path, &text).await?;
                 ui.success(format!(
                     "Pinned {} to {} JDK {}",
-                    manifest.project.name, vendor, arguments.version
+                    manifest.project.name, jdk.vendor, arguments.version
                 ));
             }
         }
@@ -2132,6 +2133,110 @@ async fn installed_java(
             request.vendor, request.version, request.version, request.vendor
         )
     })
+}
+
+async fn resolve_installed_java(
+    manager: &jman_build::toolchain::ToolchainManager,
+    version: &str,
+    vendor: Option<&str>,
+    path: &Path,
+) -> Result<jman_build::toolchain::ManagedJdk> {
+    use jman_build::toolchain::{normalize_vendor, ToolchainRequest};
+
+    if let Some(vendor) = vendor {
+        return installed_java(
+            manager,
+            &ToolchainRequest {
+                version: version.to_owned(),
+                vendor: normalize_vendor(vendor),
+            },
+        )
+        .await;
+    }
+
+    let target = absolute_path(path)?;
+    let directory = if target.is_file() {
+        target
+            .parent()
+            .context("Java selection path has no parent directory")?
+    } else {
+        &target
+    };
+    if let Some((_manifest_path, manifest)) = nearest_manifest(directory)? {
+        if let Some(selection) = manifest_toolchain_request(&manifest) {
+            if java_versions_overlap(version, &selection.version)? {
+                return installed_java(
+                    manager,
+                    &ToolchainRequest {
+                        version: version.to_owned(),
+                        vendor: selection.vendor,
+                    },
+                )
+                .await;
+            }
+        }
+    }
+
+    if let Some(selection) = jman_build::toolchain::global_java_selection()? {
+        if java_versions_overlap(version, &selection.jdk)? {
+            return installed_java(
+                manager,
+                &ToolchainRequest {
+                    version: version.to_owned(),
+                    vendor: normalize_vendor(&selection.vendor),
+                },
+            )
+            .await;
+        }
+    }
+
+    let requested = ToolchainRequest {
+        version: version.to_owned(),
+        vendor: "temurin".to_owned(),
+    };
+    let major = requested.major()?;
+    let exact = !is_java_feature_version(version);
+    let vendors = manager
+        .list()
+        .await?
+        .into_iter()
+        .filter(|jdk| jdk.major == major && (!exact || jdk.version == version))
+        .map(|jdk| jdk.vendor)
+        .collect::<BTreeSet<_>>();
+    match vendors.len() {
+        0 => bail!("JDK {version} is not installed; run `jman java install {version}`"),
+        1 => {
+            let vendor = vendors.into_iter().next().context("missing JDK vendor")?;
+            installed_java(
+                manager,
+                &ToolchainRequest {
+                    version: version.to_owned(),
+                    vendor,
+                },
+            )
+            .await
+        }
+        _ => bail!(
+            "JDK {version} is installed from multiple vendors ({}); pass `--vendor <vendor>`",
+            vendors.into_iter().collect::<Vec<_>>().join(", ")
+        ),
+    }
+}
+
+fn java_versions_overlap(left: &str, right: &str) -> Result<bool> {
+    use jman_build::toolchain::ToolchainRequest;
+
+    let request = |version: &str| ToolchainRequest {
+        version: version.to_owned(),
+        vendor: "temurin".to_owned(),
+    };
+    let same_major = request(left).major()? == request(right).major()?;
+    Ok(same_major
+        && (is_java_feature_version(left) || is_java_feature_version(right) || left == right))
+}
+
+fn is_java_feature_version(version: &str) -> bool {
+    !version.is_empty() && version.chars().all(|character| character.is_ascii_digit())
 }
 
 async fn effective_java(
@@ -2297,11 +2402,14 @@ async fn java_exec(
     arguments: JavaExec,
 ) -> Result<()> {
     let home = if let Some(version) = arguments.version {
-        let request = jman_build::toolchain::ToolchainRequest {
-            version,
-            vendor: jman_build::toolchain::normalize_vendor(&arguments.vendor),
-        };
-        installed_java(manager, &request).await?.home
+        resolve_installed_java(
+            manager,
+            &version,
+            arguments.vendor.as_deref(),
+            &arguments.path,
+        )
+        .await?
+        .home
     } else {
         effective_java(manager, &arguments.path).await?.home
     };
@@ -2831,9 +2939,16 @@ async fn remove_java(
     arguments: JavaRemove,
     ui: &Ui,
 ) -> Result<()> {
+    let jdk = resolve_installed_java(
+        manager,
+        &arguments.version,
+        arguments.vendor.as_deref(),
+        &arguments.path,
+    )
+    .await?;
     let request = jman_build::toolchain::ToolchainRequest {
         version: arguments.version,
-        vendor: jman_build::toolchain::normalize_vendor(&arguments.vendor),
+        vendor: jdk.vendor,
     };
     let candidates = manager.removal_candidates(&request, arguments.all).await?;
     if candidates.is_empty() {
@@ -5936,6 +6051,7 @@ mod tests {
             panic!("expected java use command");
         };
         assert!(selection.global);
+        assert!(selection.vendor.is_none());
         assert_eq!(selection.path, PathBuf::from("."));
 
         assert!(
@@ -5969,7 +6085,7 @@ mod tests {
             panic!("expected java exec command");
         };
         assert_eq!(exec.version.as_deref(), Some("21"));
-        assert_eq!(exec.vendor, "corretto");
+        assert_eq!(exec.vendor.as_deref(), Some("corretto"));
         assert_eq!(exec.command, ["java", "-version"]);
 
         let effective = Cli::try_parse_from(["jman", "java", "exec", "--", "javac", "--version"])
@@ -5981,6 +6097,7 @@ mod tests {
             panic!("expected java exec command");
         };
         assert!(effective.version.is_none());
+        assert!(effective.vendor.is_none());
         assert_eq!(effective.command, ["javac", "--version"]);
 
         let shell =

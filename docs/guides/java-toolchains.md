@@ -93,6 +93,13 @@ jman java use 21 --vendor corretto --global
 `java use` never downloads. This keeps selection predictable; use `java
 install ... --global` when one command should both install and select.
 
+When `--vendor` is omitted from `java use`, `java exec VERSION`, or `java
+remove`, JMAN resolves the vendor in this order: a matching project selection,
+a matching global selection, then a unique matching installed vendor. If more
+than one installed vendor remains, JMAN reports the choices and asks for an
+explicit `--vendor`. `java install` is intentionally different: it downloads
+Temurin by default unless a vendor is specified.
+
 ## Override Java for one project
 
 From a JMAN project:

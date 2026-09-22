@@ -23,6 +23,9 @@ Versioning while it approaches a stable 0.3.0 release.
 - `jman java list --installed` replaces the ambiguous `--local` filter. It
   lists only JMAN-installed JDKs, performs no catalog network request, and
   composes with the existing release, LTS, vendor, and output-format filters.
+- Installed-JDK commands now infer an omitted vendor from a matching project
+  selection, matching global selection, or unique installed vendor. Ambiguous
+  matches require `--vendor`; downloads continue to default to Temurin.
 
 ## [0.6.0] - 2026-09-20
 

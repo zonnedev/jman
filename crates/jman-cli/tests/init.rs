@@ -2730,6 +2730,129 @@ vendor = "temurin"
 
 #[cfg(target_os = "linux")]
 #[test]
+#[allow(clippy::too_many_lines)]
+fn installed_java_commands_resolve_vendor_from_context_or_unique_installation() {
+    let root = tempfile::tempdir().expect("isolated Java home");
+    let cache = root.path().join("cache");
+    let data = root.path().join("data");
+    let config = root.path().join("config");
+    let outside = root.path().join("outside");
+    let project = root.path().join("project");
+    fs::create_dir_all(&outside).expect("outside directory");
+    fs::create_dir_all(&project).expect("project directory");
+    let zulu = fake_managed_jdk_for_vendor(&data, "zulu", "27+35", 27, "zulu-27");
+
+    let unique = isolated_jman(&cache, &data, &config)
+        .current_dir(&outside)
+        .args(["java", "exec", "27", "--", "java"])
+        .output()
+        .expect("execute unique installed vendor");
+    assert!(
+        unique.status.success(),
+        "{}",
+        String::from_utf8_lossy(&unique.stderr)
+    );
+    assert!(String::from_utf8_lossy(&unique.stdout).contains("zulu-27"));
+
+    let selected = isolated_jman(&cache, &data, &config)
+        .current_dir(&outside)
+        .args(["java", "use", "27", "--global", "--no-progress"])
+        .output()
+        .expect("select unique installed vendor globally");
+    assert!(
+        selected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    assert_eq!(
+        fs::read_link(data.join("current")).expect("global Java symlink"),
+        zulu
+    );
+    let global_config = fs::read_to_string(config.join("config.toml")).expect("global config");
+    assert!(global_config.contains("vendor = \"zulu\""));
+
+    let temurin = fake_managed_jdk_for_vendor(&data, "temurin", "27+35", 27, "temurin-27");
+    fs::remove_file(config.join("config.toml")).expect("clear global preference");
+    let ambiguous = isolated_jman(&cache, &data, &config)
+        .current_dir(&outside)
+        .args(["java", "exec", "27", "--", "java"])
+        .output()
+        .expect("reject ambiguous installed vendors");
+    assert!(!ambiguous.status.success());
+    let error = String::from_utf8_lossy(&ambiguous.stderr);
+    assert!(error.contains("multiple vendors"));
+    assert!(error.contains("temurin"));
+    assert!(error.contains("zulu"));
+    assert!(error.contains("--vendor <vendor>"));
+
+    let selected = isolated_jman(&cache, &data, &config)
+        .current_dir(&outside)
+        .args([
+            "java",
+            "use",
+            "27",
+            "--vendor",
+            "zulu",
+            "--global",
+            "--no-progress",
+        ])
+        .output()
+        .expect("select explicit global vendor");
+    assert!(selected.status.success());
+    let global = isolated_jman(&cache, &data, &config)
+        .current_dir(&outside)
+        .args(["java", "exec", "27", "--", "java"])
+        .output()
+        .expect("reuse matching global vendor");
+    assert!(global.status.success());
+    assert!(String::from_utf8_lossy(&global.stdout).contains("zulu-27"));
+
+    fs::write(
+        project.join("jman.toml"),
+        r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "vendor-precedence"
+version = "1"
+java-release = 27
+packaging = "jar"
+
+[toolchain]
+jdk = "27"
+vendor = "temurin"
+"#,
+    )
+    .expect("project manifest");
+    let local = isolated_jman(&cache, &data, &config)
+        .current_dir(&project)
+        .args(["java", "exec", "27", "--", "java"])
+        .output()
+        .expect("prefer matching project vendor");
+    assert!(local.status.success());
+    let local = String::from_utf8_lossy(&local.stdout);
+    assert!(local.contains("temurin-27"));
+    assert!(local.contains(temurin.to_string_lossy().as_ref()));
+
+    let removal = isolated_jman(&cache, &data, &config)
+        .current_dir(&project)
+        .args([
+            "java",
+            "remove",
+            "27",
+            "--dry-run",
+            "--force",
+            "--no-progress",
+        ])
+        .output()
+        .expect("resolve removal vendor from project");
+    assert!(removal.status.success());
+    let removal = String::from_utf8_lossy(&removal.stdout);
+    assert!(removal.contains("Would remove temurin 27+35"));
+    assert!(!removal.contains("zulu"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn java_use_requires_an_install_and_shell_initializers_include_completions() {
     let root = tempfile::tempdir().expect("isolated Java home");
     let cache = root.path().join("cache");
@@ -2741,8 +2864,7 @@ fn java_use_requires_an_install_and_shell_initializers_include_completions() {
         .output()
         .expect("reject missing Java");
     assert!(!missing.status.success());
-    assert!(String::from_utf8_lossy(&missing.stderr)
-        .contains("run `jman java install 25 --vendor temurin`"));
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("run `jman java install 25`"));
 
     for shell in ["bash", "zsh", "fish"] {
         let output = isolated_jman(&cache, &data, &config)
@@ -2811,11 +2933,22 @@ fn isolated_jman(cache: &Path, data: &Path, config: &Path) -> Command {
 
 #[cfg(target_os = "linux")]
 fn fake_managed_jdk(data: &Path, version: &str, major: u16, label: &str) -> PathBuf {
+    fake_managed_jdk_for_vendor(data, "temurin", version, major, label)
+}
+
+#[cfg(target_os = "linux")]
+fn fake_managed_jdk_for_vendor(
+    data: &Path,
+    vendor: &str,
+    version: &str,
+    major: u16,
+    label: &str,
+) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
     let home = data
         .join("jdks")
-        .join(format!("temurin-{}-linux-x64", version.replace('+', "_")));
+        .join(format!("{vendor}-{}-linux-x64", version.replace('+', "_")));
     fs::create_dir_all(home.join("bin")).expect("managed JDK bin");
     for executable in ["java", "javac", "jar"] {
         let path = home.join("bin").join(executable);
@@ -2831,7 +2964,7 @@ fn fake_managed_jdk(data: &Path, version: &str, major: u16, label: &str) -> Path
         fs::set_permissions(&path, permissions).expect("executable permissions");
     }
     let metadata = jman_build::toolchain::ManagedJdk {
-        vendor: "temurin".to_owned(),
+        vendor: vendor.to_owned(),
         version: version.to_owned(),
         major,
         os: "linux".to_owned(),
