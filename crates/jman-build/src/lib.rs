@@ -121,6 +121,14 @@ pub struct ArtifactOptions {
     pub fat: bool,
     pub sources: bool,
     pub javadoc: bool,
+    pub cache_policy: BuildCachePolicy,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum BuildCachePolicy {
+    #[default]
+    Use,
+    Rebuild,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -455,6 +463,16 @@ pub async fn check_workspace(
     jobs: usize,
     offline: bool,
 ) -> Result<CheckResult, BuildError> {
+    check_workspace_with_rebuild(root, cache_dir, jobs, offline, false).await
+}
+
+async fn check_workspace_with_rebuild(
+    root: &Path,
+    cache_dir: &Path,
+    jobs: usize,
+    offline: bool,
+    rebuild: bool,
+) -> Result<CheckResult, BuildError> {
     let modules = discover_modules(root).await?;
     let required_release = modules
         .iter()
@@ -519,7 +537,7 @@ pub async fn check_workspace(
                 let _permit = semaphore.acquire_owned().await.map_err(|_| {
                     BuildError::Invalid("compilation scheduler closed unexpectedly".to_owned())
                 })?;
-                compile_module(&module, &toolchain, &cache_dir, &upstream)
+                compile_module(&module, &toolchain, &cache_dir, &upstream, rebuild)
                     .await
                     .map(|(result, fingerprint)| (index, result, fingerprint))
             }
@@ -552,6 +570,7 @@ pub async fn package_workspace(
     offline: bool,
     options: ArtifactOptions,
 ) -> Result<Vec<PackageResult>, BuildError> {
+    let rebuild = options.cache_policy == BuildCachePolicy::Rebuild;
     let modules = discover_modules(root).await?;
     if options.fat
         && !modules
@@ -562,7 +581,7 @@ pub async fn package_workspace(
             "`--fat` requires at least one module with `project.main-class`".to_owned(),
         ));
     }
-    let build = check_workspace(root, cache_dir, jobs, offline).await?;
+    let build = check_workspace_with_rebuild(root, cache_dir, jobs, offline, rebuild).await?;
     if modules.len() != build.modules.len() {
         return Err(BuildError::Invalid(
             "workspace changed while artifacts were being built".to_owned(),
@@ -579,51 +598,55 @@ pub async fn package_workspace(
             .map(|dependency| build.modules[dependency].output.clone())
             .collect::<Vec<_>>();
         packages.push(
-            package_cached(
+            package_cached_with_rebuild(
                 module,
                 manifest,
                 "thin",
                 &build.toolchain,
                 cache_dir,
                 &upstream,
+                rebuild,
             )
             .await?,
         );
         if options.sources {
             packages.push(
-                package_cached(
+                package_cached_with_rebuild(
                     module,
                     manifest,
                     "sources",
                     &build.toolchain,
                     cache_dir,
                     &upstream,
+                    rebuild,
                 )
                 .await?,
             );
         }
         if options.javadoc {
             packages.push(
-                package_cached(
+                package_cached_with_rebuild(
                     module,
                     manifest,
                     "javadoc",
                     &build.toolchain,
                     cache_dir,
                     &upstream,
+                    rebuild,
                 )
                 .await?,
             );
         }
         if options.fat && manifest.project.main_class.is_some() {
             packages.push(
-                package_cached(
+                package_cached_with_rebuild(
                     module,
                     manifest,
                     "fat",
                     &build.toolchain,
                     cache_dir,
                     &upstream,
+                    rebuild,
                 )
                 .await?,
             );
@@ -2020,6 +2043,7 @@ async fn compile_module(
     toolchain: &Toolchain,
     cache_dir: &Path,
     upstream: &[(PathBuf, String)],
+    rebuild: bool,
 ) -> Result<(ModuleResult, String), BuildError> {
     let sources = java_sources(&module.directory.join("src/main/java")).await?;
     let resources = input_files(&module.directory.join("src/main/resources"), None).await?;
@@ -2041,9 +2065,10 @@ async fn compile_module(
     let output = output_root.join("classes");
     let generated_sources = output_root.join("generated/sources/annotations");
     let state_file = state_dir.join("check.sha256");
-    if fs::read_to_string(&state_file)
-        .await
-        .is_ok_and(|current| current.trim() == fingerprint)
+    if !rebuild
+        && fs::read_to_string(&state_file)
+            .await
+            .is_ok_and(|current| current.trim() == fingerprint)
         && output.is_dir()
     {
         return Ok((
@@ -2190,6 +2215,7 @@ fn package_filename(manifest: &Manifest, kind: &str) -> String {
     }
 }
 
+#[cfg(test)]
 async fn package_cached(
     module: &ModuleResult,
     manifest: &Manifest,
@@ -2197,6 +2223,21 @@ async fn package_cached(
     toolchain: &Toolchain,
     cache_dir: &Path,
     upstream: &[PathBuf],
+) -> Result<PackageResult, BuildError> {
+    package_cached_with_rebuild(
+        module, manifest, kind, toolchain, cache_dir, upstream, false,
+    )
+    .await
+}
+
+async fn package_cached_with_rebuild(
+    module: &ModuleResult,
+    manifest: &Manifest,
+    kind: &'static str,
+    toolchain: &Toolchain,
+    cache_dir: &Path,
+    upstream: &[PathBuf],
+    rebuild: bool,
 ) -> Result<PackageResult, BuildError> {
     let artifact_dir = module.directory.join(".jman/artifacts");
     fs::create_dir_all(&artifact_dir)
@@ -2220,21 +2261,23 @@ async fn package_cached(
     .await
     .map_err(|error| BuildError::Invalid(format!("package lock task failed: {error}")))??;
     let key = package_input_key(module, manifest, kind, toolchain, cache_dir, upstream).await?;
-    if let Ok(contents) = fs::read(&state).await {
-        if let Ok(record) = serde_json::from_slice::<PackageCacheRecord>(&contents) {
-            if record.key == key {
-                if let Ok((checksum, size)) = digest_file(&artifact).await {
-                    if size == record.size && checksum == record.checksum {
-                        drop(lock);
-                        return Ok(PackageResult {
-                            module: manifest.project.name.clone(),
-                            kind,
-                            artifact,
-                            size: record.size,
-                            checksum: record.checksum,
-                            unchanged: true,
-                            warnings: record.warnings,
-                        });
+    if !rebuild {
+        if let Ok(contents) = fs::read(&state).await {
+            if let Ok(record) = serde_json::from_slice::<PackageCacheRecord>(&contents) {
+                if record.key == key {
+                    if let Ok((checksum, size)) = digest_file(&artifact).await {
+                        if size == record.size && checksum == record.checksum {
+                            drop(lock);
+                            return Ok(PackageResult {
+                                module: manifest.project.name.clone(),
+                                kind,
+                                artifact,
+                                size: record.size,
+                                checksum: record.checksum,
+                                unchanged: true,
+                                warnings: record.warnings,
+                            });
+                        }
                     }
                 }
             }
@@ -3581,6 +3624,22 @@ mod tests {
         assert!(second.unchanged);
         assert_eq!(first.checksum, second.checksum);
         assert_eq!(second.warnings, ["cache-hit-marker"]);
+        let forced = package_cached_with_rebuild(
+            &module,
+            &manifest,
+            "thin",
+            &toolchain,
+            directory.path(),
+            &[],
+            true,
+        )
+        .await
+        .expect("forced package");
+        assert_eq!(forced.checksum, first.checksum);
+        assert!(
+            forced.warnings.is_empty(),
+            "rebuild must bypass cache state"
+        );
 
         std::fs::write(&first.artifact, b"damage").expect("damage artifact");
         let repaired = build().await.expect("repaired package");

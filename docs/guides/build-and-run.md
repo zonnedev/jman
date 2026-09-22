@@ -43,6 +43,7 @@ jman build --fat       # add executable fat JARs for applications
 jman build --sources   # add source JARs
 jman build --javadoc   # add Javadoc JARs
 jman build --all       # all optional artifacts
+jman build --rebuild   # recompile and repackage this time
 ```
 
 Artifacts are deterministic and appear in each module's
@@ -55,6 +56,9 @@ It checks the JAR checksum before reuse and rebuilds missing or modified JARs.
 The cache tracks generated sources, Javadoc toolchain and classpath inputs, and
 the ordered runtime dependencies used by fat JARs. Cache records live beside
 the artifacts and do not need to be committed.
+`--rebuild` bypasses compilation and packaging reuse for one build, but keeps
+downloaded dependencies and installed JDKs. A later ordinary build can reuse
+the freshly written outputs.
 
 The fat-JAR merger applies generic Java archive rules, not framework-specific
 patches: duplicate classes are rejected, signatures and unsafe input manifests

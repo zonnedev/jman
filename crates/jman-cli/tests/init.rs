@@ -2483,6 +2483,53 @@ processors = ["sha256:{digest}"]
             .count(),
         4
     );
+    let compiled_class = output.join("classes/com/example/App.class");
+    let expected_class = fs::read(&compiled_class).expect("compiled class");
+    fs::write(&compiled_class, b"damaged class").expect("damage compiled output");
+    let rebuilt = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .args([
+            "--no-progress",
+            "build",
+            "--all",
+            "--rebuild",
+            "--offline",
+            project.path().to_str().expect("UTF-8 path"),
+        ])
+        .output()
+        .expect("force complete rebuild");
+    assert!(
+        rebuilt.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rebuilt.stderr)
+    );
+    assert_eq!(
+        fs::read(&compiled_class).expect("recompiled class"),
+        expected_class
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&rebuilt.stderr)
+            .matches(", rebuilt)")
+            .count(),
+        4
+    );
+    let warm_after_rebuild = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .args([
+            "--no-progress",
+            "build",
+            "--all",
+            project.path().to_str().expect("UTF-8 path"),
+        ])
+        .output()
+        .expect("warm build after rebuild");
+    assert!(warm_after_rebuild.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&warm_after_rebuild.stderr)
+            .matches(", unchanged)")
+            .count(),
+        4
+    );
     let sources_inventory = Command::new("jar")
         .args(["--list", "--file"])
         .arg(

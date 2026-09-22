@@ -5,6 +5,11 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ## [Unreleased]
 
+### Added
+
+- `jman build --rebuild` forces recompilation and repackaging for one run
+  without clearing dependency downloads or installed JDKs.
+
 ### Changed
 
 - Repository cache entries now retain their repository identity, so identical

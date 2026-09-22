@@ -300,6 +300,9 @@ struct BuildCommand {
     /// Do not download a missing managed JDK.
     #[arg(long)]
     offline: bool,
+    /// Recompile and repackage even when build outputs are cached.
+    #[arg(long)]
+    rebuild: bool,
     /// Also build executable fat JARs for application modules.
     #[arg(long)]
     fat: bool,
@@ -1606,16 +1609,26 @@ async fn build_project(arguments: &BuildCommand, ui: &Ui) -> Result<()> {
             fat: arguments.fat || arguments.all,
             sources: arguments.sources || arguments.all,
             javadoc: arguments.javadoc || arguments.all,
+            cache_policy: if arguments.rebuild {
+                jman_build::BuildCachePolicy::Rebuild
+            } else {
+                jman_build::BuildCachePolicy::Use
+            },
         },
     )
     .await
     .context("JAR packaging failed")?;
     let unchanged = packages.iter().filter(|package| package.unchanged).count();
     activity.finish(format!(
-        "Built {} artifact{}{}",
+        "{} {} artifact{}{}",
+        if arguments.rebuild {
+            "Rebuilt"
+        } else {
+            "Built"
+        },
         packages.len(),
         if packages.len() == 1 { "" } else { "s" },
-        if unchanged == packages.len() && !packages.is_empty() {
+        if !arguments.rebuild && unchanged == packages.len() && !packages.is_empty() {
             " (unchanged)"
         } else {
             ""
@@ -1641,7 +1654,9 @@ async fn build_project(arguments: &BuildCommand, ui: &Ui) -> Result<()> {
             package.artifact.display(),
             indicatif::HumanBytes(package.size),
             package.checksum,
-            if package.unchanged {
+            if arguments.rebuild {
+                "rebuilt"
+            } else if package.unchanged {
                 "unchanged"
             } else {
                 "written"

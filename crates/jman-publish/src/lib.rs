@@ -145,11 +145,7 @@ pub async fn publish(options: &PublishOptions) -> Result<PublishReport> {
         &options.cache_dir,
         options.jobs,
         options.offline,
-        ArtifactOptions {
-            fat: false,
-            sources: true,
-            javadoc: true,
-        },
+        publication_artifact_options(),
     )
     .await
     .context("could not build publication artifacts")?;
@@ -222,6 +218,14 @@ pub async fn publish(options: &PublishOptions) -> Result<PublishReport> {
         }
     }
     Ok(report)
+}
+
+fn publication_artifact_options() -> ArtifactOptions {
+    ArtifactOptions {
+        sources: true,
+        javadoc: true,
+        ..ArtifactOptions::default()
+    }
 }
 
 fn discover_modules(root: &Path) -> Result<Vec<WorkspaceModule>> {

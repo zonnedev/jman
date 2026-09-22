@@ -134,12 +134,14 @@ already match the lockfile and cache.
 Compile and package modules.
 
 ```text
-jman build [PATH] [--jobs COUNT] [--offline]
+jman build [PATH] [--jobs COUNT] [--offline] [--rebuild]
            [--fat] [--sources] [--javadoc] [--all]
 ```
 
 The default produces thin JARs. Optional flags add executable fat, source, and
 Javadoc JARs; `--all` enables all three.
+`--rebuild` forces compilation and repackaging for this invocation without
+deleting caches, redownloading dependencies, or reinstalling the JDK.
 
 ## jman publish
 
