@@ -1,7 +1,7 @@
 //! Native Java toolchain discovery and incremental workspace compilation.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     env,
     ffi::OsString,
     fmt::Write as _,
@@ -2999,18 +2999,20 @@ fn artifact_paths(
     lock: &Lockfile,
     cache_dir: &Path,
 ) -> Result<Vec<PathBuf>, BuildError> {
+    let mut packages_by_checksum = HashMap::with_capacity(lock.packages.len());
+    for package in &lock.packages {
+        if let Some(checksum) = package.artifact_checksum.as_deref() {
+            packages_by_checksum.entry(checksum).or_insert(package);
+        }
+    }
     checksums
         .iter()
         .map(|checksum| {
-            let package = lock
-                .packages
-                .iter()
-                .find(|package| package.artifact_checksum.as_deref() == Some(checksum))
-                .ok_or_else(|| {
-                    BuildError::Invalid(format!(
-                        "classpath checksum `{checksum}` has no package in jman.lock; run `jman sync`"
-                    ))
-                })?;
+            let package = packages_by_checksum.get(checksum.as_str()).ok_or_else(|| {
+                BuildError::Invalid(format!(
+                    "classpath checksum `{checksum}` has no package in jman.lock; run `jman sync`"
+                ))
+            })?;
             let digest = checksum.strip_prefix("sha256:").ok_or_else(|| {
                 BuildError::Invalid(format!("invalid classpath checksum `{checksum}`"))
             })?;
@@ -3144,6 +3146,54 @@ fn parse_javac_major(output: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classpath_uses_locked_artifacts_in_order_and_reports_missing_entries() {
+        let cache = tempfile::tempdir().expect("artifact cache");
+        let artifacts = cache.path().join("artifacts");
+        std::fs::create_dir(&artifacts).expect("artifact directory");
+        let package = |name: &str, checksum: &str| jman_config::LockedPackage {
+            group: "example".to_owned(),
+            artifact: name.to_owned(),
+            version: "1".to_owned(),
+            extension: "jar".to_owned(),
+            classifier: None,
+            source: "test".to_owned(),
+            pom_checksum: "sha256:pom".to_owned(),
+            artifact_checksum: Some(format!("sha256:{checksum}")),
+            artifact_size: Some(1),
+            dependencies: Vec::new(),
+            scopes: Vec::new(),
+            selected_parent: None,
+        };
+        let lock = Lockfile {
+            lock_version: jman_config::LOCK_VERSION,
+            manifest_hash: String::new(),
+            workspace_hash: String::new(),
+            platform: String::new(),
+            toolchain: jman_config::LockedToolchain { java_release: 21 },
+            packages: vec![package("first", "aaa"), package("second", "bbb")],
+            classpath: jman_config::LockedClasspaths::default(),
+        };
+        std::fs::write(artifacts.join("aaa.jar"), b"a").expect("first artifact");
+        std::fs::write(artifacts.join("bbb.jar"), b"b").expect("second artifact");
+        let paths = artifact_paths(
+            &["sha256:bbb".to_owned(), "sha256:aaa".to_owned()],
+            &lock,
+            cache.path(),
+        )
+        .expect("locked classpath");
+        assert_eq!(
+            paths,
+            vec![artifacts.join("bbb.jar"), artifacts.join("aaa.jar")]
+        );
+        assert!(
+            artifact_paths(&["sha256:missing".to_owned()], &lock, cache.path())
+                .expect_err("missing lock entry")
+                .to_string()
+                .contains("has no package in jman.lock")
+        );
+    }
 
     #[test]
     fn parses_modern_and_legacy_javac_versions() {

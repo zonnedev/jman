@@ -24,12 +24,15 @@ The default root is `~/.cache/jman/`; `JMAN_CACHE_DIR` overrides it.
 
 | Directory | Contents |
 | --- | --- |
-| `repository/` | Maven artifacts, POMs, and metadata. |
+| `repository/` | Maven POMs, artifacts, and metadata, separated by repository identity. |
 | `catalog/` | Remote JDK catalog responses and validators. |
 | `audit/osv/` | Vulnerability responses keyed by the exact graph. |
 
 The cache is reusable across workspaces. Offline commands require the relevant
 entries to exist and never hide a cache miss with network access.
+Repository entries from older JMAN versions lacked repository identity and are
+not reused. Run `jman sync --refresh` online once after upgrading to populate
+the new entries before relying on offline resolution.
 
 Set an isolated cache in CI when jobs should not share state:
 

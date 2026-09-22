@@ -20,7 +20,7 @@ static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub struct CachedFile {
     pub path: PathBuf,
     pub checksum: String,
-    pub bytes: Vec<u8>,
+    pub bytes: Arc<[u8]>,
     pub source: String,
 }
 
@@ -133,18 +133,23 @@ impl RepositoryClient {
         artifact: &str,
     ) -> Result<VersionCatalog, ResolverError> {
         let relative = format!("{}/{artifact}/maven-metadata.xml", group.replace('.', "/"));
-        let cached = self.cache_dir.join("repository").join(&relative);
         if self.offline {
-            let bytes = tokio::fs::read(&cached)
-                .await
-                .map_err(|_| ResolverError::OfflineMiss(format!("{group}:{artifact} metadata")))?;
-            return parse_version_catalog(&bytes, "cache");
+            for repository in &self.repositories {
+                let cached = self.repository_cache_path(repository, &relative);
+                if let Ok(bytes) = tokio::fs::read(&cached).await {
+                    return parse_version_catalog(&bytes, "cache");
+                }
+            }
+            return Err(ResolverError::OfflineMiss(format!(
+                "{group}:{artifact} metadata"
+            )));
         }
         let mut last_error = None;
         for repository in &self.repositories {
             match self.fetch_repository_bytes(repository, &relative).await {
                 Ok(Some(bytes)) => match parse_version_catalog(&bytes, repository) {
                     Ok(catalog) => {
+                        let cached = self.repository_cache_path(repository, &relative);
                         write_atomic(&cached, &bytes).await?;
                         return Ok(catalog);
                     }
@@ -154,8 +159,11 @@ impl RepositoryClient {
                 Err(error) => last_error = Some(error),
             }
         }
-        if let Ok(bytes) = tokio::fs::read(&cached).await {
-            return parse_version_catalog(&bytes, "stale-cache");
+        for repository in &self.repositories {
+            let cached = self.repository_cache_path(repository, &relative);
+            if let Ok(bytes) = tokio::fs::read(&cached).await {
+                return parse_version_catalog(&bytes, "stale-cache");
+            }
         }
         if let Some(error) = last_error {
             return Err(error);
@@ -200,24 +208,20 @@ impl RepositoryClient {
         coordinate: &Coordinate,
         repository_path: &str,
     ) -> Result<CachedFile, ResolverError> {
-        let metadata_path = self.cache_dir.join("repository").join(repository_path);
-        if let Ok(bytes) = tokio::fs::read(&metadata_path).await {
-            let checksum = sha256(&bytes);
-            let path = self
-                .content_addressed_path(coordinate, &checksum, &bytes)
-                .await?;
-            return Ok(CachedFile {
-                checksum,
-                bytes,
-                path,
-                source: self
-                    .repositories
-                    .first()
-                    .map_or_else(String::new, Clone::clone),
-            });
-        }
-
         for repository in &self.repositories {
+            let cached = self.repository_cache_path(repository, repository_path);
+            if let Ok(bytes) = tokio::fs::read(&cached).await {
+                let checksum = sha256(&bytes);
+                let path = self
+                    .content_addressed_path(coordinate, &checksum, &bytes, &cached)
+                    .await?;
+                return Ok(CachedFile {
+                    checksum,
+                    bytes: bytes.into(),
+                    path,
+                    source: repository.clone(),
+                });
+            }
             let mut bytes = self
                 .fetch_repository_bytes(repository, repository_path)
                 .await?;
@@ -232,14 +236,15 @@ impl RepositoryClient {
                 }
             }
             if let Some(bytes) = bytes {
+                let metadata_path = self.repository_cache_path(repository, repository_path);
                 write_atomic(&metadata_path, &bytes).await?;
                 let checksum = sha256(&bytes);
                 let path = self
-                    .content_addressed_path(coordinate, &checksum, &bytes)
+                    .content_addressed_path(coordinate, &checksum, &bytes, &metadata_path)
                     .await?;
                 return Ok(CachedFile {
                     checksum,
-                    bytes,
+                    bytes: bytes.into(),
                     path,
                     source: repository.clone(),
                 });
@@ -322,7 +327,7 @@ impl RepositoryClient {
             "{group_path}/{}/{}/maven-metadata.xml",
             coordinate.artifact, coordinate.version
         );
-        let cached_metadata = self.cache_dir.join("repository").join(&metadata_relative);
+        let cached_metadata = self.repository_cache_path(repository, &metadata_relative);
         let bytes = if let Ok(bytes) = tokio::fs::read(&cached_metadata).await {
             bytes
         } else if let Some(bytes) = self
@@ -356,12 +361,10 @@ impl RepositoryClient {
         coordinate: &Coordinate,
         checksum: &str,
         bytes: &[u8],
+        repository_cache_path: &Path,
     ) -> Result<PathBuf, ResolverError> {
         if coordinate.extension == "pom" {
-            return Ok(self
-                .cache_dir
-                .join("repository")
-                .join(coordinate.repository_path()));
+            return Ok(repository_cache_path.to_owned());
         }
         let digest = checksum.strip_prefix("sha256:").unwrap_or(checksum);
         let path = self
@@ -377,6 +380,14 @@ impl RepositoryClient {
         }
         Ok(path)
     }
+
+    fn repository_cache_path(&self, repository: &str, relative: &str) -> PathBuf {
+        let digest = Sha256::digest(repository.trim_end_matches('/').as_bytes());
+        self.cache_dir
+            .join("repository")
+            .join(hex::encode(&digest[..12]))
+            .join(relative)
+    }
 }
 
 impl PomSource for RepositoryClient {
@@ -391,7 +402,7 @@ impl PomSource for RepositoryClient {
         );
         Box::pin(async move {
             let cached = self.fetch(&coordinate).await?;
-            String::from_utf8(cached.bytes)
+            String::from_utf8(cached.bytes.to_vec())
                 .map_err(|error| ResolverError::InvalidPom(error.to_string()))
         })
     }
@@ -536,7 +547,104 @@ mod tests {
 
         assert_eq!(first.checksum, second.checksum);
         assert_eq!(first.path, second.path);
+        assert!(Arc::ptr_eq(&first.bytes, &second.bytes));
         assert_eq!(fs::read(first.path).expect("cached artifact"), b"library");
+    }
+
+    #[tokio::test]
+    async fn repository_cache_keeps_same_coordinate_from_distinct_repositories_isolated() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let cache = temporary.path().join("cache");
+        let coordinate = Coordinate::jar("org.example", "library", "1");
+        let pom = Coordinate::pom("org.example", "library", "1");
+        let mut clients = Vec::new();
+        for (name, contents) in [("first", b"first".as_slice()), ("second", b"second")] {
+            let repository = temporary.path().join(name);
+            let artifact = repository.join(coordinate.repository_path());
+            fs::create_dir_all(artifact.parent().expect("artifact parent"))
+                .expect("repository directories");
+            fs::write(&artifact, contents).expect("repository artifact");
+            fs::write(repository.join(pom.repository_path()), contents).expect("repository POM");
+            fs::write(
+                repository.join("org/example/library/maven-metadata.xml"),
+                format!("<metadata><versioning><release>{name}</release></versioning></metadata>"),
+            )
+            .expect("repository metadata");
+            clients.push(
+                RepositoryClient::new(
+                    cache.clone(),
+                    vec![format!("file://{}", repository.display())],
+                )
+                .expect("repository client"),
+            );
+        }
+
+        let first = clients[0].fetch(&coordinate).await.expect("first artifact");
+        let second_first = RepositoryClient::new(
+            cache.clone(),
+            vec![
+                clients[1].repositories[0].clone(),
+                clients[0].repositories[0].clone(),
+            ],
+        )
+        .expect("ordered repositories")
+        .fetch(&coordinate)
+        .await
+        .expect("higher priority repository artifact");
+        assert_eq!(second_first.bytes.as_ref(), b"second");
+        let second = clients[1]
+            .fetch(&coordinate)
+            .await
+            .expect("second artifact");
+        assert_eq!(first.bytes.as_ref(), b"first");
+        assert_eq!(second.bytes.as_ref(), b"second");
+        assert_ne!(first.path, second.path);
+
+        let first_pom = clients[0].fetch(&pom).await.expect("first POM");
+        let second_pom = clients[1].fetch(&pom).await.expect("second POM");
+        assert_eq!(first_pom.bytes.as_ref(), b"first");
+        assert_eq!(second_pom.bytes.as_ref(), b"second");
+        assert_ne!(first_pom.path, second_pom.path);
+
+        for (client, expected) in clients.iter().zip(["first", "second"]) {
+            assert_eq!(
+                client
+                    .available_versions("org.example", "library")
+                    .await
+                    .expect("repository versions")
+                    .release
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+
+        for ((client, expected), release) in clients
+            .iter()
+            .zip([b"first".as_slice(), b"second"])
+            .zip(["first", "second"])
+        {
+            let offline =
+                RepositoryClient::new_with_mode(cache.clone(), client.repositories.clone(), true)
+                    .expect("offline client");
+            assert_eq!(
+                offline
+                    .fetch(&coordinate)
+                    .await
+                    .expect("cached artifact")
+                    .bytes
+                    .as_ref(),
+                expected
+            );
+            assert_eq!(
+                offline
+                    .available_versions("org.example", "library")
+                    .await
+                    .expect("cached versions")
+                    .release
+                    .as_deref(),
+                Some(release)
+            );
+        }
     }
 
     #[tokio::test]
@@ -594,7 +702,7 @@ mod tests {
             .await
             .expect("timestamped snapshot");
 
-        assert_eq!(artifact.bytes, b"snapshot");
+        assert_eq!(artifact.bytes.as_ref(), b"snapshot");
         assert!(artifact.path.is_file());
     }
 
@@ -623,7 +731,7 @@ mod tests {
             .await
             .expect("offline repair");
 
-        assert_eq!(repaired.bytes, b"library");
+        assert_eq!(repaired.bytes.as_ref(), b"library");
         assert_eq!(fs::read(repaired.path).expect("repaired CAS"), b"library");
     }
 

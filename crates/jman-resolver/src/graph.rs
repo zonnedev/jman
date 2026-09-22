@@ -423,7 +423,7 @@ async fn local_pom_file(module: &crate::MavenProject) -> Result<CachedFile, Reso
         })?;
     Ok(CachedFile {
         checksum: format!("sha256:{}", hex::encode(Sha256::digest(&bytes))),
-        bytes,
+        bytes: bytes.into(),
         path: module.source.clone(),
         source: format!("workspace:{}", module.source.display()),
     })

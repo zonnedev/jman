@@ -5,6 +5,15 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ## [Unreleased]
 
+### Changed
+
+- Repository cache entries now retain their repository identity, so identical
+  Maven coordinates from different repositories cannot cross-contaminate
+  workspaces. Existing unscoped cache entries require a one-time online
+  `jman sync --refresh` before offline resolution.
+- Dependency fetches share immutable artifact bytes in memory, and build
+  classpaths index locked packages once instead of rescanning them per entry.
+
 ## [0.7.0] - 2026-09-22
 
 ### Added
