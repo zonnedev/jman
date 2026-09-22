@@ -1943,7 +1943,7 @@ async fn doctor_project(path: &Path, ui: &Ui) -> Result<()> {
     let activity = ui.activity("Inspecting Java toolchain");
     let manager = jman_build::toolchain::ToolchainManager::new(&default_cache_dir())?;
     let selection = effective_java(&manager, &target).await?;
-    activity.finish(format!(
+    activity.finish_clean(format!(
         "{} JDK {} from {} ({})",
         selection.vendor,
         selection.version,
@@ -1956,10 +1956,12 @@ async fn doctor_project(path: &Path, ui: &Ui) -> Result<()> {
     ));
     inspect_java_environment(&selection, ui);
     let activity = ui.activity("Inspecting container runtime");
-    if let Some(runtime) = detect_container_runtime().await {
-        activity.finish(runtime);
-    } else {
-        activity.finish("No reachable Docker or Podman service (optional for tests)".to_owned());
+    match detect_container_runtime().await {
+        ContainerRuntimeStatus::Reachable(runtime) => activity.finish_clean(runtime),
+        ContainerRuntimeStatus::Unavailable(Some(message)) => activity.finish_warning(message),
+        ContainerRuntimeStatus::Unavailable(None) => {
+            activity.finish_warning("No reachable Docker or Podman service (optional for tests)");
+        }
     }
     Ok(())
 }
@@ -2022,7 +2024,12 @@ fn executable_on_path(name: &str, entries: &[PathBuf]) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-async fn detect_container_runtime() -> Option<String> {
+enum ContainerRuntimeStatus {
+    Reachable(String),
+    Unavailable(Option<String>),
+}
+
+async fn detect_container_runtime() -> ContainerRuntimeStatus {
     let configured = ["DOCKER_HOST", "CONTAINER_HOST"]
         .into_iter()
         .find_map(|name| std::env::var(name).ok().map(|value| (name, value)));
@@ -2055,15 +2062,15 @@ async fn detect_container_runtime() -> Option<String> {
                 |_| "default endpoint".to_owned(),
                 |value| format!("{endpoint_variable}={}", display_container_endpoint(&value)),
             );
-            return Some(format!("{name} {version} via {endpoint}"));
+            return ContainerRuntimeStatus::Reachable(format!("{name} {version} via {endpoint}"));
         }
     }
-    configured.map(|(variable, value)| {
+    ContainerRuntimeStatus::Unavailable(configured.map(|(variable, value)| {
         format!(
             "Configured {variable}={}, but no reachable Docker or Podman service",
             display_container_endpoint(&value)
         )
-    })
+    }))
 }
 
 fn display_container_endpoint(endpoint: &str) -> String {

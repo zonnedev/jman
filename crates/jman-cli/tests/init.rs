@@ -2252,6 +2252,91 @@ packaging = "jar"
     assert_eq!(selected["home"], java_17.to_string_lossy().as_ref());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn doctor_marks_healthy_checks_and_optional_missing_containers_accurately() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().expect("isolated doctor workspace");
+    let cache = root.path().join("cache");
+    let data = root.path().join("data");
+    let config = root.path().join("config");
+    let project = root.path().join("project");
+    let bin = root.path().join("bin");
+    fs::create_dir_all(&project).expect("project directory");
+    fs::create_dir_all(&bin).expect("isolated PATH");
+    fake_managed_jdk(&data, "17.0.12+7", 17, "doctor-17");
+    fs::write(
+        project.join("jman.toml"),
+        r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "demo"
+version = "1"
+java-release = 17
+packaging = "jar"
+
+[toolchain]
+jdk = "17"
+vendor = "temurin"
+"#,
+    )
+    .expect("project manifest");
+    let doctor = || {
+        isolated_jman(&cache, &data, &config)
+            .env("PATH", &bin)
+            .env_remove("DOCKER_HOST")
+            .env_remove("CONTAINER_HOST")
+            .args([
+                "--no-progress",
+                "doctor",
+                project.to_str().expect("UTF-8 project path"),
+            ])
+            .output()
+            .expect("run doctor")
+    };
+    let missing = doctor();
+    assert!(
+        missing.status.success(),
+        "{}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+    let missing = String::from_utf8_lossy(&missing.stderr);
+    assert!(missing
+        .lines()
+        .any(|line| line.starts_with("✓ temurin JDK 17.0.12+7")));
+    assert!(missing.contains("! No reachable Docker or Podman service"));
+
+    let configured = isolated_jman(&cache, &data, &config)
+        .env("PATH", &bin)
+        .env("DOCKER_HOST", "tcp://user:secret@example.test:2376")
+        .env_remove("CONTAINER_HOST")
+        .args([
+            "--no-progress",
+            "doctor",
+            project.to_str().expect("UTF-8 project path"),
+        ])
+        .output()
+        .expect("inspect unreachable configured Docker");
+    assert!(configured.status.success());
+    let configured = String::from_utf8_lossy(&configured.stderr);
+    assert!(configured.contains("! Configured DOCKER_HOST=tcp://***@example.test:2376"));
+    assert!(!configured.contains("secret"));
+
+    let docker = bin.join("docker");
+    fs::write(&docker, "#!/bin/sh\nprintf '29.8.1\\n'\n").expect("fake Docker");
+    let mut permissions = fs::metadata(&docker)
+        .expect("fake Docker metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&docker, permissions).expect("executable Docker");
+    let reachable = doctor();
+    assert!(reachable.status.success());
+    assert!(String::from_utf8_lossy(&reachable.stderr)
+        .lines()
+        .any(|line| line.starts_with("✓ Docker 29.8.1 via default endpoint")));
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn build_runs_isolated_annotation_processor_and_materializes_resources() {

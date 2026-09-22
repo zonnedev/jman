@@ -151,14 +151,22 @@ impl Activity {
         }
     }
 
-    pub fn finish_clean(mut self, message: impl AsRef<str>) {
+    pub fn finish_clean(self, message: impl AsRef<str>) {
+        self.finish_with_status("✓", message);
+    }
+
+    pub fn finish_warning(self, message: impl AsRef<str>) {
+        self.finish_with_status("!", message);
+    }
+
+    fn finish_with_status(mut self, symbol: &str, message: impl AsRef<str>) {
         let visible = self.plain || self.progress.is_some();
         if let Some(progress) = self.progress.take() {
             progress.finish_and_clear();
         }
         if visible {
             eprintln!(
-                "✓ {} ({})",
+                "{symbol} {} ({})",
                 message.as_ref(),
                 format_duration(self.started.elapsed())
             );

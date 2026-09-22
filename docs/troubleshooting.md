@@ -9,6 +9,8 @@ jman --no-progress -vv check
 
 `doctor` reports the selected project/JDK and container runtime. `-vv` exposes
 the operation context without an animated terminal UI.
+Successful checks end with `✓`. An unavailable Docker or Podman service is
+marked `!` because it is optional unless your tests need containers.
 
 ## A managed JDK is missing
 
