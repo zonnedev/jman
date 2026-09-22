@@ -5,6 +5,8 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-22
+
 ### Added
 
 - `jman build --rebuild` forces recompilation and repackaging for one run

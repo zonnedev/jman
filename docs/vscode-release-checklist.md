@@ -11,7 +11,7 @@ From a clean reviewed checkout on Linux x86-64:
 
 ```bash
 make package-vscode
-(cd target/vscode && sha256sum --check jman-java-0.7.0-linux-x64.vsix.sha256)
+(cd target/vscode && sha256sum --check jman-java-0.7.1-linux-x64.vsix.sha256)
 ```
 
 The packaging command rebuilds the native frontend, Java workers, bundled JMAN
@@ -32,7 +32,7 @@ mkdir -p /tmp/jman-vscode-profile /tmp/jman-vscode-extensions
 code \
   --user-data-dir /tmp/jman-vscode-profile \
   --extensions-dir /tmp/jman-vscode-extensions \
-  --install-extension target/vscode/jman-java-0.7.0-linux-x64.vsix
+  --install-extension target/vscode/jman-java-0.7.1-linux-x64.vsix
 ```
 
 Launch VS Code with the same two directory arguments and verify:
