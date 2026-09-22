@@ -1619,51 +1619,106 @@ async fn build_project(arguments: &BuildCommand, ui: &Ui) -> Result<()> {
     .await
     .context("JAR packaging failed")?;
     let unchanged = packages.iter().filter(|package| package.unchanged).count();
-    activity.finish(format!(
-        "{} {} artifact{}{}",
-        if arguments.rebuild {
-            "Rebuilt"
-        } else {
-            "Built"
-        },
-        packages.len(),
-        if packages.len() == 1 { "" } else { "s" },
-        if !arguments.rebuild && unchanged == packages.len() && !packages.is_empty() {
-            " (unchanged)"
-        } else {
-            ""
-        }
-    ));
-    for package in packages {
-        if !package.warnings.is_empty() {
-            ui.warning(format!(
-                "{} {} kept the first occurrence of {} conflicting resource{}; use -v for details",
-                package.module,
-                package.kind,
-                package.warnings.len(),
-                if package.warnings.len() == 1 { "" } else { "s" }
-            ));
-            for warning in &package.warnings {
-                ui.detail(warning);
+    let count = packages.len();
+    let noun = if count == 1 { "artifact" } else { "artifacts" };
+    let summary = if arguments.rebuild {
+        format!("Rebuild complete · {count} {noun}")
+    } else if unchanged == count {
+        format!("Build complete · {count} {noun} unchanged")
+    } else {
+        format!(
+            "Build complete · {count} {noun} · {unchanged} unchanged, {} written",
+            count - unchanged
+        )
+    };
+    activity.finish_clean(summary);
+    for line in build_artifact_lines(&packages, arguments.rebuild, ui.is_verbose()) {
+        ui.line(line);
+    }
+    let conflicts = packages
+        .iter()
+        .map(|package| package.warnings.len())
+        .sum::<usize>();
+    if conflicts > 0 {
+        ui.warning(format!(
+            "{conflicts} duplicate resource{} in fat JARs; first copy kept{}",
+            if conflicts == 1 { "" } else { "s" },
+            if ui.is_verbose() {
+                ""
+            } else {
+                " (use -v for details)"
             }
+        ));
+    }
+    Ok(())
+}
+
+fn build_artifact_lines(
+    packages: &[jman_build::PackageResult],
+    rebuild: bool,
+    verbose: bool,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    while start < packages.len() {
+        let module = &packages[start].module;
+        let mut end = start + 1;
+        while end < packages.len() && packages[end].module == *module {
+            end += 1;
         }
-        ui.success(format!(
-            "{} {} -> {} ({}, {}, {})",
-            package.module,
-            package.kind,
-            package.artifact.display(),
-            indicatif::HumanBytes(package.size),
-            package.checksum,
-            if arguments.rebuild {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        let directory = packages[start]
+            .artifact
+            .parent()
+            .unwrap_or_else(|| Path::new("."));
+        lines.push(format!(
+            "  ▸ {}  →  {}",
+            terminal_text(module),
+            terminal_text(&directory.to_string_lossy())
+        ));
+        for (index, package) in packages[start..end].iter().enumerate() {
+            let last = index + 1 == end - start;
+            let branch = if last { "└─" } else { "├─" };
+            let status = if rebuild {
                 "rebuilt"
             } else if package.unchanged {
                 "unchanged"
             } else {
                 "written"
+            };
+            let filename = package.artifact.file_name().map_or_else(
+                || "?".to_owned(),
+                |name| name.to_string_lossy().into_owned(),
+            );
+            let warning = if package.warnings.is_empty() {
+                String::new()
+            } else {
+                format!("  ⚠ {} conflicts", package.warnings.len())
+            };
+            lines.push(format!(
+                "    {branch} {:<7} {:>11}  {:<9}  {}{}",
+                package.kind,
+                indicatif::HumanBytes(package.size),
+                status,
+                terminal_text(&filename),
+                warning
+            ));
+            if verbose {
+                let continuation = if last { "   " } else { "│  " };
+                lines.push(format!(
+                    "    {continuation} {}",
+                    terminal_text(&package.checksum)
+                ));
+                for warning in &package.warnings {
+                    lines.push(format!("    {continuation} ! {}", terminal_text(warning)));
+                }
             }
-        ));
+        }
+        start = end;
     }
-    Ok(())
+    lines
 }
 
 async fn publish_project(arguments: &PublishCommand, ui: &Ui) -> Result<()> {
@@ -5913,6 +5968,43 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    #[test]
+    fn build_report_groups_artifacts_and_reserves_hashes_for_verbose_mode() {
+        let artifact = |module: &str, kind: &'static str, name: &str, warnings: Vec<String>| {
+            jman_build::PackageResult {
+                module: module.to_owned(),
+                kind,
+                artifact: PathBuf::from(format!("/workspace/{module}/.jman/artifacts/{name}")),
+                size: 4096,
+                checksum: "sha256:abcdef".to_owned(),
+                unchanged: true,
+                warnings,
+            }
+        };
+        let packages = vec![
+            artifact("app", "thin", "app-1.jar", Vec::new()),
+            artifact(
+                "app",
+                "fat",
+                "app-1-fat.jar",
+                vec!["duplicate entry".to_owned()],
+            ),
+            artifact("lib", "thin", "lib-1.jar", Vec::new()),
+        ];
+        let lines = build_artifact_lines(&packages, false, false);
+        assert_eq!(lines.iter().filter(|line| line.contains("▸ ")).count(), 2);
+        assert!(lines.iter().any(|line| line.contains("├─ thin")));
+        assert!(lines.iter().any(|line| line.contains("└─ fat")));
+        assert!(lines.iter().any(|line| line.contains("⚠ 1 conflicts")));
+        assert!(lines.iter().all(|line| !line.contains("sha256:")));
+        assert!(lines.iter().any(|line| line.contains("app-1-fat.jar")));
+
+        let verbose = build_artifact_lines(&packages, true, true);
+        assert!(verbose.iter().any(|line| line.contains("sha256:abcdef")));
+        assert!(verbose.iter().any(|line| line.contains("duplicate entry")));
+        assert!(verbose.iter().any(|line| line.contains("rebuilt")));
+    }
 
     #[test]
     fn java_list_accepts_catalog_filters_refresh_and_json() {

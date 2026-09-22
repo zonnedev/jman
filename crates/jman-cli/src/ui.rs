@@ -150,6 +150,20 @@ impl Activity {
             );
         }
     }
+
+    pub fn finish_clean(mut self, message: impl AsRef<str>) {
+        let visible = self.plain || self.progress.is_some();
+        if let Some(progress) = self.progress.take() {
+            progress.finish_and_clear();
+        }
+        if visible {
+            eprintln!(
+                "✓ {} ({})",
+                message.as_ref(),
+                format_duration(self.started.elapsed())
+            );
+        }
+    }
 }
 
 impl Drop for Activity {

@@ -2425,8 +2425,17 @@ processors = ["sha256:{digest}"]
     );
     let artifact = project.path().join(".jman/artifacts/generated-app-1.jar");
     assert!(artifact.is_file());
-    assert!(String::from_utf8_lossy(&first_package.stderr)
-        .contains(artifact.to_str().expect("UTF-8 artifact path")));
+    let first_report = String::from_utf8_lossy(&first_package.stderr);
+    assert!(first_report.contains(
+        artifact
+            .parent()
+            .expect("artifact directory")
+            .to_str()
+            .expect("UTF-8 artifact path")
+    ));
+    assert!(first_report.contains("└─ thin"));
+    assert!(first_report.contains("generated-app-1.jar"));
+    assert!(!first_report.contains("sha256:"));
     let first_checksum = Sha256::digest(fs::read(&artifact).expect("first JAR"));
     let second_package = compile("build");
     assert!(second_package.status.success());
@@ -2454,8 +2463,12 @@ processors = ["sha256:{digest}"]
             .path()
             .join(format!(".jman/artifacts/generated-app-1-{suffix}.jar"));
         assert!(path.is_file(), "missing {}", path.display());
-        assert!(String::from_utf8_lossy(&all.stderr)
-            .contains(path.to_str().expect("UTF-8 artifact path")));
+        assert!(String::from_utf8_lossy(&all.stderr).contains(
+            path.file_name()
+                .expect("artifact filename")
+                .to_str()
+                .expect("UTF-8 filename")
+        ));
         assert!(
             path.with_extension("jar.cache.json").is_file(),
             "missing cache record for {}",
@@ -2479,7 +2492,8 @@ processors = ["sha256:{digest}"]
     );
     assert_eq!(
         String::from_utf8_lossy(&warm_all.stderr)
-            .matches(", unchanged)")
+            .lines()
+            .filter(|line| line.contains("─") && line.contains("unchanged"))
             .count(),
         4
     );
@@ -2509,7 +2523,8 @@ processors = ["sha256:{digest}"]
     );
     assert_eq!(
         String::from_utf8_lossy(&rebuilt.stderr)
-            .matches(", rebuilt)")
+            .lines()
+            .filter(|line| line.contains("─") && line.contains("rebuilt"))
             .count(),
         4
     );
@@ -2526,7 +2541,8 @@ processors = ["sha256:{digest}"]
     assert!(warm_after_rebuild.status.success());
     assert_eq!(
         String::from_utf8_lossy(&warm_after_rebuild.stderr)
-            .matches(", unchanged)")
+            .lines()
+            .filter(|line| line.contains("─") && line.contains("unchanged"))
             .count(),
         4
     );

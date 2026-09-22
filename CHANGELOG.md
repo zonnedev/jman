@@ -12,6 +12,11 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ### Changed
 
+- Build output groups artifacts by module in a compact tree, shows their output
+  directory once, and reserves full checksums and conflict details for `-v`.
+
+### Changed
+
 - Repository cache entries now retain their repository identity, so identical
   Maven coordinates from different repositories cannot cross-contaminate
   workspaces. Existing unscoped cache entries require a one-time online

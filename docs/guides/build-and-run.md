@@ -60,6 +60,10 @@ the artifacts and do not need to be committed.
 downloaded dependencies and installed JDKs. A later ordinary build can reuse
 the freshly written outputs.
 
+The build report groups artifacts under each module's output directory and
+shows type, size, status, and filename. Use `jman -v build --all` for full
+checksums and individual fat-JAR resource conflict details.
+
 The fat-JAR merger applies generic Java archive rules, not framework-specific
 patches: duplicate classes are rejected, signatures and unsafe input manifests
 are removed, service descriptors and supported registry resources are merged,
