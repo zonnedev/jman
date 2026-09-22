@@ -5,6 +5,8 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-22
+
 ### Added
 
 - JMAN can now own the current user's Java selection: `java install --global`

@@ -4,6 +4,8 @@ All notable changes to the JMAN Java extension are documented here.
 
 ## Unreleased
 
+## 0.7.0 - 2026-09-22
+
 ## 0.6.0 - 2026-09-20
 
 ### Added

@@ -282,7 +282,7 @@ Build and install the development extension:
 
 ```bash
 make package-vscode
-code --install-extension target/vscode/jman-java-0.6.0-linux-x64.vsix
+code --install-extension target/vscode/jman-java-0.7.0-linux-x64.vsix
 ```
 
 Set `jman.java.javaHome` to an Oracle GraalVM 25 installation. Leave
