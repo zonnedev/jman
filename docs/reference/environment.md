@@ -4,6 +4,19 @@ JMAN keeps reproducible project configuration in `jman.toml`. Environment
 variables are reserved for machine-local paths, credentials, and runtime
 integration.
 
+## Remote installer
+
+These variables configure the release `install.sh` bootstrap script. They do
+not change normal JMAN command behavior after installation.
+
+| Variable | Purpose |
+| --- | --- |
+| `JMAN_VERSION` | Install a specific semantic version instead of the latest stable release. |
+| `JMAN_JAVA_VERSION` | Choose the Java feature release offered during initial setup; defaults to `25`. |
+| `JMAN_SETUP_JAVA` | Use `1` for unattended Java/shim setup, `0` to skip it, or `auto` to ask on a terminal. |
+| `JMAN_INSTALL_ROOT` | Override the root containing versioned JMAN installations. |
+| `JMAN_BIN_DIR` | Override the directory containing the user-facing `jman` symlink. |
+
 ## CLI and build
 
 | Variable | Purpose |

@@ -9,11 +9,11 @@ NATIVE_FRONTEND_INPUTS := \
 	scripts/build-native.sh \
 	scripts/use-sdkman-java.sh
 
-.PHONY: gates ci test test-rust test-java test-jman-runner test-processor-worker vineflower jacoco test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-micronaut-correctness test-vscode-extension test-neovim-plugin test-release-automation test-docs docs serve-docs prepare-release package-vscode release stage-release native test-native clean clear
+.PHONY: gates ci test test-rust test-java test-jman-runner test-processor-worker vineflower jacoco test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-micronaut-correctness test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs docs serve-docs prepare-release package-vscode release stage-release native test-native clean clear
 
-gates: test test-native test-coverage test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-vscode-extension test-neovim-plugin test-docs
+gates: test test-native test-coverage test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-vscode-extension test-neovim-plugin test-installer test-docs
 
-ci: test test-native test-coverage test-publishing test-vscode-extension test-neovim-plugin test-release-automation test-docs
+ci: test test-native test-coverage test-publishing test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs
 
 test: test-rust test-java test-jman-runner
 
@@ -121,6 +121,9 @@ test-neovim-plugin:
 	@for test in editors/neovim/tests/*.lua; do \
 		nvim --headless -u NONE -i NONE -l "$$test" || exit $$?; \
 	done
+
+test-installer:
+	./scripts/test-install.sh
 
 test-release-automation:
 	./scripts/test-prepare-release.sh

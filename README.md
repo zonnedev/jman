@@ -11,6 +11,16 @@ JMAN is an opinionated, native Java toolchain written in Rust. One executable
 creates projects, resolves dependencies, selects JDKs, builds, tests, runs,
 audits, publishes, and powers Java support in VS Code and Neovim.
 
+```bash
+curl -fsSL https://github.com/zonnedev/jman/releases/latest/download/install.sh | sh
+```
+
+The installer verifies the release archive, installs JMAN under the current
+user's data directory, links it into `~/.local/bin`, offers to install Java 25
+and create project-aware shims, then prints the exact shell initialization to
+add. See the [installation guide](docs/getting-started/installation.md) for
+manual installation, non-interactive options, and verification details.
+
 ```console
 $ jman init hello --main-class dev.example.Application
 $ cd hello

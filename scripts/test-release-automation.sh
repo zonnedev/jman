@@ -69,13 +69,15 @@ node -e '
   const fs = require("fs");
   const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   if (manifest.releaseTag !== process.argv[2]) throw new Error("release tag mismatch");
-  if (manifest.artifacts.length !== 2) throw new Error("artifact count mismatch");
+  if (manifest.artifacts.length !== 3) throw new Error("artifact count mismatch");
   for (const artifact of manifest.artifacts) {
     if (!/^[0-9a-f]{64}$/.test(artifact.sha256)) throw new Error("invalid digest");
   }
 ' "${output_dir}/release-manifest.json" "${release_tag}"
 
-test "$(wc -l < "${output_dir}/SHA256SUMS")" -eq 2
+test "$(wc -l < "${output_dir}/SHA256SUMS")" -eq 3
+test -x "${output_dir}/install.sh"
+grep -Fq 'releases/latest/download/release-manifest.json' "${output_dir}/install.sh"
 cp "${release_dist_dir}/jman-${workspace_version}-linux-x86_64.tar.gz" \
   "${release_dist_dir}/jman-duplicate-linux-x86_64.tar.gz"
 if JMAN_RELEASE_DIST_DIR="${release_dist_dir}" \

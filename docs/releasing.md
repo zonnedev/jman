@@ -89,16 +89,18 @@ The Release workflow currently publishes:
 - `jman-<version>-linux-x86_64.tar.gz`, containing the CLI, native compiler
   frontend, Java workers, project import support, documentation, and license;
 - `jman-java-<version>-linux-x64.vsix`, the Linux x64 VS Code extension;
-- `SHA256SUMS`, covering both installable artifacts; and
+- `install.sh`, the user-local bootstrap installer;
+- `SHA256SUMS`, covering the CLI, extension, and installer; and
 - `release-manifest.json`, recording versions, target platforms, filenames, and
   SHA-256 digests.
 
 The same files remain available as a short-lived workflow artifact for 14 days.
-GitHub stores Sigstore-backed build provenance for the CLI archive and VSIX.
-After downloading an artifact, verify both controls:
+GitHub stores Sigstore-backed build provenance for the CLI archive, VSIX, and
+installer. After downloading an artifact, verify both controls:
 
 ```bash
-sha256sum --check SHA256SUMS
+grep '  jman-0.6.0-linux-x86_64.tar.gz$' SHA256SUMS \
+  | sha256sum --check -
 gh attestation verify jman-0.6.0-linux-x86_64.tar.gz \
   --repo zonnedev/jman
 ```

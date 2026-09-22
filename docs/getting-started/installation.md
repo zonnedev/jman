@@ -5,24 +5,82 @@ the archive together: it contains the `jman` executable, the native compiler
 frontend, Java workers, the Maven/Gradle model importers, JaCoCo, and
 Vineflower.
 
-## Install a release
+## Quick installation
+
+Run the installer published with the latest GitHub release:
+
+```bash
+curl -fsSL https://github.com/zonnedev/jman/releases/latest/download/install.sh | sh
+```
+
+The installer:
+
+1. detects the supported operating system and architecture;
+2. resolves the latest stable release;
+3. downloads the archive and verifies it against the release's
+   `SHA256SUMS` entry;
+4. extracts it into `~/.local/share/jman/versions/<version>` and atomically
+   points `~/.local/bin/jman` at that version;
+5. reuses an existing global JMAN Java selection or asks whether to install
+   Temurin Java 25 globally;
+6. creates project-aware Java command shims; and
+7. prints the exact `PATH` and `jman shell init` lines for the detected shell.
+
+The script does not modify `.bashrc`, `.zshrc`, or Fish configuration. Review
+the printed lines and add them yourself. A subprocess cannot update the parent
+shell, so restart the shell or evaluate the lines after adding them.
+
+To inspect the installer before executing it:
+
+```bash
+curl -fsSLO https://github.com/zonnedev/jman/releases/latest/download/install.sh
+less install.sh
+sh install.sh
+```
+
+The one-line command is interactive when a terminal is available. In an
+unattended environment, choose explicitly whether Java should also be
+installed:
+
+```bash
+curl -fsSL https://github.com/zonnedev/jman/releases/latest/download/install.sh \
+  | JMAN_SETUP_JAVA=1 sh
+```
+
+Supported installer controls are:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `JMAN_VERSION` | latest stable | Install a specific version, with or without the leading `v`. |
+| `JMAN_JAVA_VERSION` | `25` | Java feature release offered during first-time setup. |
+| `JMAN_SETUP_JAVA` | `auto` | Use `1` to install Java without prompting or `0` to skip Java setup. |
+| `JMAN_INSTALL_ROOT` | `~/.local/share/jman/versions` | Override versioned JMAN installations. |
+| `JMAN_BIN_DIR` | `~/.local/bin` | Override the directory containing the `jman` symlink. |
+
+Re-running the installer is safe. An existing valid version is reused and the
+`jman` symlink is updated. The installer refuses to overwrite a regular file at
+the link location and refuses archives whose checksum or embedded version does
+not match.
+
+## Manual installation
 
 1. Download the Linux x64 archive and its `SHA256SUMS` file from the
    [latest GitHub release](https://github.com/zonnedev/jman/releases/latest).
 2. Verify the download from the directory containing both files:
 
    ```bash
-   sha256sum --check SHA256SUMS
+   grep '  jman-<version>-linux-x86_64.tar.gz$' SHA256SUMS \
+     | sha256sum --check -
    ```
 
 3. Extract it into a versioned directory. Replace `<version>` and `<archive>`
    with the downloaded release:
 
    ```bash
-   mkdir -p "$HOME/.local/share/jman/<version>"
-   tar -xzf <archive> -C "$HOME/.local/share/jman/<version>" --strip-components=1
+   mkdir -p "$HOME/.local/share/jman/versions/<version>"
+   tar -xzf <archive> -C "$HOME/.local/share/jman/versions/<version>" --strip-components=1
    mkdir -p "$HOME/.local/bin"
-   ln -sfn "$HOME/.local/share/jman/<version>/jman" "$HOME/.local/bin/jman"
+   ln -sfn "$HOME/.local/share/jman/versions/<version>/jman" "$HOME/.local/bin/jman"
    ```
 
 4. Ensure `~/.local/bin` is on `PATH`, then verify the installation:
@@ -81,8 +139,10 @@ java --version
 may report a project selection instead of the global default; project
 configuration intentionally has higher precedence.
 
-Temurin is the default distribution. Pass `--vendor <name>` consistently to
-install and select another distribution, for example `zulu` or `corretto`.
+Temurin is the default download distribution. Pass `--vendor <name>` when
+installing another distribution, for example `zulu` or `corretto`; later
+installed-JDK commands infer the vendor from project/global selection or a
+unique installed match.
 See [Java toolchains](../guides/java-toolchains.md) for catalog filters,
 verification, cache behavior, project overrides, and shell integration.
 

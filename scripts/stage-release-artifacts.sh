@@ -44,16 +44,17 @@ fi
 
 rm -rf "${output_dir}"
 mkdir -p "${output_dir}"
-cp "${cli_archives[0]}" "${vscode_packages[0]}" "${output_dir}/"
+cp "${cli_archives[0]}" "${vscode_packages[0]}" "${project_dir}/install.sh" "${output_dir}/"
 
 (
   cd "${output_dir}"
-  sha256sum "${cli_name}" "${vscode_name}" > SHA256SUMS
+  sha256sum "${cli_name}" "${vscode_name}" install.sh > SHA256SUMS
   sha256sum --check SHA256SUMS
 )
 
 cli_sha256="$(sha256sum "${output_dir}/${cli_name}" | cut -d' ' -f1)"
 vscode_sha256="$(sha256sum "${output_dir}/${vscode_name}" | cut -d' ' -f1)"
+installer_sha256="$(sha256sum "${output_dir}/install.sh" | cut -d' ' -f1)"
 cat > "${output_dir}/release-manifest.json" <<EOF
 {
   "schemaVersion": 1,
@@ -70,6 +71,11 @@ cat > "${output_dir}/release-manifest.json" <<EOF
       "name": "${vscode_name}",
       "platform": "linux-x64",
       "sha256": "${vscode_sha256}"
+    },
+    {
+      "name": "install.sh",
+      "platform": "portable-shell",
+      "sha256": "${installer_sha256}"
     }
   ]
 }
@@ -78,7 +84,7 @@ EOF
 node -e '
   const fs = require("fs");
   const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (manifest.schemaVersion !== 1 || manifest.artifacts.length !== 2) process.exit(1);
+  if (manifest.schemaVersion !== 1 || manifest.artifacts.length !== 3) process.exit(1);
 ' "${output_dir}/release-manifest.json"
 
 printf 'GitHub release assets staged in %s\n' "${output_dir}"

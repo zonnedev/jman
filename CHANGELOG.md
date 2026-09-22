@@ -17,6 +17,9 @@ Versioning while it approaches a stable 0.3.0 release.
 - `jman shell init` now generates command and option completion for Bash, Zsh,
   and Fish from JMAN's Clap command model alongside the Java shim and
   `JAVA_HOME` integration.
+- GitHub Releases now include a checksum-verified remote installer that keeps
+  versioned user-local installations, safely updates the `jman` symlink,
+  offers Java 25 and shim setup, and prints shell activation instructions.
 
 ### Changed
 
