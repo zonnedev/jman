@@ -34,7 +34,7 @@ for source in "${markdown_files[@]}"; do
       printf 'broken documentation link: %s -> %s\n' "${source}" "${target}" >&2
       status=1
     fi
-  done < <(rg --no-filename --only-matching '\[[^]]+\]\([^)]+\)' "${source}")
+  done < <(grep -Eo '\[[^]]+\]\([^)]+\)' "${source}" || true)
 done
 
 mapfile -t commands < <(
@@ -43,7 +43,7 @@ mapfile -t commands < <(
     | tr '[:upper:]' '[:lower:]'
 )
 for command in "${commands[@]}"; do
-  if ! rg --quiet --fixed-strings "## jman ${command}" docs/reference/cli.md; then
+  if ! grep -Fq "## jman ${command}" docs/reference/cli.md; then
     printf 'missing CLI reference section: jman %s\n' "${command}" >&2
     status=1
   fi
@@ -55,7 +55,7 @@ mapfile -t java_commands < <(
     | tr '[:upper:]' '[:lower:]'
 )
 for command in "${java_commands[@]}"; do
-  if ! rg --quiet --fixed-strings "## jman java ${command}" docs/reference/cli.md; then
+  if ! grep -Fq "## jman java ${command}" docs/reference/cli.md; then
     printf 'missing Java CLI reference section: jman java %s\n' "${command}" >&2
     status=1
   fi
@@ -66,26 +66,26 @@ manifest_sections=(
   repositories build test.coverage publishing audit maven
 )
 for section in "${manifest_sections[@]}"; do
-  if ! rg --quiet --fixed-strings "${section}" docs/reference/manifest.md; then
+  if ! grep -Fq "${section}" docs/reference/manifest.md; then
     printf 'missing manifest reference: %s\n' "${section}" >&2
     status=1
   fi
 done
 
-if rg --quiet 'jman add [^[:space:]]+:[^[:space:]@]+:[^[:space:]]+' README.md docs; then
+if grep -ERq 'jman add [^[:space:]]+:[^[:space:]@]+:[^[:space:]]+' README.md docs; then
   printf 'documentation contains obsolete group:artifact:version add syntax\n' >&2
   status=1
 fi
 
-if ! rg --quiet --fixed-strings \
+if ! grep -Fq \
   'DOCS_RUN := $(UV) run --isolated --no-project --with-requirements docs/requirements.txt' \
   Makefile; then
   printf 'documentation targets must provision the pinned requirements\n' >&2
   status=1
 fi
 
-if rg --quiet --fixed-strings 'mkdocs-material' docs/requirements.txt \
-    || ! rg --quiet --fixed-strings 'name: mkdocs' mkdocs.yml; then
+if grep -Fq 'mkdocs-material' docs/requirements.txt \
+    || ! grep -Fq 'name: mkdocs' mkdocs.yml; then
   printf 'documentation must use the built-in MkDocs theme\n' >&2
   status=1
 fi
