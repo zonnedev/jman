@@ -2456,7 +2456,33 @@ processors = ["sha256:{digest}"]
         assert!(path.is_file(), "missing {}", path.display());
         assert!(String::from_utf8_lossy(&all.stderr)
             .contains(path.to_str().expect("UTF-8 artifact path")));
+        assert!(
+            path.with_extension("jar.cache.json").is_file(),
+            "missing cache record for {}",
+            path.display()
+        );
     }
+    let warm_all = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .args([
+            "--no-progress",
+            "build",
+            "--all",
+            project.path().to_str().expect("UTF-8 path"),
+        ])
+        .output()
+        .expect("warm build all artifacts");
+    assert!(
+        warm_all.status.success(),
+        "{}",
+        String::from_utf8_lossy(&warm_all.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&warm_all.stderr)
+            .matches(", unchanged)")
+            .count(),
+        4
+    );
     let sources_inventory = Command::new("jar")
         .args(["--list", "--file"])
         .arg(

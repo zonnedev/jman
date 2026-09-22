@@ -8,11 +8,16 @@ use std::{
     io::Write as _,
     path::{Path, PathBuf},
     process::Stdio,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
+use fs2::FileExt;
 use futures::{stream, StreamExt, TryStreamExt};
 use jman_config::{Lockfile, Manifest};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::{
@@ -25,6 +30,8 @@ use tokio::{
 pub mod toolchain;
 
 const STATE_VERSION: &str = "jman-build-v2";
+const PACKAGE_STATE_VERSION: &str = "jman-package-v1";
+static PACKAGE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Error)]
 pub enum BuildError {
@@ -79,6 +86,14 @@ pub struct PackageResult {
     pub checksum: String,
     pub unchanged: bool,
     pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct PackageCacheRecord {
+    key: String,
+    checksum: String,
+    size: u64,
+    warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -563,17 +578,55 @@ pub async fn package_workspace(
             .into_iter()
             .map(|dependency| build.modules[dependency].output.clone())
             .collect::<Vec<_>>();
-        packages.push(package_module(module, manifest).await?);
+        packages.push(
+            package_cached(
+                module,
+                manifest,
+                "thin",
+                &build.toolchain,
+                cache_dir,
+                &upstream,
+            )
+            .await?,
+        );
         if options.sources {
-            packages.push(package_sources(module, manifest).await?);
+            packages.push(
+                package_cached(
+                    module,
+                    manifest,
+                    "sources",
+                    &build.toolchain,
+                    cache_dir,
+                    &upstream,
+                )
+                .await?,
+            );
         }
         if options.javadoc {
             packages.push(
-                package_javadoc(module, manifest, &build.toolchain, cache_dir, &upstream).await?,
+                package_cached(
+                    module,
+                    manifest,
+                    "javadoc",
+                    &build.toolchain,
+                    cache_dir,
+                    &upstream,
+                )
+                .await?,
             );
         }
         if options.fat && manifest.project.main_class.is_some() {
-            packages.push(package_fat(module, manifest, cache_dir, &upstream).await?);
+            packages.push(
+                package_cached(
+                    module,
+                    manifest,
+                    "fat",
+                    &build.toolchain,
+                    cache_dir,
+                    &upstream,
+                )
+                .await?,
+            );
         }
     }
     Ok(packages)
@@ -2128,6 +2181,295 @@ async fn copy_resources(
     Ok(())
 }
 
+fn package_filename(manifest: &Manifest, kind: &str) -> String {
+    let base = format!("{}-{}", manifest.project.name, manifest.project.version);
+    match kind {
+        "thin" => format!("{base}.jar"),
+        "sources" | "javadoc" | "fat" => format!("{base}-{kind}.jar"),
+        _ => unreachable!("package kind is selected internally"),
+    }
+}
+
+async fn package_cached(
+    module: &ModuleResult,
+    manifest: &Manifest,
+    kind: &'static str,
+    toolchain: &Toolchain,
+    cache_dir: &Path,
+    upstream: &[PathBuf],
+) -> Result<PackageResult, BuildError> {
+    let artifact_dir = module.directory.join(".jman/artifacts");
+    fs::create_dir_all(&artifact_dir)
+        .await
+        .map_err(|source| io_error(&artifact_dir, source))?;
+    let artifact = artifact_dir.join(package_filename(manifest, kind));
+    let state = artifact.with_extension("jar.cache.json");
+    let lock_path = artifact.with_extension("jar.lock");
+    let lock = tokio::task::spawn_blocking(move || {
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|source| io_error(&lock_path, source))?;
+        lock.lock_exclusive()
+            .map_err(|source| io_error(&lock_path, source))?;
+        Ok::<_, BuildError>(lock)
+    })
+    .await
+    .map_err(|error| BuildError::Invalid(format!("package lock task failed: {error}")))??;
+    let key = package_input_key(module, manifest, kind, toolchain, cache_dir, upstream).await?;
+    if let Ok(contents) = fs::read(&state).await {
+        if let Ok(record) = serde_json::from_slice::<PackageCacheRecord>(&contents) {
+            if record.key == key {
+                if let Ok((checksum, size)) = digest_file(&artifact).await {
+                    if size == record.size && checksum == record.checksum {
+                        drop(lock);
+                        return Ok(PackageResult {
+                            module: manifest.project.name.clone(),
+                            kind,
+                            artifact,
+                            size: record.size,
+                            checksum: record.checksum,
+                            unchanged: true,
+                            warnings: record.warnings,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    let result = match kind {
+        "thin" => package_module(module, manifest).await?,
+        "sources" => package_sources(module, manifest).await?,
+        "javadoc" => package_javadoc(module, manifest, toolchain, cache_dir, upstream).await?,
+        "fat" => package_fat(module, manifest, cache_dir, upstream).await?,
+        _ => unreachable!("package kind is selected internally"),
+    };
+    // An input changed while packaging must never be recorded under its old key.
+    if package_input_key(module, manifest, kind, toolchain, cache_dir, upstream).await? != key {
+        drop(lock);
+        return Ok(result);
+    }
+    let record = PackageCacheRecord {
+        key,
+        checksum: result.checksum.clone(),
+        size: result.size,
+        warnings: result.warnings.clone(),
+    };
+    let temporary = state.with_extension(format!(
+        "cache.tmp.{}.{}",
+        std::process::id(),
+        PACKAGE_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let contents = serde_json::to_vec(&record).map_err(|error| {
+        BuildError::Invalid(format!("could not serialize package cache: {error}"))
+    })?;
+    fs::write(&temporary, contents)
+        .await
+        .map_err(|source| io_error(&temporary, source))?;
+    replace_file(&temporary, &state).await?;
+    drop(lock);
+    Ok(result)
+}
+
+async fn package_input_key(
+    module: &ModuleResult,
+    manifest: &Manifest,
+    kind: &str,
+    toolchain: &Toolchain,
+    cache_dir: &Path,
+    upstream: &[PathBuf],
+) -> Result<String, BuildError> {
+    let mut hash = Sha256::new();
+    hash_part(&mut hash, PACKAGE_STATE_VERSION.as_bytes());
+    hash_part(&mut hash, env!("CARGO_PKG_VERSION").as_bytes());
+    hash_part(&mut hash, kind.as_bytes());
+    hash_part(&mut hash, package_filename(manifest, kind).as_bytes());
+    hash_part(
+        &mut hash,
+        manifest
+            .to_toml()
+            .map_err(|error| BuildError::Config {
+                path: module.directory.join("jman.toml"),
+                message: error.to_string(),
+            })?
+            .as_bytes(),
+    );
+    match kind {
+        "thin" => hash_tree(&mut hash, "classes", &module.output, None).await?,
+        "sources" => {
+            hash_tree(
+                &mut hash,
+                "sources",
+                &module.directory.join("src/main/java"),
+                Some("java"),
+            )
+            .await?;
+            hash_tree(
+                &mut hash,
+                "generated",
+                &module.generated_sources,
+                Some("java"),
+            )
+            .await?;
+        }
+        "javadoc" => {
+            hash_part(&mut hash, toolchain.version.as_bytes());
+            hash_part(&mut hash, toolchain.javac.to_string_lossy().as_bytes());
+            for name in [
+                "LANG",
+                "LANGUAGE",
+                "LC_ALL",
+                "LC_CTYPE",
+                "LC_MESSAGES",
+                "TZ",
+                "JAVA_TOOL_OPTIONS",
+                "JDK_JAVA_OPTIONS",
+                "_JAVA_OPTIONS",
+            ] {
+                hash_part(&mut hash, name.as_bytes());
+                hash_part(
+                    &mut hash,
+                    env::var_os(name)
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .as_bytes(),
+                );
+            }
+            hash_tree(
+                &mut hash,
+                "sources",
+                &module.directory.join("src/main/java"),
+                None,
+            )
+            .await?;
+            hash_tree(
+                &mut hash,
+                "generated",
+                &module.generated_sources,
+                Some("java"),
+            )
+            .await?;
+            hash_classpath(&mut hash, module, cache_dir, upstream, true).await?;
+        }
+        "fat" => {
+            hash_tree(&mut hash, "classes", &module.output, None).await?;
+            hash_classpath(&mut hash, module, cache_dir, upstream, false).await?;
+        }
+        _ => unreachable!("package kind is selected internally"),
+    }
+    Ok(format!("sha256:{}", hex::encode(hash.finalize())))
+}
+
+fn hash_part(hash: &mut Sha256, bytes: &[u8]) {
+    hash.update((bytes.len() as u64).to_le_bytes());
+    hash.update(bytes);
+}
+
+async fn hash_file(hash: &mut Sha256, path: &Path) -> Result<(), BuildError> {
+    let mut file = fs::File::open(path)
+        .await
+        .map_err(|source| io_error(path, source))?;
+    let length = file
+        .metadata()
+        .await
+        .map_err(|source| io_error(path, source))?
+        .len();
+    hash.update(length.to_le_bytes());
+    let mut count = 0;
+    let mut buffer = vec![0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .await
+            .map_err(|source| io_error(path, source))?;
+        if read == 0 {
+            break;
+        }
+        hash.update(&buffer[..read]);
+        count += read as u64;
+    }
+    if count != length {
+        return Err(BuildError::Invalid(format!(
+            "package input changed while reading {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+async fn digest_file(path: &Path) -> Result<(String, u64), BuildError> {
+    let mut hash = Sha256::new();
+    let mut file = fs::File::open(path)
+        .await
+        .map_err(|source| io_error(path, source))?;
+    let mut size = 0;
+    let mut buffer = vec![0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .await
+            .map_err(|source| io_error(path, source))?;
+        if read == 0 {
+            break;
+        }
+        hash.update(&buffer[..read]);
+        size += read as u64;
+    }
+    Ok((format!("sha256:{}", hex::encode(hash.finalize())), size))
+}
+
+async fn hash_tree(
+    hash: &mut Sha256,
+    label: &str,
+    root: &Path,
+    extension: Option<&str>,
+) -> Result<(), BuildError> {
+    hash_part(hash, label.as_bytes());
+    let files = input_files(root, extension).await?;
+    hash.update((files.len() as u64).to_le_bytes());
+    for path in files {
+        let relative = path.strip_prefix(root).map_err(|_| {
+            BuildError::Invalid(format!("package input escaped {}", root.display()))
+        })?;
+        hash_part(hash, archive_name(relative)?.as_bytes());
+        hash_file(hash, &path).await?;
+    }
+    Ok(())
+}
+
+async fn hash_classpath(
+    hash: &mut Sha256,
+    module: &ModuleResult,
+    cache_dir: &Path,
+    upstream: &[PathBuf],
+    compile: bool,
+) -> Result<(), BuildError> {
+    let lock_path = module.directory.join("jman.lock");
+    hash_file(hash, &lock_path).await?;
+    for (index, output) in upstream.iter().enumerate() {
+        hash_part(hash, &(index as u64).to_le_bytes());
+        hash_tree(hash, "upstream", output, None).await?;
+    }
+    let lock = read_lock(&lock_path)?;
+    let checksums = if compile {
+        &lock.classpath.compile
+    } else {
+        &lock.classpath.runtime
+    };
+    for (index, dependency) in artifact_paths(checksums, &lock, cache_dir)?
+        .iter()
+        .enumerate()
+    {
+        hash_part(hash, &(index as u64).to_le_bytes());
+        hash_part(hash, dependency.to_string_lossy().as_bytes());
+        hash_file(hash, dependency).await?;
+    }
+    Ok(())
+}
+
 async fn package_module(
     module: &ModuleResult,
     manifest: &Manifest,
@@ -2250,6 +2592,7 @@ async fn package_javadoc(
         let mut command = Command::new(&javadoc);
         command
             .arg("-quiet")
+            .arg("-notimestamp")
             .arg("-d")
             .arg(&temporary)
             .arg("--release")
@@ -2930,6 +3273,11 @@ fn archive_name(path: &Path) -> Result<String, BuildError> {
 }
 
 async fn replace_file(temporary: &Path, output: &Path) -> Result<(), BuildError> {
+    // On platforms that support replacement by rename, keep the published file
+    // continuously available. The backup path remains the Windows fallback.
+    if fs::rename(temporary, output).await.is_ok() {
+        return Ok(());
+    }
     let backup = output.with_extension(format!("old.{}", std::process::id()));
     if backup.exists() {
         fs::remove_file(&backup)
@@ -3146,6 +3494,328 @@ fn parse_javac_major(output: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn package_fixture(root: &Path) -> (Manifest, ModuleResult, Toolchain) {
+        let manifest = Manifest {
+            manifest_version: 1,
+            project: jman_config::Project {
+                group: "example".to_owned(),
+                name: "app".to_owned(),
+                version: "1".to_owned(),
+                java_release: 21,
+                packaging: "jar".to_owned(),
+                modules: Vec::new(),
+                main_class: Some("example.App".to_owned()),
+            },
+            toolchain: None,
+            maven: None,
+            build: None,
+            test: None,
+            publishing: None,
+            audit: None,
+            repositories: Vec::new(),
+            dependencies: jman_config::Dependencies::default(),
+            annotation_processors: BTreeMap::new(),
+            path_dependencies: BTreeMap::new(),
+        };
+        let module = ModuleResult {
+            name: "app".to_owned(),
+            directory: root.to_owned(),
+            sources: 1,
+            rebuilt: false,
+            output: root.join(".jman/output/classes"),
+            generated_sources: root.join(".jman/output/generated/sources/annotations"),
+        };
+        let toolchain = Toolchain {
+            javac: PathBuf::from("/test/jdk/bin/javac"),
+            version: "21.0.1".to_owned(),
+            major: 21,
+            managed: None,
+        };
+        (manifest, module, toolchain)
+    }
+
+    fn empty_package_lock(root: &Path) {
+        let lock = Lockfile {
+            lock_version: jman_config::LOCK_VERSION,
+            manifest_hash: "sha256:manifest".to_owned(),
+            workspace_hash: "sha256:workspace".to_owned(),
+            platform: "test".to_owned(),
+            toolchain: jman_config::LockedToolchain { java_release: 21 },
+            packages: Vec::new(),
+            classpath: jman_config::LockedClasspaths::default(),
+        };
+        std::fs::write(root.join("jman.lock"), lock.to_toml().expect("lock TOML"))
+            .expect("lockfile");
+    }
+
+    #[tokio::test]
+    async fn thin_package_cache_reuses_verified_output_and_repairs_damage() {
+        let directory = tempfile::tempdir().expect("package fixture");
+        let (mut manifest, module, toolchain) = package_fixture(directory.path());
+        std::fs::create_dir_all(&module.output).expect("classes");
+        let class = module.output.join("App.class");
+        std::fs::write(&class, b"first").expect("class");
+        let build = || async {
+            package_cached(
+                &module,
+                &manifest,
+                "thin",
+                &toolchain,
+                directory.path(),
+                &[],
+            )
+            .await
+        };
+        let first = build().await.expect("first package");
+        assert!(!first.unchanged);
+        let state = first.artifact.with_extension("jar.cache.json");
+        let mut record = serde_json::from_slice::<PackageCacheRecord>(
+            &std::fs::read(&state).expect("package state"),
+        )
+        .expect("valid package state");
+        record.warnings.push("cache-hit-marker".to_owned());
+        std::fs::write(&state, serde_json::to_vec(&record).expect("state JSON"))
+            .expect("cache state marker");
+        let second = build().await.expect("cached package");
+        assert!(second.unchanged);
+        assert_eq!(first.checksum, second.checksum);
+        assert_eq!(second.warnings, ["cache-hit-marker"]);
+
+        std::fs::write(&first.artifact, b"damage").expect("damage artifact");
+        let repaired = build().await.expect("repaired package");
+        assert_eq!(repaired.checksum, first.checksum);
+        assert_ne!(
+            std::fs::read(&repaired.artifact).expect("repaired bytes"),
+            b"damage"
+        );
+
+        std::fs::write(&state, b"incomplete state").expect("interrupt cache publication");
+        let recovered = build().await.expect("recovered package state");
+        assert_eq!(recovered.checksum, first.checksum);
+        assert!(serde_json::from_slice::<PackageCacheRecord>(
+            &std::fs::read(&state).expect("recovered state")
+        )
+        .is_ok());
+
+        std::fs::write(&class, b"other").expect("changed class");
+        let changed = build().await.expect("changed package");
+        assert_ne!(changed.checksum, first.checksum);
+        manifest.project.main_class = None;
+        let changed_manifest = package_cached(
+            &module,
+            &manifest,
+            "thin",
+            &toolchain,
+            directory.path(),
+            &[],
+        )
+        .await
+        .expect("changed manifest");
+        assert_ne!(changed_manifest.checksum, changed.checksum);
+    }
+
+    #[tokio::test]
+    async fn sources_and_fat_package_keys_track_generated_and_upstream_outputs() {
+        let directory = tempfile::tempdir().expect("package fixture");
+        let (manifest, module, toolchain) = package_fixture(directory.path());
+        std::fs::create_dir_all(&module.output).expect("classes");
+        std::fs::write(module.output.join("App.class"), b"app").expect("app class");
+        let source = directory.path().join("src/main/java/App.java");
+        std::fs::create_dir_all(source.parent().expect("source parent")).expect("source directory");
+        std::fs::write(&source, b"class App {}").expect("source");
+        let generated = module.generated_sources.join("Generated.java");
+        std::fs::create_dir_all(&module.generated_sources).expect("generated directory");
+        std::fs::write(&generated, b"class Generated {}").expect("generated source");
+        let first_sources = package_cached(
+            &module,
+            &manifest,
+            "sources",
+            &toolchain,
+            directory.path(),
+            &[],
+        )
+        .await
+        .expect("sources package");
+        let cached_sources = package_cached(
+            &module,
+            &manifest,
+            "sources",
+            &toolchain,
+            directory.path(),
+            &[],
+        )
+        .await
+        .expect("cached sources");
+        assert!(cached_sources.unchanged);
+        std::fs::write(&generated, b"class Generated { int x; }").expect("generated change");
+        let changed_sources = package_cached(
+            &module,
+            &manifest,
+            "sources",
+            &toolchain,
+            directory.path(),
+            &[],
+        )
+        .await
+        .expect("changed sources");
+        assert_ne!(first_sources.checksum, changed_sources.checksum);
+
+        empty_package_lock(directory.path());
+        let upstream = directory.path().join("dependency/classes");
+        std::fs::create_dir_all(&upstream).expect("upstream directory");
+        let upstream_class = upstream.join("Dependency.class");
+        std::fs::write(&upstream_class, b"one").expect("upstream class");
+        let first_fat = package_cached(
+            &module,
+            &manifest,
+            "fat",
+            &toolchain,
+            directory.path(),
+            std::slice::from_ref(&upstream),
+        )
+        .await
+        .expect("fat package");
+        let cached_fat = package_cached(
+            &module,
+            &manifest,
+            "fat",
+            &toolchain,
+            directory.path(),
+            std::slice::from_ref(&upstream),
+        )
+        .await
+        .expect("cached fat package");
+        assert!(cached_fat.unchanged);
+        std::fs::write(&upstream_class, b"two").expect("upstream change");
+        let changed_fat = package_cached(
+            &module,
+            &manifest,
+            "fat",
+            &toolchain,
+            directory.path(),
+            &[upstream],
+        )
+        .await
+        .expect("changed fat package");
+        assert_ne!(first_fat.checksum, changed_fat.checksum);
+    }
+
+    #[tokio::test]
+    async fn package_keys_track_ordered_runtime_jars_and_javadoc_toolchain() {
+        let directory = tempfile::tempdir().expect("package fixture");
+        let (manifest, module, mut toolchain) = package_fixture(directory.path());
+        std::fs::create_dir_all(&module.output).expect("classes");
+        std::fs::write(module.output.join("App.class"), b"app").expect("class");
+        let source = directory.path().join("src/main/java/App.java");
+        std::fs::create_dir_all(source.parent().expect("source parent")).expect("source directory");
+        std::fs::write(&source, b"class App {}").expect("source");
+        let artifacts = directory.path().join("cache/artifacts");
+        std::fs::create_dir_all(&artifacts).expect("artifact cache");
+        let mut packages = Vec::new();
+        let mut checksums = Vec::new();
+        for (name, bytes) in [("one", b"one".as_slice()), ("two", b"two")] {
+            let checksum = format!("sha256:{}", hex::encode(Sha256::digest(bytes)));
+            let path = artifacts.join(format!("{}.jar", checksum.trim_start_matches("sha256:")));
+            std::fs::write(path, bytes).expect("runtime JAR bytes");
+            packages.push(jman_config::LockedPackage {
+                group: "example".to_owned(),
+                artifact: name.to_owned(),
+                version: "1".to_owned(),
+                extension: "jar".to_owned(),
+                classifier: None,
+                source: "test".to_owned(),
+                pom_checksum: "sha256:pom".to_owned(),
+                artifact_checksum: Some(checksum.clone()),
+                artifact_size: Some(bytes.len() as u64),
+                dependencies: Vec::new(),
+                scopes: Vec::new(),
+                selected_parent: None,
+            });
+            checksums.push(checksum);
+        }
+        let mut lock = Lockfile {
+            lock_version: jman_config::LOCK_VERSION,
+            manifest_hash: "sha256:manifest".to_owned(),
+            workspace_hash: "sha256:workspace".to_owned(),
+            platform: "test".to_owned(),
+            toolchain: jman_config::LockedToolchain { java_release: 21 },
+            packages,
+            classpath: jman_config::LockedClasspaths {
+                compile: checksums.clone(),
+                runtime: checksums,
+                ..jman_config::LockedClasspaths::default()
+            },
+        };
+        let lock_path = directory.path().join("jman.lock");
+        std::fs::write(&lock_path, lock.to_toml().expect("lock TOML")).expect("lockfile");
+        let cache = directory.path().join("cache");
+        let first = package_input_key(&module, &manifest, "fat", &toolchain, &cache, &[])
+            .await
+            .expect("fat key");
+        lock.classpath.runtime.reverse();
+        std::fs::write(&lock_path, lock.to_toml().expect("reordered lock TOML"))
+            .expect("reordered lockfile");
+        let reordered = package_input_key(&module, &manifest, "fat", &toolchain, &cache, &[])
+            .await
+            .expect("reordered fat key");
+        assert_ne!(first, reordered);
+        let javadoc = package_input_key(&module, &manifest, "javadoc", &toolchain, &cache, &[])
+            .await
+            .expect("Javadoc key");
+        let doc_file = directory
+            .path()
+            .join("src/main/java/doc-files/overview.html");
+        std::fs::create_dir_all(doc_file.parent().expect("doc-files parent"))
+            .expect("doc-files directory");
+        std::fs::write(&doc_file, b"documentation").expect("doc-file");
+        let changed_docs =
+            package_input_key(&module, &manifest, "javadoc", &toolchain, &cache, &[])
+                .await
+                .expect("changed Javadoc key");
+        assert_ne!(javadoc, changed_docs);
+        toolchain.version = "21.0.2".to_owned();
+        assert_ne!(
+            changed_docs,
+            package_input_key(&module, &manifest, "javadoc", &toolchain, &cache, &[])
+                .await
+                .expect("new toolchain key")
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_package_requests_publish_one_valid_artifact() {
+        let directory = tempfile::tempdir().expect("package fixture");
+        let (manifest, module, toolchain) = package_fixture(directory.path());
+        std::fs::create_dir_all(&module.output).expect("classes");
+        std::fs::write(module.output.join("App.class"), b"app").expect("class");
+        let (first, second) = tokio::join!(
+            package_cached(
+                &module,
+                &manifest,
+                "thin",
+                &toolchain,
+                directory.path(),
+                &[]
+            ),
+            package_cached(
+                &module,
+                &manifest,
+                "thin",
+                &toolchain,
+                directory.path(),
+                &[]
+            ),
+        );
+        let first = first.expect("first concurrent package");
+        let second = second.expect("second concurrent package");
+        assert_eq!(first.checksum, second.checksum);
+        assert!(first.unchanged || second.unchanged);
+        assert_eq!(
+            digest_file(&first.artifact).await.expect("valid JAR").0,
+            first.checksum
+        );
+    }
 
     #[test]
     fn classpath_uses_locked_artifacts_in_order_and_reports_missing_entries() {

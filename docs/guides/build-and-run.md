@@ -50,6 +50,12 @@ Artifacts are deterministic and appear in each module's
 resources. An executable fat JAR also contains runtime dependencies and writes
 the configured main class into its manifest.
 
+After the first build, JMAN reuses each artifact when its inputs are unchanged.
+It checks the JAR checksum before reuse and rebuilds missing or modified JARs.
+The cache tracks generated sources, Javadoc toolchain and classpath inputs, and
+the ordered runtime dependencies used by fat JARs. Cache records live beside
+the artifacts and do not need to be committed.
+
 The fat-JAR merger applies generic Java archive rules, not framework-specific
 patches: duplicate classes are rejected, signatures and unsafe input manifests
 are removed, service descriptors and supported registry resources are merged,

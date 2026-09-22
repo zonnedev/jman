@@ -13,6 +13,8 @@ Versioning while it approaches a stable 0.3.0 release.
   `jman sync --refresh` before offline resolution.
 - Dependency fetches share immutable artifact bytes in memory, and build
   classpaths index locked packages once instead of rescanning them per entry.
+- Warm builds reuse verified thin, sources, Javadoc, and fat JARs when their
+  effective inputs are unchanged, avoiding repeated archive generation.
 
 ## [0.7.0] - 2026-09-22
 
