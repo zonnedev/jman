@@ -18,6 +18,7 @@ ci: test test-native test-coverage test-publishing test-vscode-extension test-ne
 test: test-rust test-java test-jman-runner
 
 test-rust: $(DEBUG_NATIVE_FRONTEND) vineflower jacoco
+	. "$(CURDIR)/scripts/use-sdkman-java.sh"; \
 	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
 	LD_LIBRARY_PATH="$(CURDIR)/target/native$${LD_LIBRARY_PATH:+:$${LD_LIBRARY_PATH}}" \
 	cargo test --workspace
@@ -38,11 +39,13 @@ jacoco:
 	./scripts/build-jacoco.sh
 
 test-coverage: jacoco
+	. "$(CURDIR)/scripts/use-sdkman-java.sh"; \
 	JMAN_JACOCO_AGENT="$(CURDIR)/target/jacoco-0.8.15-agent.jar" \
 	JMAN_JACOCO_CLI="$(CURDIR)/target/jacoco-0.8.15-cli.jar" \
 	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
 	LD_LIBRARY_PATH="$(CURDIR)/target/native$${LD_LIBRARY_PATH:+:$${LD_LIBRARY_PATH}}" \
 	cargo test -p jman-build coverage_ -- --nocapture
+	. "$(CURDIR)/scripts/use-sdkman-java.sh"; \
 	JMAN_JACOCO_AGENT="$(CURDIR)/target/jacoco-0.8.15-agent.jar" \
 	JMAN_JACOCO_CLI="$(CURDIR)/target/jacoco-0.8.15-cli.jar" \
 	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
@@ -50,6 +53,7 @@ test-coverage: jacoco
 	cargo test -p jman-cli compiles_tests_and_launches_junit_platform_console -- --nocapture
 
 test-vineflower: vineflower
+	. "$(CURDIR)/scripts/use-sdkman-java.sh"; \
 	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
 	LD_LIBRARY_PATH="$(CURDIR)/target/native" \
 	cargo test -p jman-java-lsp --features native-ffi \
@@ -90,6 +94,7 @@ $(DEBUG_NATIVE_FRONTEND): $(NATIVE_FRONTEND)
 	cp "$(NATIVE_FRONTEND)" "$(DEBUG_NATIVE_FRONTEND)"
 
 test-native: native
+	. "$(CURDIR)/scripts/use-sdkman-java.sh"; \
 	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
 	cargo test -p javac-frontend --features native-ffi -- --test-threads=1
 
@@ -98,10 +103,12 @@ test-real-semantics: native test-maven-import
 
 test-lsp: native test-maven-import test-gradle-annotation-processing test-processor-worker test-vineflower
 	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" cargo build -p jman-java-lsp --features native-ffi
+	. "$(CURDIR)/scripts/use-sdkman-java.sh"; \
 	cargo run --quiet -p jman-java-lsp --example subprocess_probe -- \
 		"$(CURDIR)/target/debug/jman-java-lsp" \
 		"$(CURDIR)/target/integration-fixtures/spring-petclinic-maven" \
 		gradle
+	. "$(CURDIR)/scripts/use-sdkman-java.sh"; \
 	cargo run --quiet -p jman-java-lsp --example subprocess_probe -- \
 		"$(CURDIR)/target/debug/jman-java-lsp" \
 		"$(CURDIR)/target/integration-fixtures/spring-petclinic-maven" \
