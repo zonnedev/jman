@@ -12,7 +12,7 @@ output="$2"
 cache_dir="$(cd "$(dirname "${output}")" && pwd)/maven-import"
 local_repository="${JAVA_LSP_MAVEN_REPOSITORY:-${project_dir}/target/maven-repository}"
 importer_classes="${JAVAC_FRONTEND_IMPORTER_CLASSES:-${project_dir}/target/java-test-classes}"
-build_java_home="${JAVA_LSP_BUILD_JAVA_HOME:-/home/jfsanchez/.sdkman/candidates/java/17.0.20-tem}"
+build_java_home="${JAVA_LSP_BUILD_JAVA_HOME:-${JAVA_HOME:-}}"
 maven="${workspace}/mvnw"
 
 if [[ ! -x "${maven}" ]]; then

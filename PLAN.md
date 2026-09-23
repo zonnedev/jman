@@ -92,7 +92,7 @@ Decision gates:
       `jman init --import .` non-interactive import.
 - [x] Generate a complete `jman.toml`, resolve and download imported dependencies
       natively, and atomically create `jman.lock`.
-- [x] Prove import against `/home/jfsanchez/Downloads/tmp/demo/` without invoking
+- [x] Prove import against a real-world demo checkout without invoking
       Maven or Gradle and add a workspace-owned regression fixture.
 - [x] Create a Rust 2021 Cargo workspace with `jman-cli`, `jman-config`,
       `jman-resolver`, and `jman-build`; reserve the Java runner for Milestone 4.
@@ -159,8 +159,7 @@ Milestone 1 acceptance:
       inter-module-dependency, atomicity, sync-selection, and report tests.
 - [x] Add a workspace-owned Spring Boot reactor fixture modeled after
       `springboot-microservices`.
-- [x] Import and synchronize
-      `/home/jfsanchez/Downloads/tmp/benchmarks/springboot-microservices`
+- [x] Import and synchronize a Spring Boot microservices benchmark checkout
       without invoking Maven or Gradle from jman.
 - [x] Require exact Maven agreement for every module in that fixture, then
       refresh and record cold, warm-resolution, and no-change benchmark results.

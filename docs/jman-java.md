@@ -115,9 +115,7 @@ length-prefixed result before asking the native library to free it.
   and the generated source, class, model metadata, and javac-resolved generated
   symbol are verified.
 - Processor compilation carries the transitive reactor compile/compile-only
-  closure when missing project artifacts are substituted with sources. This is
-  exercised against more than 100 processor-enabled Micronaut Core compile
-  units, including Lombok and Micronaut-generated main/test classes.
+  closure when missing project artifacts are substituted with sources.
 - A versioned persistent JVM processor worker keeps arbitrary processors
   outside the native image. Its Rust controller fingerprints source and
   processor inputs, reuses unchanged output, reruns after source changes, and
@@ -155,11 +153,6 @@ length-prefixed result before asking the native library to free it.
   classpath. Project sibling types are resolved through source paths, including
   Gson's build-generated Java template source root, without running a full
   compile.
-- A pinned Micronaut Core correctness corpus exercises 153 Gradle compile
-  units, more than 3,500 Java sources, Java 25 sealed types, type-safe project
-  accessors, cross-module navigation, and over 100 processor-enabled units.
-  Run it explicitly with `make test-micronaut-correctness`; the network-heavy
-  corpus is intentionally separate from the fast default gate.
 - Cross-file probes verify Petclinic `Owner` and Gson `Gson` definitions,
   references, workspace search, and exact rename edits.
 - The stdio LSP supports initialize/shutdown, incremental UTF-16 document
@@ -314,6 +307,6 @@ and decompiled copies. During initial background indexing, JMAN matches javac's
 resolved owner and source name against the active workspace roots so local
 navigation remains stable before the structural index is available.
 
-Real-project import tests default to the read-only fixtures under
-`/home/jfsanchez/zonnedev/tmp/test`. Override them with environment variables
-when needed.
+Real-project import tests fetch clean Spring Petclinic and Gson checkouts at
+pinned commits into `target/upstream-fixtures/`. Set `JAVAC_FRONTEND_PETCLINIC`
+or `JAVAC_FRONTEND_GSON` to use an existing checkout instead.

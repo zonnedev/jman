@@ -2,11 +2,16 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=use-sdkman-java.sh
+source "${project_dir}/scripts/use-sdkman-java.sh"
 gson="${GSON_DIR:-${project_dir}/target/integration-fixtures/gson-maven}"
 model="${project_dir}/target/gson-maven-model.ndjson"
 semantic_fixture="${project_dir}/tests/fixtures/compatibility/maven"
+maven_bin="${JAVA_LSP_MATRIX_MAVEN:-${SDKMAN_DIR:-${HOME}/.sdkman}/candidates/maven/3.9.9/bin/mvn}"
+export PATH="$(dirname "${maven_bin}"):${PATH}"
 
-"${project_dir}/scripts/import-maven-project.sh" "${gson}" "${model}"
+JAVA_LSP_MAVEN="${maven_bin}" \
+  "${project_dir}/scripts/import-maven-project.sh" "${gson}" "${model}"
 
 jq -e '
   select(.projectPath == "gson" and .taskPath == "compile")
@@ -17,7 +22,7 @@ jq -e '
 
 JAVAC_FRONTEND_LIB_DIR="${project_dir}/target/native" \
   cargo build -p jman-java-lsp --features native-ffi
-JAVA_HOME="${JAVA_HOME:-/home/jfsanchez/.sdkman/candidates/java/25.0.4-graal}" \
+JAVA_HOME="${JAVA_HOME}" \
 JAVA_LSP_MAVEN_REPOSITORY="${project_dir}/target/maven-repository" \
 JAVA_LSP_DISABLE_ANNOTATION_PROCESSING=1 \
 JAVA_LSP_PROCESSOR_WORKER_CLASSPATH="${project_dir}/target/processor-worker.jar" \

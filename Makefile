@@ -9,9 +9,11 @@ NATIVE_FRONTEND_INPUTS := \
 	scripts/build-native.sh \
 	scripts/use-sdkman-java.sh
 
-.PHONY: gates ci test test-rust test-java test-jman-runner test-processor-worker vineflower jacoco test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-micronaut-correctness test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs docs serve-docs prepare-release package-vscode release stage-release native test-native clean clear
+.PHONY: gates release-gates ci test test-rust test-java test-jman-runner test-processor-worker vineflower jacoco test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs docs serve-docs prepare-release package-vscode release stage-release native test-native clean clear
 
 gates: test test-native test-coverage test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-vscode-extension test-neovim-plugin test-installer test-docs
+
+release-gates: gates test-compatibility-matrix test-jpms-correctness
 
 ci: test test-native test-coverage test-publishing test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs
 
@@ -133,6 +135,7 @@ test-installer:
 	./scripts/test-install.sh
 
 test-release-automation:
+	./scripts/test-external-fixtures.sh
 	./scripts/test-prepare-release.sh
 	./scripts/test-release-automation.sh
 
@@ -148,9 +151,6 @@ serve-docs:
 prepare-release:
 	@test -n "$(VERSION)" || { echo "usage: make prepare-release VERSION=<version>" >&2; exit 2; }
 	./scripts/prepare-release.sh "$(VERSION)"
-
-test-micronaut-correctness: native test-java test-processor-worker
-	./scripts/test-micronaut-correctness.sh
 
 test-jpms-correctness: native test-java test-processor-worker test-maven-import
 	./scripts/test-jpms-correctness.sh

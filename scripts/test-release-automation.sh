@@ -100,6 +100,9 @@ for workflow in ci.yml release.yml; do
     "${workflow_dir}/${workflow}"
   grep -q 'GITHUB_PATH' "${workflow_dir}/${workflow}"
 done
+grep -q 'make ci' "${workflow_dir}/ci.yml"
+grep -q 'make release-gates' "${workflow_dir}/release.yml"
+grep -q 'scripts/setup-compatibility-tools.sh' "${workflow_dir}/release.yml"
 if grep -R -Eq '^rust-version[[:space:]]*=[[:space:]]*"' \
   "${project_dir}/crates"/*/Cargo.toml; then
   echo "Workspace crates must inherit workspace.package.rust-version" >&2

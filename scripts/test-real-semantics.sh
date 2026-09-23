@@ -2,15 +2,19 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=use-sdkman-java.sh
+source "${project_dir}/scripts/use-sdkman-java.sh"
 petclinic="${project_dir}/target/integration-fixtures/spring-petclinic-maven"
 gson="${project_dir}/target/integration-fixtures/gson-maven"
 local_repository="${project_dir}/target/maven-repository"
+java_21_home="${JMAN_TEST_JAVA_21_HOME:-${SDKMAN_DIR:-${HOME}/.sdkman}/candidates/java/21.0.2-open}"
+maven_bin="${JAVA_LSP_MATRIX_MAVEN:-${SDKMAN_DIR:-${HOME}/.sdkman}/candidates/maven/3.9.9/bin/mvn}"
 
 (
   cd "${gson}"
-  export JAVA_HOME="/home/jfsanchez/.sdkman/candidates/java/21.0.2-open"
+  export JAVA_HOME="${java_21_home}"
   export PATH="${JAVA_HOME}/bin:${PATH}"
-  mvn \
+  "${maven_bin}" \
     --batch-mode \
     --no-transfer-progress \
     -q \

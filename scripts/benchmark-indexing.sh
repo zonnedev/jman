@@ -6,12 +6,14 @@ workspace="${1:?usage: benchmark-indexing.sh PROJECT_ROOT [BUILD_SYSTEM]}"
 build_system="${2:-auto}"
 report="${project_dir}/target/indexing-benchmark-$(basename "${workspace}").jsonl"
 binary="${project_dir}/target/release/jman-java-lsp"
+# shellcheck source=use-sdkman-java.sh
+source "${project_dir}/scripts/use-sdkman-java.sh"
 
 JAVAC_FRONTEND_LIB_DIR="${project_dir}/target/native" \
   cargo build --release -p jman-java-lsp --features native-ffi >/dev/null
 
 env \
-  JAVA_HOME="/home/jfsanchez/.sdkman/candidates/java/25.0.4-graal" \
+  JAVA_HOME="${JAVA_HOME}" \
   LD_LIBRARY_PATH="${project_dir}/target/native" \
   JAVA_LSP_PROCESSOR_WORKER_CLASSPATH="${project_dir}/target/processor-worker.jar" \
   node "${project_dir}/scripts/benchmark-indexing.mjs" \

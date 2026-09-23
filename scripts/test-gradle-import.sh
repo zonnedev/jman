@@ -2,17 +2,25 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-fixture="${JAVAC_FRONTEND_PETCLINIC:-/home/jfsanchez/zonnedev/tmp/test/spring-petclinic}"
+fixture="${JAVAC_FRONTEND_PETCLINIC:-}"
+if [[ -z "${fixture}" ]]; then
+  fixture="$("${project_dir}/scripts/ensure-test-repository.sh" \
+    https://github.com/spring-projects/spring-petclinic.git \
+    f182358d02e4a68e52bdbabf55ca7800288511e7 \
+    "${project_dir}/target/upstream-fixtures/spring-petclinic")"
+fi
 output="${project_dir}/target/gradle-petclinic-model.ndjson"
 fixture_copy="${project_dir}/target/integration-fixtures/spring-petclinic"
 gradle_user_home="${project_dir}/target/gradle-user-home"
-project_jdk="${JAVAC_FRONTEND_PROJECT_JDK:-/home/jfsanchez/.sdkman/candidates/java/17.0.20-tem}"
+project_jdk="${JAVAC_FRONTEND_PROJECT_JDK:-${JMAN_TEST_JAVA_17_HOME:-${SDKMAN_DIR:-${HOME}/.sdkman}/candidates/java/17.0.20-tem}}"
 
 rm -rf "${fixture_copy}"
 mkdir -p "$(dirname "${fixture_copy}")" "${gradle_user_home}"
 cp -a "${fixture}/." "${fixture_copy}/"
 (
   cd "${fixture_copy}"
+  export JAVA_HOME="${project_jdk}"
+  export PATH="${JAVA_HOME}/bin:${PATH}"
   export GRADLE_USER_HOME="${gradle_user_home}"
   ./gradlew \
     --console=plain \

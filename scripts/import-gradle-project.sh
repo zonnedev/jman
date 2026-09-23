@@ -11,7 +11,7 @@ workspace="$(cd "$1" && pwd)"
 output="$2"
 gradle_user_home="${JAVA_LSP_GRADLE_USER_HOME:-${project_dir}/target/gradle-user-home}"
 gradle_project_cache="${JAVA_LSP_GRADLE_PROJECT_CACHE_DIR:-${project_dir}/target/gradle-project-cache}"
-build_java_home="${JAVA_LSP_BUILD_JAVA_HOME:-${JAVA_HOME:-/home/jfsanchez/.sdkman/candidates/java/25.0.4-graal}}"
+build_java_home="${JAVA_LSP_BUILD_JAVA_HOME:-${JAVA_HOME:-}}"
 gradle="${workspace}/gradlew"
 
 if [[ ! -x "${gradle}" ]]; then

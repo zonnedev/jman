@@ -111,8 +111,9 @@ Alpine Linux are not supported yet.
 
 ## Contributing
 
-Use `make gates` for the complete local acceptance suite and `make ci` for the
-portable CI suite. Maintainer workflows live in the
+Use `make ci` for the normal push suite and `make release-gates` for the full
+tag acceptance suite, including pinned real-world projects and the
+Maven/Gradle/JDK compatibility matrix. Maintainer workflows live in the
 [release guide](docs/releasing.md); user documentation intentionally keeps
 release engineering separate from everyday JMAN usage.
 

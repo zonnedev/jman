@@ -47,21 +47,24 @@ does not support long-lived Marketplace tokens.
 ## Prepare a release
 
 Record user-facing changes below each `Unreleased` heading. From a clean
-reviewed commit, run the complete maintainer suite:
+reviewed commit, run the portable suite before preparing the tag:
 
 ```bash
 cargo fmt --all -- --check
-make gates
-make test-compatibility-matrix
+make ci
 JAVAC_FRONTEND_LIB_DIR=target/native LD_LIBRARY_PATH=target/native \
   cargo clippy --workspace --all-targets --all-features -- -D warnings
 npm audit --prefix editors/vscode --audit-level=high
 ```
 
-The complete local suite includes external Maven/Gradle compatibility fixtures
-that are intentionally not downloaded by CI. GitHub Actions reruns the portable
-Rust, Java, native-frontend, extension, release-contract, formatting, lint, and
-dependency-audit checks against the exact tag.
+For a local rehearsal of the tag's full acceptance suite, run
+`make release-gates`. It fetches Spring Petclinic and Gson at fixed Git commits
+into `target/upstream-fixtures/`. The JDK 17/21/25, Maven
+3.9.9, and Gradle 8.7/8.14.1/9.1.0 compatibility tools must be installed or
+configured with the `JMAN_TEST_JAVA_*_HOME` and `JAVA_LSP_MATRIX_*` variables.
+The release workflow provisions those tools and runs `make release-gates`
+against the exact tag before packaging or publishing any assets. Normal pushes
+and pull requests continue to run the smaller `make ci` suite.
 
 Then prepare the coordinated release from the same clean worktree:
 

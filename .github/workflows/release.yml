@@ -19,7 +19,7 @@ jobs:
   build:
     name: Build and attest release assets
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 240
     permissions:
       contents: read
       id-token: write
@@ -48,6 +48,27 @@ jobs:
           java-version: "25.0.4"
           distribution: graalvm
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up compatibility JDKs
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            21
+            25
+          set-default: false
+
+      - name: Configure compatibility tool paths
+        run: |
+          printf 'JMAN_TEST_JAVA_17_HOME=%s\n' "${JAVA_HOME_17_X64}" >> "${GITHUB_ENV}"
+          printf 'JMAN_TEST_JAVA_21_HOME=%s\n' "${JAVA_HOME_21_X64}" >> "${GITHUB_ENV}"
+          printf 'JMAN_TEST_JAVA_25_HOME=%s\n' "${JAVA_HOME_25_X64}" >> "${GITHUB_ENV}"
+          printf 'JAVA_LSP_MATRIX_MAVEN=%s\n' "${GITHUB_WORKSPACE}/target/compatibility-tools/apache-maven-3.9.9/bin/mvn" >> "${GITHUB_ENV}"
+          printf 'JAVA_LSP_MAVEN=%s\n' "${GITHUB_WORKSPACE}/target/compatibility-tools/apache-maven-3.9.9/bin/mvn" >> "${GITHUB_ENV}"
+          printf 'JAVA_LSP_MATRIX_GRADLE_8_7=%s\n' "${GITHUB_WORKSPACE}/target/compatibility-tools/gradle-8.7/bin/gradle" >> "${GITHUB_ENV}"
+          printf 'JAVA_LSP_MATRIX_GRADLE_8_14_1=%s\n' "${GITHUB_WORKSPACE}/target/compatibility-tools/gradle-8.14.1/bin/gradle" >> "${GITHUB_ENV}"
+          printf 'JAVA_LSP_MATRIX_GRADLE_9_1_0=%s\n' "${GITHUB_WORKSPACE}/target/compatibility-tools/gradle-9.1.0/bin/gradle" >> "${GITHUB_ENV}"
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -78,6 +99,12 @@ jobs:
       - name: Install extension dependencies
         run: npm ci --prefix editors/vscode
 
+      - name: Provision pinned compatibility tools
+        run: |
+          ./scripts/setup-compatibility-tools.sh
+          printf '%s\n' "${GITHUB_WORKSPACE}/target/compatibility-tools/apache-maven-3.9.9/bin" >> "${GITHUB_PATH}"
+          printf '%s\n' "${GITHUB_WORKSPACE}/target/compatibility-tools/gradle-9.1.0/bin" >> "${GITHUB_PATH}"
+
       - name: Validate release source
         run: |
           cargo fmt --all -- --check
@@ -85,6 +112,9 @@ jobs:
           JAVAC_FRONTEND_LIB_DIR=target/native LD_LIBRARY_PATH=target/native \
             cargo clippy --workspace --all-targets --all-features -- -D warnings
           npm audit --prefix editors/vscode --audit-level=high
+
+      - name: Verify full release compatibility
+        run: make release-gates
 
       - name: Build CLI archive
         run: make release
