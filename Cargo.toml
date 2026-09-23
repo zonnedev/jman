@@ -22,26 +22,26 @@ readme = "README.md"
 
 [workspace.dependencies]
 anyhow = "1.0"
-base64 = "0.22"
+base64 = "0.23"
 clap = { version = "4.5", features = ["derive"] }
 clap_complete = "4.5"
-dirs = "6.0"
+dirs = "7.0"
 futures = "0.3"
 flate2 = "1.0"
 fs2 = "0.4"
 hex = "0.4"
-indicatif = "0.17"
-md-5 = "0.10"
+indicatif = "0.18"
+md-5 = "0.11"
 reqwest = { version = "0.12", default-features = false, features = ["http2", "json", "multipart", "rustls-tls", "stream"] }
-roxmltree = "0.20"
+roxmltree = "0.21"
 serde = { version = "1.0", features = ["derive"] }
-sha1 = "0.10"
-sha2 = "0.10"
+sha1 = "0.11"
+sha2 = "0.11"
 tar = "0.4"
 thiserror = "2.0"
 tokio = { version = "1.0", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
-toml = "0.8"
-zip = { version = "4.0", default-features = false, features = ["deflate"] }
+toml = "1.1"
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
