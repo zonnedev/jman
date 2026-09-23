@@ -28,8 +28,14 @@ jobs:
 
       - name: Lint GitHub Actions workflows
         run: |
+          actionlint_dir=""
+          cleanup() {
+            if [[ -n "${actionlint_dir}" ]]; then
+              rm -rf -- "${actionlint_dir}"
+            fi
+          }
+          trap cleanup EXIT
           actionlint_dir="$(mktemp -d)"
-          trap 'rm -rf "${actionlint_dir}"' EXIT
           curl --fail --location --silent --show-error \
             https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
             --output "${actionlint_dir}/actionlint.tar.gz"

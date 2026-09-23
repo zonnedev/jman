@@ -2,9 +2,23 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -z "${JMAN_TEST_TEMP_ROOT:-}" ]]; then
+  exec "${project_dir}/scripts/run-test-command.sh" "$0" "$@"
+fi
+fixture_dir=""
+remote_dir=""
+cleanup() {
+  if [[ -n "${fixture_dir}" ]]; then
+    rm -rf -- "${fixture_dir}"
+  fi
+  if [[ -n "${remote_dir}" ]]; then
+    rm -rf -- "${remote_dir}"
+  fi
+}
+trap cleanup EXIT
+
 fixture_dir="$(mktemp -d "${TMPDIR:-/tmp}/jman-prepare-release.XXXXXX")"
 remote_dir="$(mktemp -d "${TMPDIR:-/tmp}/jman-prepare-release-remote.XXXXXX")"
-trap 'rm -rf "${fixture_dir}" "${remote_dir}"' EXIT
 
 mkdir -p \
   "${fixture_dir}/.github/workflows" \
@@ -146,6 +160,18 @@ EOF
 
   if ./scripts/prepare-release.sh 0.5.1 </dev/null >/dev/null 2>&1; then
     echo "Existing release tag was accepted" >&2
+    exit 1
+  fi
+
+  sed -i '/^## \[Unreleased\]$/d' CHANGELOG.md
+  git add CHANGELOG.md
+  git commit --quiet -m 'break changelog fixture'
+  if ./scripts/prepare-release.sh 0.5.2 </dev/null >/dev/null 2>&1; then
+    echo "Missing changelog heading was accepted" >&2
+    exit 1
+  fi
+  if compgen -G 'CHANGELOG.md.*' >/dev/null; then
+    echo "Failed changelog update left a temporary file behind" >&2
     exit 1
   fi
 )

@@ -2,6 +2,9 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -z "${JMAN_TEST_TEMP_ROOT:-}" ]]; then
+  exec "${project_dir}/scripts/run-test-command.sh" "$0" "$@"
+fi
 # shellcheck source=use-sdkman-java.sh
 source "${project_dir}/scripts/use-sdkman-java.sh"
 gson="${GSON_DIR:-${project_dir}/target/integration-fixtures/gson-maven}"

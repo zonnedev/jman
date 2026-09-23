@@ -2,6 +2,9 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -z "${JMAN_TEST_TEMP_ROOT:-}" ]]; then
+  exec "${project_dir}/scripts/run-test-command.sh" "$0" "$@"
+fi
 workspace_version="$({
   awk '
     $0 == "[workspace.package]" { in_workspace_package = 1; next }
@@ -16,6 +19,7 @@ workspace_version="$({
 extension_version="$(node -p 'require(process.argv[1]).version' "${project_dir}/editors/vscode/package.json")"
 release_tag="v${workspace_version}"
 test_root="${project_dir}/target/release-automation-test"
+unsafe_root=""
 release_dist_dir="${test_root}/release-dist"
 vscode_dist_dir="${test_root}/vscode"
 output_dir="${test_root}/github-release"
@@ -32,9 +36,17 @@ workspace_rust_version="$({
   ' "${project_dir}/Cargo.toml"
 })"
 
+cleanup() {
+  rm -rf -- "${test_root}"
+  if [[ -n "${unsafe_root}" ]]; then
+    rm -rf -- "${unsafe_root}"
+  fi
+}
+trap cleanup EXIT
+
+unsafe_root="$(mktemp -d "/tmp/jman-release-automation-unsafe.XXXXXX")"
 rm -rf "${test_root}"
 mkdir -p "${release_dist_dir}" "${vscode_dist_dir}"
-trap 'rm -rf "${test_root}"' EXIT
 
 printf 'cli fixture\n' > "${release_dist_dir}/jman-${workspace_version}-linux-x86_64.tar.gz"
 printf 'vsix fixture\n' > "${vscode_dist_dir}/jman-java-${extension_version}-linux-x64.vsix"
@@ -50,7 +62,7 @@ if "${project_dir}/scripts/verify-release-version.sh" >/dev/null 2>&1; then
 fi
 if JMAN_RELEASE_DIST_DIR="${release_dist_dir}" \
   JMAN_VSCODE_DIST_DIR="${vscode_dist_dir}" \
-  JMAN_GITHUB_RELEASE_DIR="/tmp/jman-release-automation-unsafe" \
+  JMAN_GITHUB_RELEASE_DIR="${unsafe_root}/github-release" \
   "${project_dir}/scripts/stage-release-artifacts.sh" "${release_tag}" >/dev/null 2>&1; then
   echo "Release staging outside the project target directory was accepted" >&2
   exit 1

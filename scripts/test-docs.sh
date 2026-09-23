@@ -2,6 +2,9 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -z "${JMAN_TEST_TEMP_ROOT:-}" ]]; then
+  exec "${project_dir}/scripts/run-test-command.sh" "$0" "$@"
+fi
 cd "${project_dir}"
 
 status=0

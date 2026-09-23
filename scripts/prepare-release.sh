@@ -146,14 +146,21 @@ replace_documented_version docs/jman-java.md
 replace_documented_version docs/releasing.md
 replace_documented_version docs/vscode-release-checklist.md
 
-add_changelog_release() {
+add_changelog_release() (
   local file=$1
   local unreleased_heading=$2
   local release_heading=$3
-  local temporary_file
+  local temporary_file=""
+
+  cleanup() {
+    if [[ -n "${temporary_file}" ]]; then
+      rm -f -- "${temporary_file}"
+    fi
+  }
+  trap cleanup EXIT
 
   if grep -Fqx "${release_heading}" "${file}"; then
-    return
+    exit 0
   fi
   temporary_file="$(mktemp "${file}.XXXXXX")"
   awk -v unreleased="${unreleased_heading}" -v release="${release_heading}" '
@@ -170,7 +177,8 @@ add_changelog_release() {
     }
   ' "${file}" > "${temporary_file}"
   mv "${temporary_file}" "${file}"
-}
+  temporary_file=""
+)
 
 add_changelog_release \
   CHANGELOG.md \

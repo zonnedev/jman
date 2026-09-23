@@ -2,6 +2,9 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -z "${JMAN_TEST_TEMP_ROOT:-}" ]]; then
+  exec "${project_dir}/scripts/run-test-command.sh" "$0" "$@"
+fi
 matrix_dir="${project_dir}/target/compatibility-matrix"
 maven_fixture="${project_dir}/tests/fixtures/compatibility/maven"
 gradle_fixture="${project_dir}/tests/fixtures/compatibility/gradle"

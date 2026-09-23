@@ -28,6 +28,7 @@ mkdir -p "$(dirname "${output}")" "${gradle_user_home}" "${gradle_project_cache}
   fi
   "${gradle}" \
     --console=plain \
+    --no-daemon \
     --no-configuration-cache \
     --project-cache-dir "${gradle_project_cache}" \
     -I "${project_dir}/tools/gradle-importer/javac-frontend-model.init.gradle" \

@@ -31,8 +31,14 @@ fi
 
 parent="$(dirname "${destination}")"
 mkdir -p "${parent}"
+staging=""
+cleanup() {
+  if [[ -n "${staging}" ]]; then
+    rm -rf -- "${staging}"
+  fi
+}
+trap cleanup EXIT
 staging="$(mktemp -d "${parent}/.test-repository.XXXXXX")"
-trap 'rm -rf -- "${staging}"' EXIT
 git -C "${staging}" init -q
 git -C "${staging}" remote add origin "${repository}"
 git -C "${staging}" fetch -q --depth 1 origin "${revision}"
@@ -43,5 +49,6 @@ if [[ "${actual}" != "${revision}" ]]; then
   exit 1
 fi
 mv -- "${staging}" "${destination}"
+staging=""
 trap - EXIT
 printf '%s\n' "${destination}"

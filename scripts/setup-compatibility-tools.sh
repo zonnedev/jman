@@ -5,13 +5,20 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tools_dir="${project_dir}/target/compatibility-tools"
 mkdir -p "${tools_dir}"
 
-download_gradle() {
+download_gradle() (
   local version="$1" checksum="$2"
   local installation="${tools_dir}/gradle-${version}"
   if [[ -x "${installation}/bin/gradle" ]]; then
-    return
+    exit 0
   fi
-  local staging archive
+  local staging="" archive
+  cleanup() {
+    if [[ -n "${staging}" ]]; then
+      rm -rf -- "${staging}"
+    fi
+  }
+  trap cleanup EXIT
+
   staging="$(mktemp -d "${tools_dir}/.gradle-${version}.XXXXXX")"
   archive="${staging}/gradle.zip"
   curl --fail --location --silent --show-error --retry 3 \
@@ -20,15 +27,21 @@ download_gradle() {
   printf '%s  %s\n' "${checksum}" "${archive}" | sha256sum --check -
   unzip -q "${archive}" -d "${staging}"
   mv -- "${staging}/gradle-${version}" "${installation}"
-  rm -rf -- "${staging}"
-}
+)
 
-download_maven() {
+download_maven() (
   local installation="${tools_dir}/apache-maven-3.9.9"
   if [[ -x "${installation}/bin/mvn" ]]; then
-    return
+    exit 0
   fi
-  local staging archive
+  local staging="" archive
+  cleanup() {
+    if [[ -n "${staging}" ]]; then
+      rm -rf -- "${staging}"
+    fi
+  }
+  trap cleanup EXIT
+
   staging="$(mktemp -d "${tools_dir}/.maven-3.9.9.XXXXXX")"
   archive="${staging}/maven.tar.gz"
   curl --fail --location --silent --show-error --retry 3 \
@@ -39,8 +52,7 @@ download_maven() {
     "${archive}" | sha512sum --check -
   tar -xzf "${archive}" -C "${staging}"
   mv -- "${staging}/apache-maven-3.9.9" "${installation}"
-  rm -rf -- "${staging}"
-}
+)
 
 download_maven
 download_gradle 8.7 544c35d6bd849ae8a5ed0bcea39ba677dc40f49df7d1835561582da2009b961d
