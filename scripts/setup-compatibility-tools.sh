@@ -3,6 +3,29 @@ set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tools_dir="${project_dir}/target/compatibility-tools"
+install_maven=0
+install_gradle=0
+
+if [[ "$#" -eq 0 ]]; then
+  install_maven=1
+  install_gradle=1
+else
+  for argument in "$@"; do
+    case "${argument}" in
+      --maven) install_maven=1 ;;
+      --gradle) install_gradle=1 ;;
+      --all)
+        install_maven=1
+        install_gradle=1
+        ;;
+      *)
+        echo "usage: $0 [--maven | --gradle | --all]" >&2
+        exit 2
+        ;;
+    esac
+  done
+fi
+
 mkdir -p "${tools_dir}"
 
 download_gradle() (
@@ -54,8 +77,13 @@ download_maven() (
   mv -- "${staging}/apache-maven-3.9.9" "${installation}"
 )
 
-download_maven
-download_gradle 8.7 544c35d6bd849ae8a5ed0bcea39ba677dc40f49df7d1835561582da2009b961d
-download_gradle 8.14.1 845952a9d6afa783db70bb3b0effaae45ae5542ca2bb7929619e8af49cb634cf
-download_gradle 9.1.0 a17ddd85a26b6a7f5ddb71ff8b05fc5104c0202c6e64782429790c933686c806
-echo 'Pinned Maven and Gradle compatibility tools are ready'
+if [[ "${install_maven}" -eq 1 ]]; then
+  download_maven
+  echo 'Pinned Maven compatibility tool is ready'
+fi
+if [[ "${install_gradle}" -eq 1 ]]; then
+  download_gradle 8.7 544c35d6bd849ae8a5ed0bcea39ba677dc40f49df7d1835561582da2009b961d
+  download_gradle 8.14.1 845952a9d6afa783db70bb3b0effaae45ae5542ca2bb7929619e8af49cb634cf
+  download_gradle 9.1.0 a17ddd85a26b6a7f5ddb71ff8b05fc5104c0202c6e64782429790c933686c806
+  echo 'Pinned Gradle compatibility tools are ready'
+fi

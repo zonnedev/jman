@@ -7,9 +7,10 @@ DEBUG_NATIVE_FRONTEND := $(CURDIR)/target/debug/libjman_javac_frontend.so
 NATIVE_FRONTEND_INPUTS := \
 	$(shell find tools/javac-bridge/src/main -type f) \
 	scripts/build-native.sh \
-	scripts/use-sdkman-java.sh
+	scripts/setup-test-jdks.sh \
+	scripts/use-test-java.sh
 
-.PHONY: gates release-gates ci test test-rust test-java test-jman-runner test-processor-worker vineflower jacoco test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs docs serve-docs prepare-release package-vscode release stage-release native test-native clean clear
+.PHONY: gates release-gates ci test test-toolchain-bootstrap test-rust test-java test-jman-runner test-processor-worker vineflower jacoco maven-tool compatibility-tools test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs docs serve-docs prepare-release package-vscode release stage-release native test-native clean clear
 
 gates: test test-native test-coverage test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-vscode-extension test-neovim-plugin test-installer test-docs
 
@@ -17,10 +18,13 @@ release-gates: gates test-compatibility-matrix test-jpms-correctness
 
 ci: test test-native test-coverage test-publishing test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs
 
-test: test-rust test-java test-jman-runner
+test: test-toolchain-bootstrap test-rust test-java test-jman-runner
+
+test-toolchain-bootstrap:
+	./scripts/test-toolchain-bootstrap.sh
 
 test-rust: $(DEBUG_NATIVE_FRONTEND) vineflower jacoco
-	. "$(CURDIR)/scripts/use-sdkman-java.sh"; \
+	. "$(CURDIR)/scripts/use-test-java.sh"; \
 	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
 	LD_LIBRARY_PATH="$(CURDIR)/target/native$${LD_LIBRARY_PATH:+:$${LD_LIBRARY_PATH}}" \
 	./scripts/run-test-command.sh cargo test --workspace
@@ -40,14 +44,20 @@ vineflower:
 jacoco:
 	./scripts/build-jacoco.sh
 
+maven-tool:
+	./scripts/setup-compatibility-tools.sh --maven
+
+compatibility-tools:
+	./scripts/setup-compatibility-tools.sh --all
+
 test-coverage: jacoco
-	. "$(CURDIR)/scripts/use-sdkman-java.sh"; \
+	. "$(CURDIR)/scripts/use-test-java.sh"; \
 	JMAN_JACOCO_AGENT="$(CURDIR)/target/jacoco-0.8.15-agent.jar" \
 	JMAN_JACOCO_CLI="$(CURDIR)/target/jacoco-0.8.15-cli.jar" \
 	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
 	LD_LIBRARY_PATH="$(CURDIR)/target/native$${LD_LIBRARY_PATH:+:$${LD_LIBRARY_PATH}}" \
 	./scripts/run-test-command.sh cargo test -p jman-build coverage_ -- --nocapture
-	. "$(CURDIR)/scripts/use-sdkman-java.sh"; \
+	. "$(CURDIR)/scripts/use-test-java.sh"; \
 	JMAN_JACOCO_AGENT="$(CURDIR)/target/jacoco-0.8.15-agent.jar" \
 	JMAN_JACOCO_CLI="$(CURDIR)/target/jacoco-0.8.15-cli.jar" \
 	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
@@ -55,13 +65,13 @@ test-coverage: jacoco
 	./scripts/run-test-command.sh cargo test -p jman-cli compiles_tests_and_launches_junit_platform_console -- --nocapture
 
 test-vineflower: vineflower
-	. "$(CURDIR)/scripts/use-sdkman-java.sh"; \
+	. "$(CURDIR)/scripts/use-test-java.sh"; \
 	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
 	LD_LIBRARY_PATH="$(CURDIR)/target/native" \
 	./scripts/run-test-command.sh cargo test -p jman-java-lsp --features native-ffi \
 		vineflower_fallback_is_content_addressed_and_locates_overload
 
-test-maven-import: test-java
+test-maven-import: test-java maven-tool
 	./scripts/test-maven-import.sh
 
 test-gradle-import:
@@ -80,7 +90,7 @@ test-project-importers: test-java test-maven-import test-gradle-import
 	grep -q '"buildSystem":"maven"' "$(CURDIR)/target/reusable-petclinic-maven.ndjson"
 	grep -q '"buildSystem":"gradle"' "$(CURDIR)/target/reusable-petclinic-gradle.ndjson"
 
-test-publishing: $(DEBUG_NATIVE_FRONTEND) vineflower
+test-publishing: $(DEBUG_NATIVE_FRONTEND) vineflower compatibility-tools
 	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
 	LD_LIBRARY_PATH="$(CURDIR)/target/native$${LD_LIBRARY_PATH:+:$${LD_LIBRARY_PATH}}" \
 	cargo build -p jman-cli
@@ -96,7 +106,7 @@ $(DEBUG_NATIVE_FRONTEND): $(NATIVE_FRONTEND)
 	cp "$(NATIVE_FRONTEND)" "$(DEBUG_NATIVE_FRONTEND)"
 
 test-native: native
-	. "$(CURDIR)/scripts/use-sdkman-java.sh"; \
+	. "$(CURDIR)/scripts/use-test-java.sh"; \
 	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
 	./scripts/run-test-command.sh cargo test -p javac-frontend --features native-ffi -- --test-threads=1
 
@@ -105,17 +115,17 @@ test-real-semantics: native test-maven-import
 
 test-lsp: native test-maven-import test-gradle-annotation-processing test-processor-worker test-vineflower
 	JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" ./scripts/run-test-command.sh cargo build -p jman-java-lsp --features native-ffi
-	. "$(CURDIR)/scripts/use-sdkman-java.sh"; \
+	. "$(CURDIR)/scripts/use-test-java.sh"; \
 	./scripts/run-test-command.sh cargo run --quiet -p jman-java-lsp --example subprocess_probe -- \
 		"$(CURDIR)/target/debug/jman-java-lsp" \
 		"$(CURDIR)/target/integration-fixtures/spring-petclinic-maven" \
 		gradle
-	. "$(CURDIR)/scripts/use-sdkman-java.sh"; \
+	. "$(CURDIR)/scripts/use-test-java.sh"; \
 	./scripts/run-test-command.sh cargo run --quiet -p jman-java-lsp --example subprocess_probe -- \
 		"$(CURDIR)/target/debug/jman-java-lsp" \
 		"$(CURDIR)/target/integration-fixtures/spring-petclinic-maven" \
 		maven
-	. "$(CURDIR)/scripts/use-sdkman-java.sh"; \
+	. "$(CURDIR)/scripts/use-test-java.sh"; \
 	JAVA_HOME="$$JAVA_HOME" \
 	JAVA_LSP_PROCESSOR_WORKER_CLASSPATH="$(CURDIR)/target/processor-worker.jar" \
 	LD_LIBRARY_PATH="$(CURDIR)/target/native" \
@@ -155,7 +165,7 @@ prepare-release:
 test-jpms-correctness: native test-java test-processor-worker test-maven-import
 	./scripts/test-jpms-correctness.sh
 
-test-compatibility-matrix: test-java
+test-compatibility-matrix: test-java compatibility-tools
 	./scripts/test-compatibility-matrix.sh
 
 package-vscode: native jacoco

@@ -5,14 +5,22 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ -z "${JMAN_TEST_TEMP_ROOT:-}" ]]; then
   exec "${project_dir}/scripts/run-test-command.sh" "$0" "$@"
 fi
+# shellcheck source=use-test-java.sh
+source "${project_dir}/scripts/use-test-java.sh"
 fixture_dir="${project_dir}/tests/fixtures/publishing"
 work_dir="${project_dir}/target/publishing-acceptance"
 repository="${work_dir}/repository"
 jman_binary="${JMAN_TEST_BINARY:-${project_dir}/target/debug/jman}"
+maven_binary="${JAVA_LSP_MATRIX_MAVEN:-${project_dir}/target/compatibility-tools/apache-maven-3.9.9/bin/mvn}"
+gradle_binary="${JAVA_LSP_MATRIX_GRADLE_9_1_0:-${project_dir}/target/compatibility-tools/gradle-9.1.0/bin/gradle}"
 expected="hello from published modules"
 
-for executable in "${jman_binary}" java mvn gradle; do
-  if ! command -v "${executable}" >/dev/null 2>&1; then
+for executable in \
+  "${jman_binary}" \
+  "${JAVA_HOME}/bin/java" \
+  "${maven_binary}" \
+  "${gradle_binary}"; do
+  if [[ ! -x "${executable}" ]]; then
     echo "Publishing acceptance executable is unavailable: ${executable}" >&2
     exit 1
   fi
@@ -67,7 +75,7 @@ test "${jman_output}" = "${expected}"
 
 (
   cd "${work_dir}/maven-consumer"
-  mvn --batch-mode --no-transfer-progress -q \
+  "${maven_binary}" --batch-mode --no-transfer-progress -q \
     "-Dmaven.repo.local=${work_dir}/maven-cache" \
     "-Dpublishing.repository=${repository_url}" \
     compile \
@@ -83,7 +91,7 @@ case "${maven_classpath}" in
     ;;
 esac
 maven_output="$(
-  java -cp "${work_dir}/maven-consumer/target/classes:${maven_classpath}" \
+  "${JAVA_HOME}/bin/java" -cp "${work_dir}/maven-consumer/target/classes:${maven_classpath}" \
     io.github.zonnedev.jman.fixture.consumer.Application
 )"
 test "${maven_output}" = "${expected}"
@@ -91,7 +99,7 @@ test "${maven_output}" = "${expected}"
 gradle_output="$(
   cd "${work_dir}/gradle-consumer"
   GRADLE_USER_HOME="${work_dir}/gradle-user-home" \
-    gradle --no-daemon --console=plain -q \
+    "${gradle_binary}" --no-daemon --console=plain -q \
       "-PpublishingRepository=${repository_url}" run
 )"
 test "${gradle_output}" = "${expected}"

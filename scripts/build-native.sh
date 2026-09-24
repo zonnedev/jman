@@ -2,8 +2,8 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# shellcheck source=use-sdkman-java.sh
-source "${project_dir}/scripts/use-sdkman-java.sh"
+# shellcheck source=use-test-java.sh
+source "${project_dir}/scripts/use-test-java.sh"
 classes_dir="${project_dir}/target/native-classes"
 native_dir="${project_dir}/target/native"
 

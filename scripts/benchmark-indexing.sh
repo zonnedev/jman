@@ -6,8 +6,8 @@ workspace="${1:?usage: benchmark-indexing.sh PROJECT_ROOT [BUILD_SYSTEM]}"
 build_system="${2:-auto}"
 report="${project_dir}/target/indexing-benchmark-$(basename "${workspace}").jsonl"
 binary="${project_dir}/target/release/jman-java-lsp"
-# shellcheck source=use-sdkman-java.sh
-source "${project_dir}/scripts/use-sdkman-java.sh"
+# shellcheck source=use-test-java.sh
+source "${project_dir}/scripts/use-test-java.sh"
 
 JAVAC_FRONTEND_LIB_DIR="${project_dir}/target/native" \
   cargo build --release -p jman-java-lsp --features native-ffi >/dev/null

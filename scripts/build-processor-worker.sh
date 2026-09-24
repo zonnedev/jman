@@ -2,8 +2,8 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# shellcheck source=use-sdkman-java.sh
-source "${project_dir}/scripts/use-sdkman-java.sh"
+# shellcheck source=use-test-java.sh
+source "${project_dir}/scripts/use-test-java.sh"
 classes="${project_dir}/target/processor-worker-classes"
 jar_file="${project_dir}/target/processor-worker.jar"
 processor_source="${project_dir}/tools/annotation-processor-worker/src/main/java/io/github/zonnedev/jman/processor/worker/ProcessorWorker.java"

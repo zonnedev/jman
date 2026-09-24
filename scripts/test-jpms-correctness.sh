@@ -5,12 +5,12 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ -z "${JMAN_TEST_TEMP_ROOT:-}" ]]; then
   exec "${project_dir}/scripts/run-test-command.sh" "$0" "$@"
 fi
-# shellcheck source=use-sdkman-java.sh
-source "${project_dir}/scripts/use-sdkman-java.sh"
+# shellcheck source=use-test-java.sh
+source "${project_dir}/scripts/use-test-java.sh"
 gson="${GSON_DIR:-${project_dir}/target/integration-fixtures/gson-maven}"
 model="${project_dir}/target/gson-maven-model.ndjson"
 semantic_fixture="${project_dir}/tests/fixtures/compatibility/maven"
-maven_bin="${JAVA_LSP_MATRIX_MAVEN:-${SDKMAN_DIR:-${HOME}/.sdkman}/candidates/maven/3.9.9/bin/mvn}"
+maven_bin="${JAVA_LSP_MATRIX_MAVEN:-${project_dir}/target/compatibility-tools/apache-maven-3.9.9/bin/mvn}"
 export PATH="$(dirname "${maven_bin}"):${PATH}"
 
 JAVA_LSP_MAVEN="${maven_bin}" \

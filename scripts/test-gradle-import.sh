@@ -5,6 +5,8 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ -z "${JMAN_TEST_TEMP_ROOT:-}" ]]; then
   exec "${project_dir}/scripts/run-test-command.sh" "$0" "$@"
 fi
+# shellcheck source=use-test-jdks.sh
+source "${project_dir}/scripts/use-test-jdks.sh"
 fixture="${JAVAC_FRONTEND_PETCLINIC:-}"
 if [[ -z "${fixture}" ]]; then
   fixture="$("${project_dir}/scripts/ensure-test-repository.sh" \
@@ -15,7 +17,7 @@ fi
 output="${project_dir}/target/gradle-petclinic-model.ndjson"
 fixture_copy="${project_dir}/target/integration-fixtures/spring-petclinic"
 gradle_user_home="${project_dir}/target/gradle-user-home"
-project_jdk="${JAVAC_FRONTEND_PROJECT_JDK:-${JMAN_TEST_JAVA_17_HOME:-${SDKMAN_DIR:-${HOME}/.sdkman}/candidates/java/17.0.20-tem}}"
+project_jdk="${JAVAC_FRONTEND_PROJECT_JDK:-${JMAN_TEST_JAVA_17_HOME}}"
 
 rm -rf "${fixture_copy}"
 mkdir -p "$(dirname "${fixture_copy}")" "${gradle_user_home}"

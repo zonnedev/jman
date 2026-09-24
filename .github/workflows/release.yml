@@ -42,33 +42,8 @@ jobs:
           git tag --points-at HEAD --list "${RELEASE_TAG}" | grep -Fx "${RELEASE_TAG}"
           ./scripts/verify-release-version.sh "${RELEASE_TAG}"
 
-      - name: Set up GraalVM
-        uses: graalvm/setup-graalvm@5298d94fb55a4f185c602eeac5de1b553882abe2 # v1.6.4
-        with:
-          java-version: "25.0.4"
-          distribution: graalvm
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up compatibility JDKs
-        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
-        with:
-          distribution: temurin
-          java-version: |
-            17
-            21
-            25
-          set-default: false
-
-      - name: Configure compatibility tool paths
-        run: |
-          printf 'JMAN_TEST_JAVA_17_HOME=%s\n' "${JAVA_HOME_17_X64}" >> "${GITHUB_ENV}"
-          printf 'JMAN_TEST_JAVA_21_HOME=%s\n' "${JAVA_HOME_21_X64}" >> "${GITHUB_ENV}"
-          printf 'JMAN_TEST_JAVA_25_HOME=%s\n' "${JAVA_HOME_25_X64}" >> "${GITHUB_ENV}"
-          printf 'JAVA_LSP_MATRIX_MAVEN=%s\n' "${GITHUB_WORKSPACE}/target/compatibility-tools/apache-maven-3.9.9/bin/mvn" >> "${GITHUB_ENV}"
-          printf 'JAVA_LSP_MAVEN=%s\n' "${GITHUB_WORKSPACE}/target/compatibility-tools/apache-maven-3.9.9/bin/mvn" >> "${GITHUB_ENV}"
-          printf 'JAVA_LSP_MATRIX_GRADLE_8_7=%s\n' "${GITHUB_WORKSPACE}/target/compatibility-tools/gradle-8.7/bin/gradle" >> "${GITHUB_ENV}"
-          printf 'JAVA_LSP_MATRIX_GRADLE_8_14_1=%s\n' "${GITHUB_WORKSPACE}/target/compatibility-tools/gradle-8.14.1/bin/gradle" >> "${GITHUB_ENV}"
-          printf 'JAVA_LSP_MATRIX_GRADLE_9_1_0=%s\n' "${GITHUB_WORKSPACE}/target/compatibility-tools/gradle-9.1.0/bin/gradle" >> "${GITHUB_ENV}"
+      - name: Set up test JDKs with JMAN
+        run: ./scripts/setup-test-jdks.sh --all
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

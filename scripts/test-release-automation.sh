@@ -115,6 +115,17 @@ done
 grep -q 'make ci' "${workflow_dir}/ci.yml"
 grep -q 'make release-gates' "${workflow_dir}/release.yml"
 grep -q 'scripts/setup-compatibility-tools.sh' "${workflow_dir}/release.yml"
+grep -q 'scripts/setup-test-jdks.sh --graalvm' "${workflow_dir}/ci.yml"
+grep -q 'scripts/setup-test-jdks.sh --all' "${workflow_dir}/release.yml"
+if grep -R -Eq 'actions/setup-java|graalvm/setup-graalvm' \
+  "${workflow_dir}/ci.yml" "${workflow_dir}/release.yml"; then
+  echo "CI and release workflows must provision test JDKs through JMAN" >&2
+  exit 1
+fi
+grep -Fq 'bootstrap_version="0.7.1"' "${project_dir}/scripts/setup-test-jdks.sh"
+grep -Fq \
+  'bootstrap_sha256="989346585606ce1ebf731c4178033936e9b0e1fce397075de84cd11a559e8a31"' \
+  "${project_dir}/scripts/setup-test-jdks.sh"
 if grep -R -Eq '^rust-version[[:space:]]*=[[:space:]]*"' \
   "${project_dir}/crates"/*/Cargo.toml; then
   echo "Workspace crates must inherit workspace.package.rust-version" >&2

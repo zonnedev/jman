@@ -5,13 +5,15 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ -z "${JMAN_TEST_TEMP_ROOT:-}" ]]; then
   exec "${project_dir}/scripts/run-test-command.sh" "$0" "$@"
 fi
-# shellcheck source=use-sdkman-java.sh
-source "${project_dir}/scripts/use-sdkman-java.sh"
+# shellcheck source=use-test-java.sh
+source "${project_dir}/scripts/use-test-java.sh"
+# shellcheck source=use-test-jdks.sh
+source "${project_dir}/scripts/use-test-jdks.sh"
 petclinic="${project_dir}/target/integration-fixtures/spring-petclinic-maven"
 gson="${project_dir}/target/integration-fixtures/gson-maven"
 local_repository="${project_dir}/target/maven-repository"
-java_21_home="${JMAN_TEST_JAVA_21_HOME:-${SDKMAN_DIR:-${HOME}/.sdkman}/candidates/java/21.0.2-open}"
-maven_bin="${JAVA_LSP_MATRIX_MAVEN:-${SDKMAN_DIR:-${HOME}/.sdkman}/candidates/maven/3.9.9/bin/mvn}"
+java_21_home="${JMAN_TEST_JAVA_21_HOME}"
+maven_bin="${JAVA_LSP_MATRIX_MAVEN:-${project_dir}/target/compatibility-tools/apache-maven-3.9.9/bin/mvn}"
 
 (
   cd "${gson}"

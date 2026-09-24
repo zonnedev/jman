@@ -113,8 +113,11 @@ Alpine Linux are not supported yet.
 
 Use `make ci` for the normal push suite and `make release-gates` for the full
 tag acceptance suite, including pinned real-world projects and the
-Maven/Gradle/JDK compatibility matrix. Maintainer workflows live in the
-[release guide](docs/releasing.md); user documentation intentionally keeps
+Maven/Gradle/JDK compatibility matrix. The test setup bootstraps the
+checksum-pinned JMAN 0.7.1 release, then uses JMAN itself to provision the
+required GraalVM Community 25 and Temurin 17/21/25 installations under
+`target/`; no system-wide JDK manager is required. Maintainer workflows live
+in the [release guide](docs/releasing.md); user documentation intentionally keeps
 release engineering separate from everyday JMAN usage.
 
 To preview documentation locally, install

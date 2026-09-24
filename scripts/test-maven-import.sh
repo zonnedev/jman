@@ -5,6 +5,8 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ -z "${JMAN_TEST_TEMP_ROOT:-}" ]]; then
   exec "${project_dir}/scripts/run-test-command.sh" "$0" "$@"
 fi
+# shellcheck source=use-test-jdks.sh
+source "${project_dir}/scripts/use-test-jdks.sh"
 petclinic_fixture="${JAVAC_FRONTEND_PETCLINIC:-}"
 gson_fixture="${JAVAC_FRONTEND_GSON:-}"
 if [[ -z "${petclinic_fixture}" ]]; then
@@ -21,9 +23,9 @@ if [[ -z "${gson_fixture}" ]]; then
 fi
 local_repository="${project_dir}/target/maven-repository"
 classes_dir="${project_dir}/target/java-test-classes"
-maven_java_home="${JAVAC_FRONTEND_MAVEN_JAVA_HOME:-${JMAN_TEST_JAVA_17_HOME:-${SDKMAN_DIR:-${HOME}/.sdkman}/candidates/java/17.0.20-tem}}"
-java_21_home="${JMAN_TEST_JAVA_21_HOME:-${SDKMAN_DIR:-${HOME}/.sdkman}/candidates/java/21.0.2-open}"
-maven_bin="${JAVA_LSP_MATRIX_MAVEN:-${SDKMAN_DIR:-${HOME}/.sdkman}/candidates/maven/3.9.9/bin/mvn}"
+maven_java_home="${JAVAC_FRONTEND_MAVEN_JAVA_HOME:-${JMAN_TEST_JAVA_17_HOME}}"
+java_21_home="${JMAN_TEST_JAVA_21_HOME}"
+maven_bin="${JAVA_LSP_MATRIX_MAVEN:-${project_dir}/target/compatibility-tools/apache-maven-3.9.9/bin/mvn}"
 
 if [[ ! -x "${maven_java_home}/bin/java" ]]; then
   echo "Maven integration JDK 17 is not installed: ${maven_java_home}" >&2

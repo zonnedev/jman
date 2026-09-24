@@ -5,21 +5,23 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ -z "${JMAN_TEST_TEMP_ROOT:-}" ]]; then
   exec "${project_dir}/scripts/run-test-command.sh" "$0" "$@"
 fi
+# shellcheck source=use-test-jdks.sh
+source "${project_dir}/scripts/use-test-jdks.sh"
 matrix_dir="${project_dir}/target/compatibility-matrix"
 maven_fixture="${project_dir}/tests/fixtures/compatibility/maven"
 gradle_fixture="${project_dir}/tests/fixtures/compatibility/gradle"
-sdkman_root="${SDKMAN_DIR:-${HOME}/.sdkman}"
-maven_bin="${JAVA_LSP_MATRIX_MAVEN:-${sdkman_root}/candidates/maven/3.9.9/bin/mvn}"
+tools_dir="${project_dir}/target/compatibility-tools"
+maven_bin="${JAVA_LSP_MATRIX_MAVEN:-${tools_dir}/apache-maven-3.9.9/bin/mvn}"
 
 java_homes=(
-  "${JMAN_TEST_JAVA_17_HOME:-${sdkman_root}/candidates/java/17.0.20-tem}"
-  "${JMAN_TEST_JAVA_21_HOME:-${sdkman_root}/candidates/java/21.0.2-open}"
-  "${JMAN_TEST_JAVA_25_HOME:-${sdkman_root}/candidates/java/25-open}"
+  "${JMAN_TEST_JAVA_17_HOME}"
+  "${JMAN_TEST_JAVA_21_HOME}"
+  "${JMAN_TEST_JAVA_25_HOME}"
 )
 gradle_bins=(
-  "${JAVA_LSP_MATRIX_GRADLE_8_7:-${sdkman_root}/candidates/gradle/8.7/bin/gradle}"
-  "${JAVA_LSP_MATRIX_GRADLE_8_14_1:-${sdkman_root}/candidates/gradle/8.14.1/bin/gradle}"
-  "${JAVA_LSP_MATRIX_GRADLE_9_1_0:-${sdkman_root}/candidates/gradle/9.1.0/bin/gradle}"
+  "${JAVA_LSP_MATRIX_GRADLE_8_7:-${tools_dir}/gradle-8.7/bin/gradle}"
+  "${JAVA_LSP_MATRIX_GRADLE_8_14_1:-${tools_dir}/gradle-8.14.1/bin/gradle}"
+  "${JAVA_LSP_MATRIX_GRADLE_9_1_0:-${tools_dir}/gradle-9.1.0/bin/gradle}"
 )
 
 mkdir -p "${matrix_dir}"
