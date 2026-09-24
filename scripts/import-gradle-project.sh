@@ -9,13 +9,13 @@ fi
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workspace="$(cd "$1" && pwd)"
 output="$2"
-gradle_user_home="${JAVA_LSP_GRADLE_USER_HOME:-${project_dir}/target/gradle-user-home}"
-gradle_project_cache="${JAVA_LSP_GRADLE_PROJECT_CACHE_DIR:-${project_dir}/target/gradle-project-cache}"
-build_java_home="${JAVA_LSP_BUILD_JAVA_HOME:-${JAVA_HOME:-}}"
+gradle_user_home="${JMAN_JAVA_LSP_GRADLE_USER_HOME:-${project_dir}/target/gradle-user-home}"
+gradle_project_cache="${JMAN_JAVA_LSP_GRADLE_PROJECT_CACHE_DIR:-${project_dir}/target/gradle-project-cache}"
+build_java_home="${JMAN_JAVA_LSP_BUILD_JAVA_HOME:-${JAVA_HOME:-}}"
 gradle="${workspace}/gradlew"
 
 if [[ ! -x "${gradle}" ]]; then
-  gradle="${JAVA_LSP_GRADLE:-gradle}"
+  gradle="${JMAN_JAVA_LSP_GRADLE:-gradle}"
 fi
 
 mkdir -p "$(dirname "${output}")" "${gradle_user_home}" "${gradle_project_cache}"

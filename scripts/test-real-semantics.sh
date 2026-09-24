@@ -13,7 +13,7 @@ petclinic="${project_dir}/target/integration-fixtures/spring-petclinic-maven"
 gson="${project_dir}/target/integration-fixtures/gson-maven"
 local_repository="${project_dir}/target/maven-repository"
 java_21_home="${JMAN_TEST_JAVA_21_HOME}"
-maven_bin="${JAVA_LSP_MATRIX_MAVEN:-${project_dir}/target/compatibility-tools/apache-maven-3.9.9/bin/mvn}"
+maven_bin="${JMAN_JAVA_LSP_MATRIX_MAVEN:-${project_dir}/target/compatibility-tools/apache-maven-3.9.9/bin/mvn}"
 
 (
   cd "${gson}"
@@ -30,7 +30,7 @@ maven_bin="${JAVA_LSP_MATRIX_MAVEN:-${project_dir}/target/compatibility-tools/ap
     generate-sources
 )
 
-JAVAC_FRONTEND_LIB_DIR="${project_dir}/target/native" \
+JMAN_JAVAC_FRONTEND_LIB_DIR="${project_dir}/target/native" \
   cargo run \
     --quiet \
     -p javac-frontend \
@@ -43,7 +43,7 @@ JAVAC_FRONTEND_LIB_DIR="${project_dir}/target/native" \
     "${petclinic}/src/main/java" \
     org.springframework.boot.SpringApplication
 
-JAVAC_FRONTEND_LIB_DIR="${project_dir}/target/native" \
+JMAN_JAVAC_FRONTEND_LIB_DIR="${project_dir}/target/native" \
   cargo run \
     --quiet \
     -p javac-frontend \
@@ -56,7 +56,7 @@ JAVAC_FRONTEND_LIB_DIR="${project_dir}/target/native" \
     "${gson}/gson/src/main/java:${gson}/gson/target/generated-sources/java-templates" \
     com.google.errorprone.annotations.CanIgnoreReturnValue
 
-JAVAC_FRONTEND_LIB_DIR="${project_dir}/target/native" \
+JMAN_JAVAC_FRONTEND_LIB_DIR="${project_dir}/target/native" \
   cargo run \
     --quiet \
     -p javac-frontend \
@@ -71,7 +71,7 @@ JAVAC_FRONTEND_LIB_DIR="${project_dir}/target/native" \
     org.springframework.samples.petclinic.owner.Owner \
     owner
 
-JAVAC_FRONTEND_LIB_DIR="${project_dir}/target/native" \
+JMAN_JAVAC_FRONTEND_LIB_DIR="${project_dir}/target/native" \
   cargo run \
     --quiet \
     -p javac-frontend \

@@ -168,9 +168,9 @@ done < <(sed -n 's/^[[:space:]]*uses:[[:space:]]*\([^ #]*\).*/\1/p' "${workflow_
 grep -q 'azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43' \
   "${workflow_dir}/publish-vscode.yml"
 grep -q -- '--azure-credential' "${workflow_dir}/publish-vscode.yml"
-grep -q 'RELEASE_TAG#v' "${workflow_dir}/publish-vscode.yml"
+grep -q 'JMAN_RELEASE_TAG#v' "${workflow_dir}/publish-vscode.yml"
 grep -q 'publish_args+=(--pre-release)' "${workflow_dir}/publish-vscode.yml"
-grep -q 'release_tag="${RELEASE_TAG:-}"' "${project_dir}/scripts/package-vscode.sh"
+grep -q 'release_tag="${JMAN_RELEASE_TAG:-}"' "${project_dir}/scripts/package-vscode.sh"
 grep -q 'package_flags+=(--pre-release)' "${project_dir}/scripts/package-vscode.sh"
 grep -q 'environment: vscode-marketplace' \
   "${workflow_dir}/verify-vscode-marketplace-identity.yml"
@@ -178,6 +178,34 @@ grep -q 'vsce verify-pat --azure-credential zonnedev' \
   "${workflow_dir}/verify-vscode-marketplace-identity.yml"
 if grep -R -q 'VSCE_PAT' "${workflow_dir}"; then
   echo "Marketplace workflow must not use a long-lived PAT" >&2
+  exit 1
+fi
+
+configuration_paths=(
+  .github Makefile README.md crates docs editors scripts
+)
+legacy_environment_names=(
+  "JAVA""_LSP_"
+  "GSON""_DIR"
+  "RELEASE""_TAG"
+)
+for legacy_name in "${legacy_environment_names[@]}"; do
+  if matches="$(git -C "${project_dir}" grep -En \
+      "(^|[^A-Z0-9_])${legacy_name}" -- "${configuration_paths[@]}" || true)" \
+      && [[ -n "${matches}" ]]; then
+    printf 'JMAN-owned environment variable lacks the JMAN_ prefix:\n%s\n' \
+      "${matches}" >&2
+    exit 1
+  fi
+done
+
+legacy_frontend="JAVAC""_FRONTEND_"
+if matches="$(git -C "${project_dir}" grep -En \
+    "(^|[^A-Z0-9_])${legacy_frontend}" -- "${configuration_paths[@]}" \
+    | grep -v 'JAVAC_FRONTEND_MODEL' || true)" \
+    && [[ -n "${matches}" ]]; then
+  printf 'JMAN-owned environment variable lacks the JMAN_ prefix:\n%s\n' \
+    "${matches}" >&2
   exit 1
 fi
 

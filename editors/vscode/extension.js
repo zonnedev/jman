@@ -479,7 +479,7 @@ async function activate(context) {
     environment.JAVA_HOME = javaHome;
   }
   if (buildJavaHome) {
-    environment.JAVA_LSP_BUILD_JAVA_HOME = buildJavaHome;
+    environment.JMAN_JAVA_LSP_BUILD_JAVA_HOME = buildJavaHome;
   }
 
   const buildSystem = configuration.get("buildSystem", "auto");

@@ -49,13 +49,13 @@ store rather than plain workflow variables.
 | Variable | Purpose |
 | --- | --- |
 | `JMAN_BIN` | Neovim executable fallback when `cmd` is not configured. |
-| `JAVA_LSP_BUILD_JAVA_HOME` | Override the JDK used to run Maven or Gradle model import. |
-| `JAVA_LSP_TELEMETRY` | Enable local performance diagnostics; no remote analytics are sent. |
-| `JAVA_LSP_PARSE_WORKERS` | Advanced override for structural parsing workers. |
-| `JAVA_LSP_SEMANTIC_WORKERS` | Advanced override for semantic-analysis workers. |
+| `JMAN_JAVA_LSP_BUILD_JAVA_HOME` | Override the JDK used to run Maven or Gradle model import. |
+| `JMAN_JAVA_LSP_TELEMETRY` | Enable local performance diagnostics; no remote analytics are sent. |
+| `JMAN_JAVA_LSP_PARSE_WORKERS` | Advanced override for structural parsing workers. |
+| `JMAN_JAVA_LSP_SEMANTIC_WORKERS` | Advanced override for semantic-analysis workers. |
 
 Prefer the editor's `buildJavaHome`/`build_java_home` setting over exporting
-`JAVA_LSP_BUILD_JAVA_HOME` interactively. Worker-count overrides are diagnostic
+`JMAN_JAVA_LSP_BUILD_JAVA_HOME` interactively. Worker-count overrides are diagnostic
 tuning controls, not normal project configuration.
 
 Without an explicit build-runtime override or Gradle daemon criterion, editor
@@ -78,7 +78,7 @@ graph.
 ## Maintainer-only variables
 
 The repository's build, integration-test, and release scripts define additional
-`JMAN_*` and `JAVA_LSP_*` variables for bundled tool paths and fixtures. They
+`JMAN_*` variables for bundled tool paths and fixtures. They
 are not part of the supported end-user configuration surface. Consult the
 specific script and [release guide](../releasing.md) only when developing JMAN
 itself.

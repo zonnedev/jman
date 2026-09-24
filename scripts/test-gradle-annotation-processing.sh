@@ -77,7 +77,7 @@ javap -p "${lombok_class}" | grep -q 'setName(java.lang.String)'
 jq -r \
   'select(.taskPath == ":app:compileJava") | .classpath | join(":")' \
   "${model_output}" > "${semantic_classpath}"
-JAVAC_FRONTEND_LIB_DIR="${project_dir}/target/native" \
+JMAN_JAVAC_FRONTEND_LIB_DIR="${project_dir}/target/native" \
   cargo run \
     --quiet \
     -p javac-frontend \

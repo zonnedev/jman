@@ -17,7 +17,7 @@ assert(configuration.build_java_home == "/build-jdk", "Configured build JDK was 
 assert(configuration.build_sync == "manual", "Configured synchronization mode was not retained")
 local server_environment = jman._test.server_environment()
 assert(server_environment.JAVA_HOME == "/language-jdk", "Language-server JAVA_HOME was not exported")
-assert(server_environment.JAVA_LSP_BUILD_JAVA_HOME == "/build-jdk", "Language-server build JAVA_HOME was not exported")
+assert(server_environment.JMAN_JAVA_LSP_BUILD_JAVA_HOME == "/build-jdk", "Language-server build JAVA_HOME was not exported")
 assert(server_environment.JMAN_TEST_ENVIRONMENT == "configured", "Additional server environment was not exported")
 
 for _, command in ipairs({

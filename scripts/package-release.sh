@@ -16,7 +16,7 @@ fi
 "${project_dir}/scripts/build-processor-worker.sh"
 "${project_dir}/scripts/build-vineflower.sh"
 "${project_dir}/scripts/build-jacoco.sh"
-JAVAC_FRONTEND_LIB_DIR="${native_dir}" \
+JMAN_JAVAC_FRONTEND_LIB_DIR="${native_dir}" \
   LD_LIBRARY_PATH="${native_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
   cargo build --manifest-path "${project_dir}/Cargo.toml" --release -p jman-cli
 

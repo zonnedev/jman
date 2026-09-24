@@ -6,7 +6,7 @@ const started = process.hrtime.bigint();
 const child = spawn(binary, [], {
   env: {
     ...process.env,
-    JAVA_LSP_TELEMETRY: "1",
+    JMAN_JAVA_LSP_TELEMETRY: "1",
   },
   stdio: ["pipe", "ignore", "pipe"],
 });

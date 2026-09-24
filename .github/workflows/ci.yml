@@ -85,7 +85,7 @@ jobs:
 
       - name: Lint Rust workspace
         env:
-          JAVAC_FRONTEND_LIB_DIR: target/native
+          JMAN_JAVAC_FRONTEND_LIB_DIR: target/native
           LD_LIBRARY_PATH: target/native
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 

@@ -322,7 +322,7 @@ impl NativeBackend {
     }
 
     fn run_annotation_processors(&mut self) -> Result<(), String> {
-        if std::env::var_os("JAVA_LSP_DISABLE_ANNOTATION_PROCESSING").is_some() {
+        if std::env::var_os("JMAN_JAVA_LSP_DISABLE_ANNOTATION_PROCESSING").is_some() {
             return Ok(());
         }
         let started = std::time::Instant::now();
@@ -697,7 +697,7 @@ impl NativeBackend {
                 model: model.clone(),
             };
             if !model.annotation_processor_path.is_empty()
-                && std::env::var_os("JAVA_LSP_DISABLE_ANNOTATION_PROCESSING").is_none()
+                && std::env::var_os("JMAN_JAVA_LSP_DISABLE_ANNOTATION_PROCESSING").is_none()
             {
                 // Running an open-world processor once per closed file is both
                 // incorrect for aggregating processors and prohibitively
@@ -921,7 +921,7 @@ fn write_semantic_cache(path: &Path, cache: &SemanticCache) -> Result<(), String
 }
 
 fn semantic_worker_count(document_count: usize) -> usize {
-    std::env::var("JAVA_LSP_SEMANTIC_WORKERS")
+    std::env::var("JMAN_JAVA_LSP_SEMANTIC_WORKERS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or_else(|| {
@@ -1042,7 +1042,7 @@ fn parse_workspace_parallel(
     generation: u64,
 ) -> Result<javac_frontend::WorkspaceParseResult, String> {
     let batches = workspace_batches(sources);
-    let requested_workers = std::env::var("JAVA_LSP_PARSE_WORKERS")
+    let requested_workers = std::env::var("JMAN_JAVA_LSP_PARSE_WORKERS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or_else(|| {
@@ -1185,7 +1185,7 @@ fn environment_java() -> Option<PathBuf> {
 }
 
 fn processor_worker_classpath() -> Result<std::path::PathBuf, String> {
-    if let Some(path) = std::env::var_os("JAVA_LSP_PROCESSOR_WORKER_CLASSPATH") {
+    if let Some(path) = std::env::var_os("JMAN_JAVA_LSP_PROCESSOR_WORKER_CLASSPATH") {
         return Ok(path.into());
     }
     if let Ok(executable) = std::env::current_exe()
@@ -2125,7 +2125,7 @@ fn java_package_name(source: &str) -> Option<&str> {
 }
 
 fn vineflower_jar() -> Result<PathBuf, String> {
-    if let Some(path) = std::env::var_os("JAVA_LSP_VINEFLOWER_JAR") {
+    if let Some(path) = std::env::var_os("JMAN_JAVA_LSP_VINEFLOWER_JAR") {
         let path = PathBuf::from(path);
         if path.is_file() {
             return Ok(path);
@@ -2400,7 +2400,7 @@ impl AnalysisBackend for NativeBackend {
         let model = select_compile_model(&self.models, &source_file).cloned();
         if let Some(model) = model
             && !model.annotation_processor_path.is_empty()
-            && std::env::var_os("JAVA_LSP_DISABLE_ANNOTATION_PROCESSING").is_none()
+            && std::env::var_os("JMAN_JAVA_LSP_DISABLE_ANNOTATION_PROCESSING").is_none()
         {
             return self
                 .analyze_processed(&model, file_name, source)
@@ -2442,7 +2442,7 @@ impl AnalysisBackend for NativeBackend {
             .unwrap_or(8);
         let mut result = if let Some(model) = selected_model.as_ref()
             && !model.annotation_processor_path.is_empty()
-            && std::env::var_os("JAVA_LSP_DISABLE_ANNOTATION_PROCESSING").is_none()
+            && std::env::var_os("JMAN_JAVA_LSP_DISABLE_ANNOTATION_PROCESSING").is_none()
         {
             self.query_processed(model, file_name, source, cursor)
                 .map_err(|error| format!("processed javac editor query failed: {error}"))?

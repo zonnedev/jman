@@ -10,13 +10,13 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workspace="$(cd "$1" && pwd)"
 output="$2"
 cache_dir="$(cd "$(dirname "${output}")" && pwd)/maven-import"
-local_repository="${JAVA_LSP_MAVEN_REPOSITORY:-${project_dir}/target/maven-repository}"
-importer_classes="${JAVAC_FRONTEND_IMPORTER_CLASSES:-${project_dir}/target/java-test-classes}"
-build_java_home="${JAVA_LSP_BUILD_JAVA_HOME:-${JAVA_HOME:-}}"
+local_repository="${JMAN_JAVA_LSP_MAVEN_REPOSITORY:-${project_dir}/target/maven-repository}"
+importer_classes="${JMAN_JAVAC_FRONTEND_IMPORTER_CLASSES:-${project_dir}/target/java-test-classes}"
+build_java_home="${JMAN_JAVA_LSP_BUILD_JAVA_HOME:-${JAVA_HOME:-}}"
 maven="${workspace}/mvnw"
 
 if [[ ! -x "${maven}" ]]; then
-  maven="${JAVA_LSP_MAVEN:-mvn}"
+  maven="${JMAN_JAVA_LSP_MAVEN:-mvn}"
 fi
 if [[ ! -f "${importer_classes}/io/github/zonnedev/jman/maven/importer/MavenModelImporter.class" ]]; then
   echo "Maven importer classes are missing; run make test-java" >&2

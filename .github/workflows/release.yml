@@ -26,21 +26,21 @@ jobs:
       attestations: write
       artifact-metadata: write
     env:
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      JMAN_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
     steps:
       - name: Check out release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.JMAN_RELEASE_TAG }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Verify release tag
         run: |
-          test "$(git cat-file -t "${RELEASE_TAG}")" = tag
-          git tag --points-at HEAD --list "${RELEASE_TAG}" | grep -Fx "${RELEASE_TAG}"
-          ./scripts/verify-release-version.sh "${RELEASE_TAG}"
+          test "$(git cat-file -t "${JMAN_RELEASE_TAG}")" = tag
+          git tag --points-at HEAD --list "${JMAN_RELEASE_TAG}" | grep -Fx "${JMAN_RELEASE_TAG}"
+          ./scripts/verify-release-version.sh "${JMAN_RELEASE_TAG}"
 
       - name: Set up test JDKs with JMAN
         run: ./scripts/setup-test-jdks.sh --all
@@ -84,7 +84,7 @@ jobs:
         run: |
           cargo fmt --all -- --check
           make ci
-          JAVAC_FRONTEND_LIB_DIR=target/native LD_LIBRARY_PATH=target/native \
+          JMAN_JAVAC_FRONTEND_LIB_DIR=target/native LD_LIBRARY_PATH=target/native \
             cargo clippy --workspace --all-targets --all-features -- -D warnings
           npm audit --prefix editors/vscode --audit-level=high
 
@@ -98,7 +98,7 @@ jobs:
         run: make package-vscode
 
       - name: Stage release assets
-        run: make stage-release TAG="${RELEASE_TAG}"
+        run: make stage-release TAG="${JMAN_RELEASE_TAG}"
 
       - name: Attest CLI archive
         uses: actions/attest@c32b4b8b198b65d0bd9d63490e847ff7b53989d4 # v4.0.0
@@ -118,7 +118,7 @@ jobs:
       - name: Upload release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-assets-${{ env.RELEASE_TAG }}
+          name: release-assets-${{ env.JMAN_RELEASE_TAG }}
           path: target/github-release/
           if-no-files-found: error
           retention-days: 14
@@ -133,34 +133,34 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      JMAN_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
     steps:
       - name: Download release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-assets-${{ env.RELEASE_TAG }}
+          name: release-assets-${{ env.JMAN_RELEASE_TAG }}
           path: release-assets
 
       - name: Verify release assets
         run: |
           cd release-assets
           sha256sum --check SHA256SUMS
-          node -e 'const m=require("./release-manifest.json"); if(m.releaseTag!==process.env.RELEASE_TAG) process.exit(1)'
+          node -e 'const m=require("./release-manifest.json"); if(m.releaseTag!==process.env.JMAN_RELEASE_TAG) process.exit(1)'
 
       - name: Create or update GitHub Release
         run: |
-          release_flags=(--verify-tag --title "JMAN ${RELEASE_TAG#v}" --generate-notes)
-          if [[ "${RELEASE_TAG#v}" == *-* ]]; then
+          release_flags=(--verify-tag --title "JMAN ${JMAN_RELEASE_TAG#v}" --generate-notes)
+          if [[ "${JMAN_RELEASE_TAG#v}" == *-* ]]; then
             release_flags+=(--prerelease)
           fi
 
-          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload "${RELEASE_TAG}" release-assets/* \
+          if gh release view "${JMAN_RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${JMAN_RELEASE_TAG}" release-assets/* \
               --repo "${GITHUB_REPOSITORY}" \
               --clobber
           else
-            gh release create "${RELEASE_TAG}" release-assets/* \
+            gh release create "${JMAN_RELEASE_TAG}" release-assets/* \
               --repo "${GITHUB_REPOSITORY}" \
               "${release_flags[@]}"
           fi

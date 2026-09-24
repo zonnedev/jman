@@ -7,8 +7,8 @@ if [[ -z "${JMAN_TEST_TEMP_ROOT:-}" ]]; then
 fi
 # shellcheck source=use-test-jdks.sh
 source "${project_dir}/scripts/use-test-jdks.sh"
-petclinic_fixture="${JAVAC_FRONTEND_PETCLINIC:-}"
-gson_fixture="${JAVAC_FRONTEND_GSON:-}"
+petclinic_fixture="${JMAN_JAVAC_FRONTEND_PETCLINIC:-}"
+gson_fixture="${JMAN_JAVAC_FRONTEND_GSON:-}"
 if [[ -z "${petclinic_fixture}" ]]; then
   petclinic_fixture="$("${project_dir}/scripts/ensure-test-repository.sh" \
     https://github.com/spring-projects/spring-petclinic.git \
@@ -23,16 +23,16 @@ if [[ -z "${gson_fixture}" ]]; then
 fi
 local_repository="${project_dir}/target/maven-repository"
 classes_dir="${project_dir}/target/java-test-classes"
-maven_java_home="${JAVAC_FRONTEND_MAVEN_JAVA_HOME:-${JMAN_TEST_JAVA_17_HOME}}"
+maven_java_home="${JMAN_JAVAC_FRONTEND_MAVEN_JAVA_HOME:-${JMAN_TEST_JAVA_17_HOME}}"
 java_21_home="${JMAN_TEST_JAVA_21_HOME}"
-maven_bin="${JAVA_LSP_MATRIX_MAVEN:-${project_dir}/target/compatibility-tools/apache-maven-3.9.9/bin/mvn}"
+maven_bin="${JMAN_JAVA_LSP_MATRIX_MAVEN:-${project_dir}/target/compatibility-tools/apache-maven-3.9.9/bin/mvn}"
 
 if [[ ! -x "${maven_java_home}/bin/java" ]]; then
   echo "Maven integration JDK 17 is not installed: ${maven_java_home}" >&2
   exit 1
 fi
 if [[ ! -x "${maven_bin}" ]]; then
-  echo "Maven 3.9.9 is unavailable: ${maven_bin} (set JAVA_LSP_MATRIX_MAVEN)" >&2
+  echo "Maven 3.9.9 is unavailable: ${maven_bin} (set JMAN_JAVA_LSP_MATRIX_MAVEN)" >&2
   exit 1
 fi
 

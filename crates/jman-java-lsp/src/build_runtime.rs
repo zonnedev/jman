@@ -94,7 +94,7 @@ impl RuntimeEnvironment {
             .map(|directory| directory.join("java"))
             .or_else(|| home.map(|directory| directory.join(".sdkman/candidates/java")));
         Self {
-            explicit_home: std::env::var_os("JAVA_LSP_BUILD_JAVA_HOME").map(PathBuf::from),
+            explicit_home: std::env::var_os("JMAN_JAVA_LSP_BUILD_JAVA_HOME").map(PathBuf::from),
             data_dir,
             sdkman_java_dir,
             java_home: std::env::var_os("JAVA_HOME").map(PathBuf::from),

@@ -11,8 +11,8 @@ fixture_dir="${project_dir}/tests/fixtures/publishing"
 work_dir="${project_dir}/target/publishing-acceptance"
 repository="${work_dir}/repository"
 jman_binary="${JMAN_TEST_BINARY:-${project_dir}/target/debug/jman}"
-maven_binary="${JAVA_LSP_MATRIX_MAVEN:-${project_dir}/target/compatibility-tools/apache-maven-3.9.9/bin/mvn}"
-gradle_binary="${JAVA_LSP_MATRIX_GRADLE_9_1_0:-${project_dir}/target/compatibility-tools/gradle-9.1.0/bin/gradle}"
+maven_binary="${JMAN_JAVA_LSP_MATRIX_MAVEN:-${project_dir}/target/compatibility-tools/apache-maven-3.9.9/bin/mvn}"
+gradle_binary="${JMAN_JAVA_LSP_MATRIX_GRADLE_9_1_0:-${project_dir}/target/compatibility-tools/gradle-9.1.0/bin/gradle}"
 expected="hello from published modules"
 
 for executable in \

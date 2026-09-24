@@ -9,7 +9,7 @@ native_dir="${project_dir}/target/native"
 native_library="${native_dir}/libjman_javac_frontend.so"
 extension_version="$(node -p 'require(process.argv[1]).version' "${extension_dir}/package.json")"
 target_platform="linux-x64"
-release_tag="${RELEASE_TAG:-}"
+release_tag="${JMAN_RELEASE_TAG:-}"
 channel="stable"
 package_flags=(
   --target "${target_platform}"
@@ -35,7 +35,7 @@ fi
 "${project_dir}/scripts/build-processor-worker.sh"
 "${project_dir}/scripts/build-vineflower.sh"
 "${project_dir}/scripts/build-jacoco.sh"
-JAVAC_FRONTEND_LIB_DIR="${native_dir}" \
+JMAN_JAVAC_FRONTEND_LIB_DIR="${native_dir}" \
   CARGO_TARGET_DIR="${project_dir}/target" \
   cargo build \
     --manifest-path "${project_dir}/Cargo.toml" \

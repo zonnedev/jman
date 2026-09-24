@@ -52,7 +52,7 @@ reviewed commit, run the portable suite before preparing the tag:
 ```bash
 cargo fmt --all -- --check
 make ci
-JAVAC_FRONTEND_LIB_DIR=target/native LD_LIBRARY_PATH=target/native \
+JMAN_JAVAC_FRONTEND_LIB_DIR=target/native LD_LIBRARY_PATH=target/native \
   cargo clippy --workspace --all-targets --all-features -- -D warnings
 npm audit --prefix editors/vscode --audit-level=high
 ```

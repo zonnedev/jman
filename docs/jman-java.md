@@ -232,9 +232,9 @@ length-prefixed result before asking the native library to free it.
   uses a temporary file, `fsync`, and atomic rename. Processor successes and
   stable failures are fingerprinted separately so unchanged broken optional
   processors do not impose a JVM startup cost on every editor launch.
-- `JAVA_LSP_TELEMETRY=1` emits build-import, processor, parse, merge, and
+- `JMAN_JAVA_LSP_TELEMETRY=1` emits build-import, processor, parse, merge, and
   process metrics. `scripts/benchmark-indexing.sh PROJECT [gradle|maven]`
-  measures elapsed time and peak RSS; `JAVA_LSP_PARSE_WORKERS` overrides the
+  measures elapsed time and peak RSS; `JMAN_JAVA_LSP_PARSE_WORKERS` overrides the
   bounded parser-worker count for target-specific benchmarking.
 - Build-model publication is validated and atomic. A failed Maven or Gradle
   refresh keeps the last-good model instead of destroying a working session.
@@ -310,5 +310,5 @@ resolved owner and source name against the active workspace roots so local
 navigation remains stable before the structural index is available.
 
 Real-project import tests fetch clean Spring Petclinic and Gson checkouts at
-pinned commits into `target/upstream-fixtures/`. Set `JAVAC_FRONTEND_PETCLINIC`
-or `JAVAC_FRONTEND_GSON` to use an existing checkout instead.
+pinned commits into `target/upstream-fixtures/`. Set `JMAN_JAVAC_FRONTEND_PETCLINIC`
+or `JMAN_JAVAC_FRONTEND_GSON` to use an existing checkout instead.

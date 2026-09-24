@@ -781,7 +781,7 @@ local function server_environment()
 		environment.JAVA_HOME = state.options.java_home
 	end
 	if state.options.build_java_home and state.options.build_java_home ~= "" then
-		environment.JAVA_LSP_BUILD_JAVA_HOME = state.options.build_java_home
+		environment.JMAN_JAVA_LSP_BUILD_JAVA_HOME = state.options.build_java_home
 	end
 	return environment
 end

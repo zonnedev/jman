@@ -199,7 +199,7 @@ async function main() {
               buildSystem: "auto",
               buildSync: "prompt",
               "server.extraEnv": {
-                JAVA_LSP_BUILD_JAVA_HOME: "/legacy-build-jdk",
+                JMAN_JAVA_LSP_BUILD_JAVA_HOME: "/legacy-build-jdk",
               },
             };
             return values[key] ?? fallback;
@@ -335,7 +335,7 @@ async function main() {
   assert.deepEqual(serverOptions.args, ["lsp"]);
   assert.equal(serverOptions.options.env.JAVA_HOME, "/graalvm");
   assert.equal(
-    serverOptions.options.env.JAVA_LSP_BUILD_JAVA_HOME,
+    serverOptions.options.env.JMAN_JAVA_LSP_BUILD_JAVA_HOME,
     "/build-jdk",
   );
   assert(watcherPatterns.includes("**/jman.toml"));

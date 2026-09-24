@@ -326,7 +326,7 @@ fn import_gradle(
             init_script.display()
         ));
     }
-    let gradle_home = std::env::var_os("JAVA_LSP_GRADLE_USER_HOME")
+    let gradle_home = std::env::var_os("JMAN_JAVA_LSP_GRADLE_USER_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             std::env::temp_dir().join("io.github.zonnedev.jman.lsp/gradle-user-home")
@@ -359,7 +359,7 @@ fn import_gradle(
 
 fn import_maven(executable: &Path, root: &Path, output: &Path) -> Result<(), String> {
     let support = support_directory();
-    let importer = std::env::var_os("JAVAC_FRONTEND_IMPORTER_CLASSES")
+    let importer = std::env::var_os("JMAN_JAVAC_FRONTEND_IMPORTER_CLASSES")
         .map(PathBuf::from)
         .or_else(|| {
             let packaged = support.join("maven-importer.jar");
@@ -376,7 +376,7 @@ fn import_maven(executable: &Path, root: &Path, output: &Path) -> Result<(), Str
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join("maven-import");
-    let local_repository = std::env::var_os("JAVA_LSP_MAVEN_REPOSITORY")
+    let local_repository = std::env::var_os("JMAN_JAVA_LSP_MAVEN_REPOSITORY")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             std::env::var_os("HOME")
@@ -468,7 +468,7 @@ fn support_directory() -> PathBuf {
 }
 
 fn build_java_home(default_sdkman_candidate: &str) -> Option<PathBuf> {
-    std::env::var_os("JAVA_LSP_BUILD_JAVA_HOME")
+    std::env::var_os("JMAN_JAVA_LSP_BUILD_JAVA_HOME")
         .map(PathBuf::from)
         .or_else(jman_global_java_home)
         .or_else(|| std::env::var_os("JAVA_HOME").map(PathBuf::from))

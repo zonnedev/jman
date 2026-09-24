@@ -7,7 +7,7 @@ if [[ -z "${JMAN_TEST_TEMP_ROOT:-}" ]]; then
 fi
 # shellcheck source=use-test-jdks.sh
 source "${project_dir}/scripts/use-test-jdks.sh"
-fixture="${JAVAC_FRONTEND_PETCLINIC:-}"
+fixture="${JMAN_JAVAC_FRONTEND_PETCLINIC:-}"
 if [[ -z "${fixture}" ]]; then
   fixture="$("${project_dir}/scripts/ensure-test-repository.sh" \
     https://github.com/spring-projects/spring-petclinic.git \
@@ -17,7 +17,7 @@ fi
 output="${project_dir}/target/gradle-petclinic-model.ndjson"
 fixture_copy="${project_dir}/target/integration-fixtures/spring-petclinic"
 gradle_user_home="${project_dir}/target/gradle-user-home"
-project_jdk="${JAVAC_FRONTEND_PROJECT_JDK:-${JMAN_TEST_JAVA_17_HOME}}"
+project_jdk="${JMAN_JAVAC_FRONTEND_PROJECT_JDK:-${JMAN_TEST_JAVA_17_HOME}}"
 
 rm -rf "${fixture_copy}"
 mkdir -p "$(dirname "${fixture_copy}")" "${gradle_user_home}"
