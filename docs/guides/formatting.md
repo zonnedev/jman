@@ -40,20 +40,14 @@ change and exits unsuccessfully otherwise.
 ## Canonical style
 
 The format is intentionally not configurable. A repository therefore has one
-result in every editor and CI environment:
+result in every editor and CI environment. The normative rules are documented
+in the [JMAN Java Formatting Style 1 specification](../reference/jjfs-v1.md).
 
-- four spaces per indentation level, LF line endings, and a final newline;
-- canonical spacing around declarations, calls, control flow, operators,
-  generics, arrays, varargs, lambdas, and method references;
-- ordinary imports followed by static imports, with each group sorted;
-- resolvable wildcard imports expanded to the types or static members actually
-  referenced by a semantically complete compilation unit (wildcards are kept
-  when attribution is incomplete so formatting cannot break unresolved code);
-- fields and initializer blocks first in their original order, because their
-  order can change runtime behavior;
-- constructors next, methods ordered by name, and nested types last;
-- line comments, block comments, Javadocs, string literals, character literals,
-  and text-block contents preserved from the source.
+JJFS 1 uses two-space indentation, a structural 140-column limit, canonical
+imports without static or wildcard imports, API-first member ordering, and
+AST-aware wrapping for declarations, calls, conditions, and fluent chains.
+Comments and literal contents remain authored. Semantic rewrites are applied
+only when javac can prove them safe.
 
 Comments attached before a member move with that member. A comment on the same
 line as a type's opening brace remains attached to the type header. Formatting

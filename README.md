@@ -93,7 +93,7 @@ setup, project overrides, scoped execution, storage, and troubleshooting.
 | Projects | New applications, libraries, multi-module workspaces, Maven import |
 | Dependencies | Maven repositories, BOMs, scopes, exclusions, paths, lockfiles, offline builds |
 | Build | Checks, thin and executable fat JARs, source JARs, Javadocs, annotation processors |
-| Format | Native javac-aware canonical formatting, import expansion, safe member ordering, CI checks |
+| Format | [JJFS 1](docs/reference/jjfs-v1.md), native javac-aware formatting, canonical imports, API-first member ordering, CI checks |
 | Test | Live JUnit tree, selectors, unit/integration source sets, parallel modules, coverage |
 | Supply chain | Upgrade discovery, transactional updates, OSV audits, signed publishing |
 | Java | Multi-vendor JDK catalog, verified installation, global/project selection, project-aware shims |

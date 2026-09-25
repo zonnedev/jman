@@ -44,6 +44,7 @@ nav:
   - Reference:
       - Feature catalog: reference/features.md
       - Command line: reference/cli.md
+      - JJFS 1 specification: reference/jjfs-v1.md
       - Manifest: reference/manifest.md
       - Lockfile, cache, and outputs: reference/storage.md
       - Environment variables: reference/environment.md

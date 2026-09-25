@@ -127,7 +127,7 @@ fn fmt_checks_formats_idempotently_and_never_partially_writes_invalid_projects()
     assert!(canonical.contains("import java.util.ArrayList;"));
     assert!(canonical.contains("import java.util.List;"));
     assert!(
-        canonical.find("void alpha()").unwrap() < canonical.find("void zebra()").unwrap(),
+        canonical.find("void zebra()").unwrap() < canonical.find("void alpha()").unwrap(),
         "{canonical}"
     );
     let clean = Command::new(env!("CARGO_BIN_EXE_jman"))

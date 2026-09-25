@@ -131,7 +131,8 @@ already match the lockfile and cache.
 
 ## jman fmt
 
-Format Java source with JMAN's canonical project-aware formatter.
+Format Java source with the project-aware JMAN Java Formatting Style (JJFS 1)
+formatter.
 
 ```text
 jman fmt [PATH] [--check]
@@ -140,8 +141,8 @@ jman fmt [PATH] [--check]
 `PATH` may be a JMAN, Maven, or Gradle project directory, a source subtree, or
 one `.java` file. The default is the current directory. `--check` reports files
 that differ and exits unsuccessfully without writing. See the
-[formatting guide](../guides/formatting.md) for the canonical style and safety
-behavior.
+[formatting guide](../guides/formatting.md) for usage and the
+[JJFS 1 specification](jjfs-v1.md) for the canonical style and safety contract.
 
 ## jman build
 

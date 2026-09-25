@@ -1033,7 +1033,7 @@ mod tests {
         assert!(first.source.contains("if (value == 1)"));
         assert!(first.source.contains("call(1, 2);"));
         assert!(
-            first.source.find("void alpha()").unwrap() < first.source.find("void zebra()").unwrap(),
+            first.source.find("void zebra()").unwrap() < first.source.find("void alpha()").unwrap(),
             "{}",
             first.source
         );

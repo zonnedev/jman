@@ -32,6 +32,7 @@ final class JavacFrontendTest {
     formatsAFileThatIsAlsoPresentOnTheProjectSourcePath();
     preservesWildcardImportsWhenAttributionIsIncomplete();
     wireFormatIsVersionedAndDeterministic();
+    JjfsConformanceTest.run();
   }
 
   private static void formatsJavaFromJavacTokensAndPreservesComments() {
@@ -45,11 +46,11 @@ final class JavacFrontendTest {
     assertTrue(result.diagnostics().isEmpty(), result.diagnostics().toString());
     assertEquals(
         "class Messy { // type comment\n"
-            + "    void run() {\n"
-            + "        if (value == 1) {\n"
-            + "            call(1, 2); /* keep me */\n"
-            + "        }\n"
+            + "  void run() {\n"
+            + "    if (value == 1) {\n"
+            + "      call(1, 2); /* keep me */\n"
             + "    }\n"
+            + "  }\n"
             + "}\n",
         result.source());
     FormatResult second =
@@ -76,14 +77,15 @@ final class JavacFrontendTest {
             + "import java.util.List;\n"
             + "\n"
             + "class Ordered {\n"
-            + "    private int value;\n"
+            + "  private int value;\n"
             + "\n"
-            + "    void alpha() {\n"
-            + "        List<String> values = new ArrayList<>();\n"
-            + "    }\n"
+            + "  // zebra docs\n"
+            + "  void zebra() {\n"
+            + "  } // zebra trailing\n"
             + "\n"
-            + "    // zebra docs\n"
-            + "    void zebra() {} // zebra trailing\n"
+            + "  void alpha() {\n"
+            + "    List<String> values = new ArrayList<>();\n"
+            + "  }\n"
             + "}\n",
         result.source());
   }
@@ -104,23 +106,21 @@ final class JavacFrontendTest {
         "package demo;\n"
             + "\n"
             + "import java.util.ArrayList;\n"
-            + "\n"
-            + "import static java.util.Collections.sort;\n"
+            + "import java.util.Collections;\n"
             + "\n"
             + "class Ordered { // header\n"
-            + "    static int zeta = 1;\n"
+            + "  static int zeta = 1;\n"
+            + "  static {\n"
+            + "    zeta++;\n"
+            + "  }\n"
+            + "  static int alpha = zeta + 1;\n"
             + "\n"
-            + "    static {\n"
-            + "        zeta++;\n"
-            + "    }\n"
+            + "  void zebra() {\n"
+            + "    Collections.sort(new ArrayList<String>());\n"
+            + "  }\n"
             + "\n"
-            + "    static int alpha = zeta + 1;\n"
-            + "\n"
-            + "    void alpha(String[] args) {}\n"
-            + "\n"
-            + "    void zebra() {\n"
-            + "        sort(new ArrayList<String>());\n"
-            + "    }\n"
+            + "  void alpha(String[] args) {\n"
+            + "  }\n"
             + "}\n",
         result.source());
   }
@@ -179,7 +179,8 @@ final class JavacFrontendTest {
     assertTrue(result.diagnostics().isEmpty(), result.source() + "\n" + result.diagnostics());
     assertTrue(result.source().startsWith("/* license */\ninterface"), result.source());
     assertTrue(
-        result.source().indexOf("findById") < result.source().indexOf("findByLastNameStartingWith"),
+        result.source().indexOf("findByLastNameStartingWith")
+            < result.source().indexOf("findById"),
         result.source());
   }
 
@@ -190,13 +191,13 @@ final class JavacFrontendTest {
         JavaFormatter.format(
             "Inline.java", source, java.util.List.of(), java.util.List.of(), 25);
     assertTrue(
-        result.source().indexOf("void alpha()") < result.source().indexOf("void zebra()"),
+        result.source().indexOf("void zebra()") < result.source().indexOf("void alpha()"),
         result.source());
     int nestedStart = result.source().indexOf("class Nested");
-    int nestedEnd = result.source().indexOf("\n    }", nestedStart);
+    int nestedEnd = result.source().indexOf("\n  }", nestedStart);
     String nested = result.source().substring(nestedStart, nestedEnd);
     assertTrue(
-        nested.indexOf("void alpha()") < nested.indexOf("void zebra()"), result.source());
+        nested.indexOf("void zebra()") < nested.indexOf("void alpha()"), result.source());
   }
 
   private static void formatsAFileThatIsAlsoPresentOnTheProjectSourcePath() {
@@ -212,7 +213,7 @@ final class JavacFrontendTest {
             JavaFormatter.format(
                 "Inline.java", source, java.util.List.of(), java.util.List.of(root), 25);
         assertTrue(
-            result.source().indexOf("void alpha()") < result.source().indexOf("void zebra()"),
+            result.source().indexOf("void zebra()") < result.source().indexOf("void alpha()"),
             result.source());
       } finally {
         try (var paths = java.nio.file.Files.walk(root)) {
