@@ -344,6 +344,32 @@ final class JavaFormatter {
     return candidates;
   }
 
+  private static Map<String, Set<String>> simplyReferencedTopLevelTypes(
+      CompilationUnitTree unit, Trees trees) {
+    Map<String, Set<String>> references = new HashMap<>();
+    new TreePathScanner<Void, Void>() {
+      @Override
+      public Void visitImport(ImportTree node, Void unused) {
+        return null;
+      }
+
+      @Override
+      public Void visitIdentifier(IdentifierTree node, Void unused) {
+        Element element = trees.getElement(getCurrentPath());
+        if (element instanceof TypeElement type) {
+          TypeElement top = topLevelType(type);
+          if (top != null && !top.getSimpleName().isEmpty()) {
+            references
+                .computeIfAbsent(top.getSimpleName().toString(), ignored -> new LinkedHashSet<>())
+                .add(top.getQualifiedName().toString());
+          }
+        }
+        return super.visitIdentifier(node, unused);
+      }
+    }.scan(unit, null);
+    return references;
+  }
+
   private static Diagnostic importDirectiveDiagnostic(
       String source,
       CompilationUnitTree unit,
@@ -834,6 +860,7 @@ final class JavaFormatter {
       Trees trees,
       SourcePositions positions) {
     Map<String, Set<String>> candidates = referencedTopLevelTypes(unit, trees);
+    Map<String, Set<String>> simpleReferences = simplyReferencedTopLevelTypes(unit, trees);
 
     Map<String, String> preferred = new HashMap<>();
     for (ImportTree imported : unit.getImports()) {
@@ -849,6 +876,12 @@ final class JavaFormatter {
     Map<String, String> selected = new HashMap<>();
     for (Map.Entry<String, Set<String>> entry : candidates.entrySet()) {
       String choice = entry.getValue().stream().sorted().findFirst().orElseThrow();
+      Set<String> boundSimpleReferences =
+          simpleReferences.getOrDefault(entry.getKey(), Set.of());
+      if (boundSimpleReferences.size() == 1) {
+        String boundType = boundSimpleReferences.iterator().next();
+        if (entry.getValue().contains(boundType)) choice = boundType;
+      }
       String preference = preferred.get(entry.getKey());
       if (preference != null && entry.getValue().contains(preference)) choice = preference;
       selected.put(entry.getKey(), choice);
@@ -2378,11 +2411,12 @@ final class JavaFormatter {
 
     private void comment(Lexeme comment, String gap) {
       boolean lineComment = comment.kind().equals("LINE") || comment.kind().equals("JAVADOC_LINE");
+      boolean trailing = !lineStart && !gap.contains("\n");
       if (!lineStart) {
         if (gap.contains("\n")) newline(blankGap(gap));
         else space();
       }
-      append(comment.text());
+      append(JjfsComments.format(comment.text(), comment.kind(), indent, trailing));
       if (lineComment || gap.contains("\n")) newline(false);
     }
 

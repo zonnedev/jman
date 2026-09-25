@@ -10,8 +10,14 @@ Versioning while it approaches a stable 0.3.0 release.
 - JJFS 1 defines JMAN's deterministic Java formatting contract and applies it
   consistently through `jman fmt`, VS Code, and Neovim, including semantic
   import normalization, API-first member ordering, mandatory control-flow
-  braces, AST-aware wrapping, formatter directives, and idempotent safety
-  validation.
+  braces, AST-aware wrapping, conservative prose-comment formatting,
+  formatter directives, and idempotent safety validation.
+
+### Fixed
+
+- JJFS import conflict resolution now preserves types that were already bound
+  through a simple name, preventing a fully qualified type with the same name
+  from changing annotations or other existing references.
 
 ## [0.7.1] - 2026-09-22
 

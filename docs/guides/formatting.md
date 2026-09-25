@@ -46,12 +46,34 @@ in the [JMAN Java Formatting Style 1 specification](../reference/jjfs-v1.md).
 JJFS 1 uses two-space indentation, a structural 140-column limit, canonical
 imports without static or wildcard imports, API-first member ordering, and
 AST-aware wrapping for declarations, calls, conditions, and fluent chains.
-Comments and literal contents remain authored. Semantic rewrites are applied
-only when javac can prove them safe.
+Comment framing is normalized and plain prose uses a conservative 100-column
+soft limit; code, lists, URLs, diagrams, directives, and other structured
+content are never reflowed. Literal contents remain authored. Semantic
+rewrites are applied only when javac can prove them safe.
 
 Comments attached before a member move with that member. A comment on the same
 line as a type's opening brace remains attached to the type header. Formatting
 is idempotent: running it again produces no changes.
+
+### Comments and Javadocs
+
+JJFS normalizes multiline comment framing and wraps only plain prose at a
+100-column soft limit:
+
+```java
+/**
+ * Loads the customer and verifies that it can participate in the requested
+ * operation.
+ *
+ * @param identifier the customer identifier
+ * @return the active customer
+ */
+```
+
+It does not reflow lists, tables, URLs, code and `<pre>` blocks, diagrams,
+license headers, generated-file warnings, Markdown `///` documentation, or
+formatter/tool directives. Trailing comments retain their authored content.
+When a fragment cannot be classified confidently, JJFS preserves it.
 
 ## Editor formatting
 

@@ -21,6 +21,7 @@ final class JjfsConformanceTest {
     wrapsLongThrowsClausesWithoutDetachingTheBrace();
     formatsMultilineAnnotationsAndLongGenericHeaders();
     formatsRecordComponentsLikeParameters();
+    formatsCommentStructureWithoutRewritingProtectedContent();
     preservesDisabledRegionsCommentsAndLiterals();
     rejectsMalformedFormatterDirectives();
   }
@@ -453,6 +454,23 @@ final class JjfsConformanceTest {
   private static void resolvesImportConflictsAndHonorsOnePreference() {
     assertFormat(
         """
+        import java.util.Date;
+
+        class Dates {
+          Date utilityDate;
+          java.sql.Date databaseDate;
+        }
+        """,
+        """
+        import java.util.Date;
+
+        class Dates {
+          Date utilityDate;
+          java.sql.Date databaseDate;
+        }
+        """);
+    assertFormat(
+        """
         class Dates {
           java.sql.Date databaseDate;
           java.util.Date utilityDate;
@@ -580,6 +598,44 @@ final class JjfsConformanceTest {
           String emailAddress,
           String telephoneNumber
         ) {
+        }
+        """);
+  }
+
+  private static void formatsCommentStructureWithoutRewritingProtectedContent() {
+    assertFormat(
+        """
+        class Commented {
+        /**
+        * Activates the supplied customer.
+        *
+        * @param customer the customer to activate
+        */
+        void activate(String customer){
+        /*
+        keeps the operation local
+        */
+        consume(customer); // keep   trailing spacing
+        }
+        void consume(String customer){}
+        }
+        """,
+        """
+        class Commented {
+          /**
+           * Activates the supplied customer.
+           *
+           * @param customer the customer to activate
+           */
+          void activate(String customer) {
+            /*
+             * keeps the operation local
+             */
+            consume(customer); // keep   trailing spacing
+          }
+
+          void consume(String customer) {
+          }
         }
         """);
   }

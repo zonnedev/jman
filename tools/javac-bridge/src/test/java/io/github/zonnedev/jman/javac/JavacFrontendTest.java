@@ -33,6 +33,7 @@ final class JavacFrontendTest {
     preservesWildcardImportsWhenAttributionIsIncomplete();
     wireFormatIsVersionedAndDeterministic();
     JjfsConformanceTest.run();
+    JjfsCommentsTest.run();
   }
 
   private static void formatsJavaFromJavacTokensAndPreservesComments() {

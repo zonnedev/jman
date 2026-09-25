@@ -379,9 +379,11 @@ import java.util.Map;
 Map.Entry<String, Customer> entry;
 ```
 
-When used types share a simple name, the lexicographically first qualified name
-receives the import and the others remain fully qualified. A source file may
-override that arbitrary choice narrowly:
+When used types share a simple name, a type already referenced by that simple
+name keeps its binding and the others remain fully qualified. If every
+conflicting type was originally fully qualified, the lexicographically first
+qualified name receives the import. A source file may override that arbitrary
+choice narrowly:
 
 ```java
 import java.util.Date; // jjfs: prefer-import
@@ -486,17 +488,42 @@ JJFS never manufactures or removes fall-through, `break`, or `yield`.
 
 ## Comments and documentation
 
-JJFS does not rewrite prose. Comment wording, wrapping, paragraph breaks, and
-internal spacing remain authored. A long comment may exceed 140 columns.
-Only indentation relative to surrounding code is normalized.
+JJFS formats comment structure without rewriting meaning. It never changes
+wording, punctuation, spelling, capitalization, Javadoc tag order, or the
+contents of a protected fragment.
+
+Multiline block comments and Javadocs use canonical framing: their delimiters
+align with the surrounding declaration or statement, every content line has
+one leading `*`, repeated blank comment lines collapse to one, and the closing
+delimiter is aligned with the opening delimiter. Short inline block comments
+remain inline and retain their internal spacing.
+
+Confidently classified plain-prose paragraphs use a 100-column soft limit.
+Wrapping joins authored prose lines with a single space and changes only line
+boundaries. Javadoc tag descriptions use the same limit and indent continuation
+lines by one JJFS indentation level. JJFS inserts one blank comment line
+between prose and the first block tag, while preserving tag order.
+
+JJFS does not reflow any fragment containing or participating in:
+
+- Markdown or Javadoc lists, tables, headings, block quotes, or fenced blocks;
+- `<pre>` blocks or other standalone HTML;
+- URLs, inline code, `{@code ...}`, or `{@link ...}`;
+- ASCII or Unicode diagrams and transition arrows;
+- license headers and generated-file warnings;
+- formatter directives; or
+- content whose structure cannot be classified confidently.
+
+Those fragments retain their authored content and may exceed either width
+limit; only the surrounding comment framing and indentation are normalized.
+An isolated plain-prose `//` comment may wrap into consecutive `//` lines.
+A trailing line comment never wraps.
 
 A short trailing comment remains attached. JJFS never aligns unrelated
 trailing comments into columns. When a trailing comment cannot remain safely,
 it moves immediately above its statement without changing its text.
 
-Javadocs retain prose and tag order. JJFS may normalize only the outer
-indentation, leading `*`, and tag indentation. Comments attached to reordered
-members move with those members.
+Comments attached to reordered members move with those members.
 
 User-authored logical blank lines inside executable blocks are preserved,
 multiple blank lines collapse to one, and blank lines immediately inside a
