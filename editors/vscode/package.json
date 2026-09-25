@@ -119,7 +119,7 @@
         "jman.java.javaHome": {
           "type": "string",
           "default": "",
-          "description": "Java 25 GraalVM home used by the native compiler frontend."
+          "description": "Optional fallback JDK home exported to Java workers. The native compiler frontend and platform symbols are bundled."
         },
         "jman.java.buildJavaHome": {
           "type": "string",

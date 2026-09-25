@@ -68,6 +68,8 @@ enum Command {
     Why(Why),
     /// Type-check and compile main Java sources.
     Check(Check),
+    /// Format Java sources with JMAN's canonical style.
+    Fmt(FmtCommand),
     /// Build standard and optional module artifacts.
     Build(BuildCommand),
     /// Publish Maven-compatible artifacts locally or to a remote repository.
@@ -94,6 +96,16 @@ struct Lsp {
     /// append the transport flag when spawning a language server.
     #[arg(long)]
     stdio: bool,
+}
+
+#[derive(Debug, Args)]
+struct FmtCommand {
+    /// Java source file or project directory.
+    #[arg(default_value = ".")]
+    path: PathBuf,
+    /// Check formatting without changing files.
+    #[arg(long)]
+    check: bool,
 }
 
 #[derive(Debug, Args)]
@@ -750,6 +762,7 @@ async fn run(cli: Cli, ui: &Ui) -> Result<()> {
         Command::Tree(arguments) => dependency_tree(&arguments.path),
         Command::Why(arguments) => dependency_why(&arguments),
         Command::Check(arguments) => compile_project(&arguments, ui, "Checking", "Checked").await,
+        Command::Fmt(arguments) => format_project(&arguments, ui),
         Command::Build(arguments) => build_project(&arguments, ui).await,
         Command::Publish(arguments) => publish_project(&arguments, ui).await,
         Command::Run(arguments) => run_project(&arguments, ui).await,
@@ -767,6 +780,184 @@ fn lsp_command(_arguments: &Lsp) -> Result<()> {
         bail!("Java language server exited with status {status}");
     }
     Ok(())
+}
+
+fn format_project(arguments: &FmtCommand, ui: &Ui) -> Result<()> {
+    use jman_java_lsp::NativeBackend;
+
+    let target = absolute_path(&arguments.path)?;
+    let project_root = formatter_project_root(&target)?;
+    let sources = java_sources(&target)?;
+    let source_count = sources.len();
+    if sources.is_empty() {
+        bail!("no Java source files found under {}", target.display());
+    }
+
+    let activity = ui.activity(format!("Formatting {} Java sources", sources.len()));
+    let mut formatter = NativeBackend::try_new().map_err(|error| anyhow::anyhow!(error))?;
+    formatter
+        .initialize_formatter(&project_root)
+        .map_err(|error| anyhow::anyhow!(error))?;
+
+    let mut changed = Vec::new();
+    for path in sources {
+        let source = std::fs::read_to_string(&path)
+            .with_context(|| format!("cannot read {}", path.display()))?;
+        let result = formatter
+            .format_path(&path, &source)
+            .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
+        if let Some(diagnostic) = result.diagnostics.first() {
+            bail!(
+                "cannot format {}:{}:{}: {}",
+                path.display(),
+                diagnostic.line,
+                diagnostic.column,
+                diagnostic.message
+            );
+        }
+        if result.source != source {
+            changed.push((path, result.source));
+        }
+    }
+
+    if arguments.check {
+        if !changed.is_empty() {
+            activity.finish_warning(format!(
+                "{} of {} Java sources require formatting",
+                changed.len(),
+                source_count
+            ));
+            for (path, _) in &changed {
+                ui.line(format!("! {}", path.display()));
+            }
+            bail!("{} Java source file(s) require formatting", changed.len());
+        }
+        activity.finish_clean(format!("Checked {source_count} Java sources"));
+        return Ok(());
+    }
+
+    for (path, source) in &changed {
+        write_atomic(path, source.as_bytes())?;
+        ui.detail(format!("formatted {}", path.display()));
+    }
+    activity.finish_clean(format!(
+        "Formatted {} Java sources ({} changed)",
+        source_count,
+        changed.len()
+    ));
+    Ok(())
+}
+
+fn formatter_project_root(target: &Path) -> Result<PathBuf> {
+    let directory = if target.is_file() {
+        target
+            .parent()
+            .context("Java source has no parent directory")?
+    } else {
+        target
+    };
+    let jman_root = find_workspace_root(directory);
+    if jman_root.join("jman.toml").is_file() {
+        return Ok(jman_root);
+    }
+    let mut nearest_maven = None;
+    let mut nearest_gradle = None;
+    for ancestor in directory.ancestors() {
+        if ancestor.join("settings.gradle").is_file()
+            || ancestor.join("settings.gradle.kts").is_file()
+            || ancestor.join("gradlew").is_file()
+        {
+            return Ok(ancestor.to_path_buf());
+        }
+        if ancestor.join("pom.xml").is_file() {
+            nearest_maven.get_or_insert_with(|| ancestor.to_path_buf());
+            if ancestor.join("mvnw").is_file() {
+                return Ok(ancestor.to_path_buf());
+            }
+        }
+        if ancestor.join("build.gradle").is_file() || ancestor.join("build.gradle.kts").is_file() {
+            nearest_gradle.get_or_insert_with(|| ancestor.to_path_buf());
+        }
+        if ancestor.join(".git").exists() {
+            break;
+        }
+    }
+    if let Some(root) = nearest_maven.or(nearest_gradle) {
+        return Ok(root);
+    }
+    bail!(
+        "cannot locate a JMAN, Maven, or Gradle project for {}",
+        target.display()
+    )
+}
+
+fn java_sources(target: &Path) -> Result<Vec<PathBuf>> {
+    if target.is_file() {
+        if target.extension() != Some(OsStr::new("java")) {
+            bail!("{} is not a Java source file", target.display());
+        }
+        return Ok(vec![target.to_path_buf()]);
+    }
+    if !target.is_dir() {
+        bail!("{} does not exist", target.display());
+    }
+    let mut sources = Vec::new();
+    collect_java_sources(target, &mut sources)?;
+    sources.sort();
+    Ok(sources)
+}
+
+fn collect_java_sources(directory: &Path, sources: &mut Vec<PathBuf>) -> Result<()> {
+    const IGNORED: &[&str] = &[".git", ".gradle", ".idea", ".jman", "build", "target"];
+    for entry in std::fs::read_dir(directory)
+        .with_context(|| format!("cannot read {}", directory.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            if !IGNORED
+                .iter()
+                .any(|name| entry.file_name() == OsStr::new(name))
+            {
+                collect_java_sources(&path, sources)?;
+            }
+        } else if file_type.is_file() && path.extension() == Some(OsStr::new("java")) {
+            sources.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
+    use std::fs::OpenOptions;
+
+    static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let sequence = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let name = path.file_name().context("source path has no file name")?;
+    let temporary = path.with_file_name(format!(
+        ".{}.jman-fmt-{}-{sequence}",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
+    let result = (|| -> Result<()> {
+        let permissions = std::fs::metadata(path)?.permissions();
+        let mut output = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .with_context(|| format!("cannot create {}", temporary.display()))?;
+        output.write_all(contents)?;
+        output.sync_all()?;
+        std::fs::set_permissions(&temporary, permissions)?;
+        std::fs::rename(&temporary, path)
+            .with_context(|| format!("cannot replace {}", path.display()))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 #[allow(clippy::too_many_lines)]

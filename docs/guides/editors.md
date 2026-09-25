@@ -23,11 +23,11 @@ classpath data with a GraalVM-powered compiler frontend.
 1. Install **JMAN Java** from the Visual Studio Marketplace.
 2. Open a trusted folder containing `jman.toml`, `pom.xml`, `build.gradle`, or
    `build.gradle.kts`.
-3. Configure the Java 25 GraalVM used by the frontend:
+3. Choose synchronization behavior. The native frontend and its matching Java
+   platform symbols are already bundled:
 
    ```json
    {
-     "jman.java.javaHome": "/path/to/graalvm-jdk-25",
      "jman.java.buildJavaHome": "",
      "jman.java.buildSystem": "auto",
      "jman.java.buildSync": "prompt"
@@ -78,8 +78,8 @@ Synchronization modes are:
 - `automatic`: relevant model changes trigger synchronization.
 
 Maven/Gradle import prefers project wrappers. A separate compatible build JDK
-can run an older wrapper while the compiler frontend remains on Java 25
-GraalVM. Inspect the chosen runtime in status output.
+can run an older wrapper independently from the bundled native compiler
+frontend. Inspect the chosen runtime in status output.
 
 ## Important boundaries
 

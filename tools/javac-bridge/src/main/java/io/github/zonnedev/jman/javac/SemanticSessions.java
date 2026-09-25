@@ -43,6 +43,14 @@ final class SemanticSessions {
     return session.editorQuery(fileName, source, cursor);
   }
 
+  static FormatResult format(long id, String fileName, String source) {
+    SemanticSession session = SESSIONS.get(id);
+    if (session == null) {
+      throw new IllegalArgumentException("Unknown semantic session: " + id);
+    }
+    return session.format(fileName, source);
+  }
+
   static boolean destroy(long id) {
     SemanticSession session = SESSIONS.remove(id);
     if (session == null) {

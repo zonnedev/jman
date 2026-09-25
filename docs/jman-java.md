@@ -280,11 +280,13 @@ make package-vscode
 code --install-extension target/vscode/jman-java-0.7.1-linux-x64.vsix
 ```
 
-Set `jman.java.javaHome` to an Oracle GraalVM 25 installation. Leave
+The extension bundles the native compiler frontend and its matching platform
+symbols; no separate GraalVM installation is needed. Leave
 `jman.java.buildSystem` on `auto`, or select `maven`/`gradle` when the workspace
-contains both. Disable other Java language servers for the workspace during
-the first comparison. The **JMAN Java** output channel contains server
-startup and protocol failures.
+contains both. Set `jman.java.buildJavaHome` only when a build tool needs an
+explicit runtime. Disable other Java language servers for the workspace during
+the first comparison. The **JMAN Java** output channel contains server startup
+and protocol failures.
 
 Gradle imports select a compatible installed JDK from the wrapper version,
 project daemon criteria, JMAN-managed installations, and the environment. Set

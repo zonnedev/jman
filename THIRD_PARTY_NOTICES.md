@@ -8,6 +8,9 @@ those terms.
   contributors; <https://www.jacoco.org/jacoco/>
 - **Vineflower 1.12.0** — Apache License 2.0; Copyright the Vineflower
   contributors; <https://github.com/Vineflower/vineflower>
+- **OpenJDK Java platform signature data (`ct.sym`)** — GNU General Public
+  License version 2 with the Classpath Exception. The corresponding license
+  material is distributed under `platform/legal/`.
 - **Rust crates linked into JMAN and the native compiler frontend** — exact
   versions and dependency metadata are recorded by `Cargo.lock`; upstream
   package sources and license metadata are available through

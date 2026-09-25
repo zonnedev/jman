@@ -52,9 +52,11 @@ See [dependency management](../guides/dependencies.md) and the exact
 | Source and Javadoc JARs | Supported |
 | Deterministic archive output | Supported |
 | Main-class execution with argument passthrough | Supported |
+| Native javac-aware opinionated source formatting | Supported in CLI, VS Code, and Neovim |
 | Arbitrary Maven/Gradle plugin execution | Not supported in the native build |
 
-See [Build and run](../guides/build-and-run.md).
+See [Build and run](../guides/build-and-run.md) and
+[format Java source](../guides/formatting.md).
 
 ## Testing and coverage
 
@@ -115,7 +117,7 @@ not the only available vendor. See [Java toolchains](../guides/java-toolchains.m
 | Area | Supported behavior |
 | --- | --- |
 | Workspaces | Native JMAN, Maven, and Gradle; wrapper-aware imports and compatible build JDK selection |
-| Editing | Incremental UTF-16 synchronization, diagnostics, completion, hover, signature help, semantic tokens, inlay hints |
+| Editing | Incremental UTF-16 synchronization, diagnostics, completion, hover, signature help, semantic tokens, inlay hints, canonical full-document formatting |
 | Navigation | Local/generated/dependency/JDK definitions, declarations, implementations, references, workspace/document symbols |
 | Refactoring | Prepare rename, conservative rename, safe change signature, organize imports, quick fixes and generated-member actions |
 | Dependencies | Attached-source preference, release-aware multi-release JARs, lazy Vineflower fallback for bytecode-only classes |

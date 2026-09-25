@@ -32,6 +32,7 @@ nav:
       - Publish a library: tutorials/publish-library.md
   - Guides:
       - Build and run: guides/build-and-run.md
+      - Format Java source: guides/formatting.md
       - Dependencies: guides/dependencies.md
       - Java toolchains: guides/java-toolchains.md
       - Testing: guides/testing.md

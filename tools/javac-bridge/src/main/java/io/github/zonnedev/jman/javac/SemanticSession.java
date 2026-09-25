@@ -329,6 +329,11 @@ final class SemanticSession implements AutoCloseable {
     }
   }
 
+  synchronized FormatResult format(String fileName, String source) {
+    return JavaFormatter.format(
+        compiler, files, fileName, source, release, compilerOptions);
+  }
+
   synchronized boolean invalidate(String fileName) {
     return analyses.remove(fileName) != null;
   }

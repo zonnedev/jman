@@ -31,6 +31,7 @@ Configure the same Java language server in VS Code or Neovim with the
 
 ```console
 jman sync             # resolve declarations and update jman.lock
+jman fmt --check      # verify canonical Java source formatting
 jman check            # compile the workspace without packaging
 jman test             # stream the JUnit result tree as tests finish
 jman build --all      # create thin, fat, source, and Javadoc archives

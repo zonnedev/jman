@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use javac_frontend::{EditorQueryResult, ProjectState, SemanticResult};
+use javac_frontend::{EditorQueryResult, FormatResult, ProjectState, SemanticResult};
 use serde_json::{Value, json};
 
 use crate::{Documents, file_uri_to_path, offset_to_position};
@@ -69,6 +69,15 @@ pub trait AnalysisBackend {
             definition: None,
             type_definition: None,
         })
+    }
+
+    fn format(
+        &mut self,
+        _uri: &str,
+        _file_name: &str,
+        _source: &str,
+    ) -> Result<FormatResult, String> {
+        Err("Java formatting is unavailable".to_owned())
     }
 
     fn workspace_source_files(&self) -> Vec<PathBuf> {
@@ -403,11 +412,6 @@ impl<'backend> Server<'backend> {
                             },
                             "codeLensProvider": {"resolveProvider": false},
                             "documentFormattingProvider": true,
-                            "documentRangeFormattingProvider": true,
-                            "documentOnTypeFormattingProvider": {
-                                "firstTriggerCharacter": "}",
-                                "moreTriggerCharacter": ["\n"]
-                            },
                             "inlayHintProvider": true,
                             "selectionRangeProvider": true,
                             "foldingRangeProvider": true,
@@ -524,12 +528,6 @@ impl<'backend> Server<'backend> {
             }
             "textDocument/formatting" if self.lifecycle == Lifecycle::Running => {
                 self.format_document(id, message.get("params"))
-            }
-            "textDocument/rangeFormatting" if self.lifecycle == Lifecycle::Running => {
-                self.format_range(id, message.get("params"))
-            }
-            "textDocument/onTypeFormatting" if self.lifecycle == Lifecycle::Running => {
-                self.format_on_type(id, message.get("params"))
             }
             "textDocument/inlayHint" if self.lifecycle == Lifecycle::Running => {
                 self.inlay_hints(id, message.get("params"))
@@ -2430,64 +2428,47 @@ impl<'backend> Server<'backend> {
         Dispatch::Reply(success(id, json!(highlights)))
     }
 
-    fn formatting_request(
-        &self,
-        id: Value,
-        params: Option<&Value>,
-        lines: impl FnOnce(&Value, usize) -> (usize, usize),
-    ) -> Dispatch {
+    fn format_document(&mut self, id: Value, params: Option<&Value>) -> Dispatch {
         let Some(params) = params else {
             return Dispatch::Reply(error(id, -32602, "Invalid formatting params"));
         };
         let Some(uri) = params["textDocument"]["uri"].as_str() else {
             return Dispatch::Reply(error(id, -32602, "Formatting request has no document"));
         };
-        let Some(source) = self.source_text(uri) else {
+        let Some(source) = self.source_text(uri).map(str::to_owned) else {
             return Dispatch::Reply(success(id, json!([])));
         };
-        let line_count = source.split('\n').count().max(1);
-        let (start, end) = lines(params, line_count);
-        let insert_spaces = params["options"]["insertSpaces"].as_bool().unwrap_or(true);
-        let tab_size = params["options"]["tabSize"]
-            .as_u64()
-            .unwrap_or(4)
-            .clamp(1, 16) as usize;
-        let indent = if insert_spaces {
-            " ".repeat(tab_size)
-        } else {
-            "\t".to_owned()
+        let file_name = file_uri_to_path(uri)
+            .and_then(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "Input.java".to_owned());
+        let Some(backend) = self.backend.as_mut() else {
+            return Dispatch::Reply(error(id, -32603, "Java formatting backend is unavailable"));
         };
-        Dispatch::Reply(success(
-            id,
-            formatting_edit(
-                source,
-                start.min(line_count - 1),
-                end.min(line_count - 1),
-                &indent,
-            )
-            .map(|edit| json!([edit]))
-            .unwrap_or_else(|| json!([])),
-        ))
-    }
-
-    fn format_document(&self, id: Value, params: Option<&Value>) -> Dispatch {
-        self.formatting_request(id, params, |_, lines| (0, lines.saturating_sub(1)))
-    }
-
-    fn format_range(&self, id: Value, params: Option<&Value>) -> Dispatch {
-        self.formatting_request(id, params, |params, _| {
-            (
-                params["range"]["start"]["line"].as_u64().unwrap_or(0) as usize,
-                params["range"]["end"]["line"].as_u64().unwrap_or(0) as usize,
-            )
-        })
-    }
-
-    fn format_on_type(&self, id: Value, params: Option<&Value>) -> Dispatch {
-        self.formatting_request(id, params, |params, _| {
-            let line = params["position"]["line"].as_u64().unwrap_or(0) as usize;
-            (line, line)
-        })
+        match backend.format(uri, &file_name, &source) {
+            Err(message) => Dispatch::Reply(error(id, -32603, &message)),
+            Ok(result) if !result.diagnostics.is_empty() => Dispatch::Reply(error(
+                id,
+                -32602,
+                &format!(
+                    "Cannot format invalid Java source: {}",
+                    result.diagnostics[0].message
+                ),
+            )),
+            Ok(result) if result.source == source => Dispatch::Reply(success(id, json!([]))),
+            Ok(result) => Dispatch::Reply(success(
+                id,
+                json!([{
+                    "range": {
+                        "start": {"line": 0, "character": 0},
+                        "end": offset_to_position(&source, source.len() as u64)
+                    },
+                    "newText": result.source
+                }]),
+            )),
+        }
     }
 
     fn inlay_hints(&self, id: Value, params: Option<&Value>) -> Dispatch {
@@ -3963,115 +3944,6 @@ fn junit_tags(source: &str, offset: u64) -> Vec<&'static str> {
 
 fn has_junit_annotation(source: &str, offset: u64) -> bool {
     !junit_tags(source, offset).is_empty()
-}
-
-fn formatting_edit(source: &str, start: usize, end: usize, indent: &str) -> Option<Value> {
-    let original: Vec<_> = source.split('\n').collect();
-    let formatted = format_java_lines(&original, indent);
-    let original_text = original[start..=end].join("\n");
-    let mut new_text = formatted[start..=end].join("\n");
-    let end_position = if end + 1 < original.len() {
-        new_text.push('\n');
-        json!({"line": end + 1, "character": 0})
-    } else {
-        json!({
-            "line": end,
-            "character": original[end].encode_utf16().count()
-        })
-    };
-    let compared = if end + 1 < original.len() {
-        format!("{original_text}\n")
-    } else {
-        original_text
-    };
-    if compared == new_text {
-        return None;
-    }
-    Some(json!({
-        "range": {
-            "start": {"line": start, "character": 0},
-            "end": end_position
-        },
-        "newText": new_text
-    }))
-}
-
-fn format_java_lines(lines: &[&str], indent: &str) -> Vec<String> {
-    let mut depth = 0_usize;
-    let mut block_comment = false;
-    let mut text_block = false;
-    let mut string = false;
-    let mut character = false;
-    let mut escaped = false;
-    let mut output = Vec::with_capacity(lines.len());
-    for line in lines {
-        let trimmed = line.trim();
-        let closing = trimmed.chars().take_while(|value| *value == '}').count();
-        let line_depth = depth.saturating_sub(closing);
-        output.push(if trimmed.is_empty() {
-            String::new()
-        } else {
-            format!("{}{trimmed}", indent.repeat(line_depth))
-        });
-        let bytes = trimmed.as_bytes();
-        let mut index = 0;
-        while index < bytes.len() {
-            let current = bytes[index];
-            let next = bytes.get(index + 1).copied();
-            if block_comment {
-                if current == b'*' && next == Some(b'/') {
-                    block_comment = false;
-                    index += 2;
-                } else {
-                    index += 1;
-                }
-                continue;
-            }
-            if text_block {
-                if bytes.get(index..index + 3) == Some(b"\"\"\"") {
-                    text_block = false;
-                    index += 3;
-                } else {
-                    index += 1;
-                }
-                continue;
-            }
-            if string || character {
-                if escaped {
-                    escaped = false;
-                } else if current == b'\\' {
-                    escaped = true;
-                } else if (string && current == b'"') || (character && current == b'\'') {
-                    string = false;
-                    character = false;
-                }
-                index += 1;
-                continue;
-            }
-            if current == b'/' && next == Some(b'/') {
-                break;
-            }
-            if current == b'/' && next == Some(b'*') {
-                block_comment = true;
-                index += 2;
-                continue;
-            }
-            if bytes.get(index..index + 3) == Some(b"\"\"\"") {
-                text_block = true;
-                index += 3;
-                continue;
-            }
-            match current {
-                b'"' => string = true,
-                b'\'' => character = true,
-                b'{' => depth += 1,
-                b'}' => depth = depth.saturating_sub(1),
-                _ => {}
-            }
-            index += 1;
-        }
-    }
-    output
 }
 
 fn is_external_source_uri(uri: &str) -> bool {
@@ -6677,8 +6549,8 @@ mod tests {
         assert_eq!(capabilities["documentSymbolProvider"], true);
         assert_eq!(capabilities["documentHighlightProvider"], true);
         assert_eq!(capabilities["documentFormattingProvider"], true);
-        assert_eq!(capabilities["documentRangeFormattingProvider"], true);
-        assert!(capabilities["documentOnTypeFormattingProvider"].is_object());
+        assert!(capabilities["documentRangeFormattingProvider"].is_null());
+        assert!(capabilities["documentOnTypeFormattingProvider"].is_null());
         assert_eq!(capabilities["inlayHintProvider"], true);
         assert_eq!(capabilities["selectionRangeProvider"], true);
         assert_eq!(capabilities["foldingRangeProvider"], true);
@@ -7022,19 +6894,19 @@ mod tests {
     }
 
     #[test]
-    fn formatting_is_deterministic_range_scoped_and_ignores_literal_braces() {
+    fn formatting_uses_the_canonical_backend_for_a_full_document_edit() {
         let uri = "file:///Format.java";
         let source = "class Format {  \nvoid run() {\nString value = \"{\"; // }\nif (true) {\nuse();   \n}\n}\n}";
         let expected = "class Format {\n    void run() {\n        String value = \"{\"; // }\n        if (true) {\n            use();\n        }\n    }\n}";
-        assert_eq!(
-            format_java_lines(&source.split('\n').collect::<Vec<_>>(), "    ").join("\n"),
-            expected
-        );
-        let mut server = Server::with_backend(FakeBackend);
+        let mut server = Server::with_backend(FormattingBackend(expected));
         let initialized = server.dispatch(json!({"jsonrpc":"2.0","id":1,"method":"initialize"}));
         assert_eq!(
             reply(&initialized)["result"]["capabilities"]["documentFormattingProvider"],
             true
+        );
+        assert!(
+            reply(&initialized)["result"]["capabilities"]["documentRangeFormattingProvider"]
+                .is_null()
         );
         server.dispatch(json!({
             "jsonrpc":"2.0","method":"textDocument/didOpen",
@@ -7045,22 +6917,8 @@ mod tests {
             "params":{"textDocument":{"uri":uri},"options":{"tabSize":4,"insertSpaces":true}}
         }));
         assert_eq!(reply(&formatted)["result"][0]["newText"], expected);
-        let range = server.dispatch(json!({
-            "jsonrpc":"2.0","id":3,"method":"textDocument/rangeFormatting",
-            "params":{
-                "textDocument":{"uri":uri},
-                "range":{"start":{"line":4,"character":0},"end":{"line":4,"character":6}},
-                "options":{"tabSize":4,"insertSpaces":true}
-            }
-        }));
-        assert_eq!(reply(&range)["result"][0]["range"]["start"]["line"], 4);
-        assert_eq!(reply(&range)["result"][0]["range"]["end"]["line"], 5);
-        assert_eq!(
-            reply(&range)["result"][0]["newText"],
-            "            use();\n"
-        );
         let selections = server.dispatch(json!({
-            "jsonrpc":"2.0","id":4,"method":"textDocument/selectionRange",
+            "jsonrpc":"2.0","id":3,"method":"textDocument/selectionRange",
             "params":{
                 "textDocument":{"uri":uri},
                 "positions":[{"line":4,"character":2}]
@@ -7069,7 +6927,7 @@ mod tests {
         assert_eq!(reply(&selections)["result"][0]["range"]["start"]["line"], 4);
         assert!(reply(&selections)["result"][0]["parent"].is_object());
         let folds = server.dispatch(json!({
-            "jsonrpc":"2.0","id":5,"method":"textDocument/foldingRange",
+            "jsonrpc":"2.0","id":4,"method":"textDocument/foldingRange",
             "params":{"textDocument":{"uri":uri}}
         }));
         assert!(reply(&folds)["result"].as_array().unwrap().len() >= 3);
@@ -7362,6 +7220,35 @@ mod tests {
     }
 
     struct FakeBackend;
+
+    struct FormattingBackend(&'static str);
+
+    impl AnalysisBackend for FormattingBackend {
+        fn analyze(
+            &mut self,
+            _uri: &str,
+            _file_name: &str,
+            _source: &str,
+        ) -> Result<SemanticResult, String> {
+            Ok(SemanticResult {
+                package_name: String::new(),
+                symbols: Vec::new(),
+                diagnostics: Vec::new(),
+            })
+        }
+
+        fn format(
+            &mut self,
+            _uri: &str,
+            _file_name: &str,
+            _source: &str,
+        ) -> Result<FormatResult, String> {
+            Ok(FormatResult {
+                source: self.0.to_owned(),
+                diagnostics: Vec::new(),
+            })
+        }
+    }
 
     impl AnalysisBackend for FakeBackend {
         fn analyze(

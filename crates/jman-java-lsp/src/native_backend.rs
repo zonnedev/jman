@@ -19,7 +19,8 @@ use crate::{
     select_compile_model,
 };
 use javac_frontend::{
-    ABI_VERSION, EditorQueryResult, Frontend, ProjectSession, SemanticResult, WorkspaceSource,
+    ABI_VERSION, EditorQueryResult, FormatResult, Frontend, ProjectSession, SemanticResult,
+    WorkspaceSource,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -130,8 +131,36 @@ struct PendingSemanticDocument {
 }
 
 impl NativeBackend {
+    pub fn try_new() -> Result<Self, String> {
+        Frontend::new()
+            .map(Self::new)
+            .map_err(|error| format!("cannot start Java frontend: {error}"))
+    }
+
     pub fn new(frontend: Frontend) -> Self {
         Self::with_cancellation(frontend, Arc::new(AtomicU64::new(0)))
+    }
+
+    /// Load only the compile models needed by batch formatting.
+    ///
+    /// Unlike LSP initialization, this deliberately avoids workspace indexing
+    /// and annotation-processor execution.
+    pub fn initialize_formatter(&mut self, root: &Path) -> Result<(), String> {
+        let loaded = load_project(root, None)?;
+        self.root = Some(root.to_path_buf());
+        self.build_runtime = loaded.build_runtime;
+        self.models = loaded.models;
+        self.sessions.clear();
+        Ok(())
+    }
+
+    pub fn format_path(&mut self, path: &Path, source: &str) -> Result<FormatResult, String> {
+        let uri = format!("file://{}", path.display());
+        let file_name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Input.java".to_owned());
+        self.format(&uri, &file_name, source)
     }
 
     pub(crate) fn with_cancellation(
@@ -2458,6 +2487,12 @@ impl AnalysisBackend for NativeBackend {
         }
         self.editor_queries.insert(cache_key, result.clone());
         Ok(result)
+    }
+
+    fn format(&mut self, uri: &str, file_name: &str, source: &str) -> Result<FormatResult, String> {
+        self.session_for(uri)?
+            .format(file_name, source)
+            .map_err(|error| format!("native Java formatting failed: {error:?}"))
     }
 
     fn workspace_source_files(&self) -> Vec<std::path::PathBuf> {

@@ -97,8 +97,8 @@ locates its bundled runtime files relative to that executable.
 - Linux on an x86-64 processor with glibc.
 - A supported JDK for project compilation. JMAN can install and select one with
   `jman java install --global`.
-- Java 25 GraalVM when using the Java language server. This runtime is separate
-  from the JDK used to compile a project.
+- No separate JVM is required for the native language server or formatter;
+  release packages include their matching Java platform symbols.
 - Network access for uncached Maven artifacts, the JDK catalog, vulnerability
   data, or publication. Locked, cached builds can run offline.
 

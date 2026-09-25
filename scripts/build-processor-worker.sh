@@ -9,7 +9,12 @@ jar_file="${project_dir}/target/processor-worker.jar"
 processor_source="${project_dir}/tools/annotation-processor-worker/src/main/java/io/github/zonnedev/jman/processor/worker/ProcessorWorker.java"
 mapfile -t semantic_sources < <(
   find "${project_dir}/tools/javac-bridge/src/main/java" \
-    -name '*.java' ! -name 'NativeBridge.java' -print | sort
+    -name '*.java' \
+    ! -name 'NativeBridge.java' \
+    ! -name 'JavaFormatter.java' \
+    ! -name 'SemanticSession.java' \
+    ! -name 'SemanticSessions.java' \
+    -print | sort
 )
 
 rm -rf "${classes}"

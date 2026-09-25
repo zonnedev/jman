@@ -22,7 +22,224 @@ final class JavacFrontendTest {
     selectsMultiReleaseJarApisByProjectRelease();
     sessionUsesTheLatestUnsavedBuffer();
     selectsProcessingModeFromCallerOptions();
+    formatsJavaFromJavacTokensAndPreservesComments();
+    expandsWildcardImportsAndOrdersMembers();
+    expandsStaticWildcardsAndPreservesHeaderCommentsAndInitializerOrder();
+    formatsModernJavaSyntaxIdempotently();
+    selectsFormattingReleaseAndOnlyRelevantCompilerOptions();
+    reordersDocumentedInterfaceMethodsWithoutDetachingJavadocs();
+    ordersMembersWrittenOnOneLine();
+    formatsAFileThatIsAlsoPresentOnTheProjectSourcePath();
+    preservesWildcardImportsWhenAttributionIsIncomplete();
     wireFormatIsVersionedAndDeterministic();
+  }
+
+  private static void formatsJavaFromJavacTokensAndPreservesComments() {
+    String source =
+        "class Messy{ // type comment\n"
+            + "void run( ){if  (value== 1) {call( 1,2 ); /* keep me */}}\n"
+            + "}\n";
+    FormatResult result =
+        JavaFormatter.format(
+            "Messy.java", source, java.util.List.of(), java.util.List.of(), 25);
+    assertTrue(result.diagnostics().isEmpty(), result.diagnostics().toString());
+    assertEquals(
+        "class Messy { // type comment\n"
+            + "    void run() {\n"
+            + "        if (value == 1) {\n"
+            + "            call(1, 2); /* keep me */\n"
+            + "        }\n"
+            + "    }\n"
+            + "}\n",
+        result.source());
+    FormatResult second =
+        JavaFormatter.format(
+            "Messy.java", result.source(), java.util.List.of(), java.util.List.of(), 25);
+    assertEquals(result.source(), second.source());
+  }
+
+  private static void expandsWildcardImportsAndOrdersMembers() {
+    String source =
+        "import java.util.*;\n"
+            + "class Ordered {\n"
+            + "    // zebra docs\n"
+            + "    void zebra() {} // zebra trailing\n"
+            + "    private int value;\n"
+            + "    void alpha() { List<String> values = new ArrayList<>(); }\n"
+            + "}\n";
+    FormatResult result =
+        JavaFormatter.format(
+            "Ordered.java", source, java.util.List.of(), java.util.List.of(), 25);
+    assertTrue(result.diagnostics().isEmpty(), result.diagnostics().toString());
+    assertEquals(
+        "import java.util.ArrayList;\n"
+            + "import java.util.List;\n"
+            + "\n"
+            + "class Ordered {\n"
+            + "    private int value;\n"
+            + "\n"
+            + "    void alpha() {\n"
+            + "        List<String> values = new ArrayList<>();\n"
+            + "    }\n"
+            + "\n"
+            + "    // zebra docs\n"
+            + "    void zebra() {} // zebra trailing\n"
+            + "}\n",
+        result.source());
+  }
+
+  private static void expandsStaticWildcardsAndPreservesHeaderCommentsAndInitializerOrder() {
+    String source =
+        "package demo; import java.util.*; import static java.util.Collections.*;\n"
+            + "class Ordered { // header\n"
+            + "  static int zeta=1; static { zeta++; } static int alpha=zeta+1;\n"
+            + "  void zebra(){sort(new ArrayList<String>());}\n"
+            + "  void alpha(String[]args){}\n"
+            + "}\n";
+    FormatResult result =
+        JavaFormatter.format(
+            "Ordered.java", source, java.util.List.of(), java.util.List.of(), 25);
+    assertTrue(result.diagnostics().isEmpty(), result.diagnostics().toString());
+    assertEquals(
+        "package demo;\n"
+            + "\n"
+            + "import java.util.ArrayList;\n"
+            + "\n"
+            + "import static java.util.Collections.sort;\n"
+            + "\n"
+            + "class Ordered { // header\n"
+            + "    static int zeta = 1;\n"
+            + "\n"
+            + "    static {\n"
+            + "        zeta++;\n"
+            + "    }\n"
+            + "\n"
+            + "    static int alpha = zeta + 1;\n"
+            + "\n"
+            + "    void alpha(String[] args) {}\n"
+            + "\n"
+            + "    void zebra() {\n"
+            + "        sort(new ArrayList<String>());\n"
+            + "    }\n"
+            + "}\n",
+        result.source());
+  }
+
+  private static void formatsModernJavaSyntaxIdempotently() {
+    String source =
+        "import java.util.function.*;\n"
+            + "@Deprecated record Modern<T>(T value){\n"
+            + "  static final String TEXT=\"\"\"\nhello\n\"\"\";\n"
+            + "  int choose(boolean flag){int negative=-1;return flag?negative:-2;}\n"
+            + "  void each(String...args){for(String arg:args){Supplier<String> task=()->arg;task.get();this.<String>consume(arg);}}\n"
+            + "  <X> void consume(X value){}\n"
+            + "  <R extends Comparable<? super R>> R identity(R input){return input;}\n"
+            + "}\n";
+    FormatResult first =
+        JavaFormatter.format(
+            "Modern.java", source, java.util.List.of(), java.util.List.of(), 25);
+    assertTrue(first.diagnostics().isEmpty(), first.diagnostics().toString());
+    assertTrue(first.source().contains("int negative = -1;"), first.source());
+    assertTrue(first.source().contains("return flag ? negative : -2;"), first.source());
+    assertTrue(first.source().contains("void each(String... args)"), first.source());
+    assertTrue(first.source().contains("Comparable<? super R>"), first.source());
+    assertTrue(first.source().contains("this.<String>consume(arg);"), first.source());
+    assertTrue(first.source().contains("import java.util.function.Supplier;"), first.source());
+    assertTrue(first.source().contains("\"\"\"\nhello\n\"\"\""), first.source());
+    FormatResult second =
+        JavaFormatter.format(
+            "Modern.java", first.source(), java.util.List.of(), java.util.List.of(), 25);
+    assertEquals(first.source(), second.source());
+  }
+
+  private static void selectsFormattingReleaseAndOnlyRelevantCompilerOptions() {
+    java.util.List<String> options =
+        JavaFormatter.formatOptions(17, java.util.List.of("--enable-preview", "-Xlint:all"));
+    assertTrue(options.contains("--release"), "formatter must select the Java release");
+    assertTrue(options.contains("17"), "formatter lost the requested Java release");
+    assertTrue(
+        options.contains("--enable-preview"), "formatter must retain preview syntax support");
+    assertTrue(!options.contains("-Xlint:all"), "formatter leaked unrelated compiler options");
+  }
+
+  private static void reordersDocumentedInterfaceMethodsWithoutDetachingJavadocs() {
+    String source =
+        "/* license */\ninterface OwnerRepository {\n"
+            + "  /** Find {@link Owner}s.\n"
+            + "   * @return matching {@link Owner}s (or an empty collection if none\n"
+            + "   * found)\n"
+            + "   */\n"
+            + "  Page<Owner> findByLastNameStartingWith(String name, Pageable pageable);\n"
+            + "  /** Find one {@link Owner}.\n   * @param id owner id\n   */\n"
+            + "  Optional<Owner> findById(Integer id);\n"
+            + "}\n";
+    FormatResult result =
+        JavaFormatter.format(
+            "OwnerRepository.java", source, java.util.List.of(), java.util.List.of(), 25);
+    assertTrue(result.diagnostics().isEmpty(), result.source() + "\n" + result.diagnostics());
+    assertTrue(result.source().startsWith("/* license */\ninterface"), result.source());
+    assertTrue(
+        result.source().indexOf("findById") < result.source().indexOf("findByLastNameStartingWith"),
+        result.source());
+  }
+
+  private static void ordersMembersWrittenOnOneLine() {
+    String source =
+        "class Inline { class Nested { void zebra() {} void alpha() {} } int value; void zebra() {} void alpha() {} }\n";
+    FormatResult result =
+        JavaFormatter.format(
+            "Inline.java", source, java.util.List.of(), java.util.List.of(), 25);
+    assertTrue(
+        result.source().indexOf("void alpha()") < result.source().indexOf("void zebra()"),
+        result.source());
+    int nestedStart = result.source().indexOf("class Nested");
+    int nestedEnd = result.source().indexOf("\n    }", nestedStart);
+    String nested = result.source().substring(nestedStart, nestedEnd);
+    assertTrue(
+        nested.indexOf("void alpha()") < nested.indexOf("void zebra()"), result.source());
+  }
+
+  private static void formatsAFileThatIsAlsoPresentOnTheProjectSourcePath() {
+    try {
+      java.nio.file.Path root = java.nio.file.Files.createTempDirectory("jman-formatter-source-path-");
+      try {
+        java.nio.file.Path file = root.resolve("demo/Inline.java");
+        java.nio.file.Files.createDirectories(file.getParent());
+        String source =
+            "package demo; import java.util.*; class Inline { List<String> values=new ArrayList<>(); void zebra() {} void alpha() {} }\n";
+        java.nio.file.Files.writeString(file, source);
+        FormatResult result =
+            JavaFormatter.format(
+                "Inline.java", source, java.util.List.of(), java.util.List.of(root), 25);
+        assertTrue(
+            result.source().indexOf("void alpha()") < result.source().indexOf("void zebra()"),
+            result.source());
+      } finally {
+        try (var paths = java.nio.file.Files.walk(root)) {
+          paths.sorted(java.util.Comparator.reverseOrder())
+              .forEach(
+                  path -> {
+                    try {
+                      java.nio.file.Files.deleteIfExists(path);
+                    } catch (java.io.IOException exception) {
+                      throw new java.io.UncheckedIOException(exception);
+                    }
+                  });
+        }
+      }
+    } catch (java.io.IOException exception) {
+      throw new AssertionError(exception);
+    }
+  }
+
+  private static void preservesWildcardImportsWhenAttributionIsIncomplete() {
+    String source =
+        "import java.util.*; class Incomplete { List<String> values; Missing unresolved; }\n";
+    FormatResult result =
+        JavaFormatter.format(
+            "Incomplete.java", source, java.util.List.of(), java.util.List.of(), 25);
+    assertTrue(result.diagnostics().isEmpty(), result.diagnostics().toString());
+    assertTrue(result.source().contains("import java.util.*;"), result.source());
   }
 
   private static void selectsProcessingModeFromCallerOptions() {

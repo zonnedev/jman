@@ -57,6 +57,8 @@ esac
 EOF
 chmod +x "${payload_dir}/jman"
 printf 'runtime fixture\n' > "${payload_dir}/libjman_javac_frontend.so"
+mkdir -p "${payload_dir}/platform/lib"
+printf 'compiler platform fixture\n' > "${payload_dir}/platform/lib/ct.sym"
 tar -czf "${release_dir}/${archive_name}" -C "${test_root}/payload" "${payload_name}"
 (
   cd "${release_dir}"

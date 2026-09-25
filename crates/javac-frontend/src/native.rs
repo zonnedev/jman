@@ -7,8 +7,8 @@ use std::rc::Rc;
 use crate::ABI_VERSION;
 use crate::{
     EditorCompletion, EditorDefinition, EditorHover, EditorQueryResult, EditorSignature,
-    SemanticDiagnostic, SemanticResult, SemanticSymbol, StructuralFile, WorkspaceParseResult,
-    WorkspaceSource,
+    FormatResult, SemanticDiagnostic, SemanticResult, SemanticSymbol, StructuralFile,
+    WorkspaceParseResult, WorkspaceSource,
 };
 
 #[repr(C)]
@@ -34,6 +34,11 @@ unsafe extern "C" {
     ) -> c_int;
     fn graal_tear_down_isolate(thread: *mut GraalIsolateThread) -> c_int;
     fn javac_frontend_abi_version(thread: *mut GraalIsolateThread) -> u32;
+    fn javac_frontend_configure_platform(
+        thread: *mut GraalIsolateThread,
+        home: *const u8,
+        home_len: usize,
+    ) -> c_int;
     fn javac_frontend_parse(
         thread: *mut GraalIsolateThread,
         source: *const u8,
@@ -90,6 +95,14 @@ unsafe extern "C" {
         file_name_len: usize,
         cursor: c_int,
     ) -> *mut u8;
+    fn javac_frontend_session_format(
+        thread: *mut GraalIsolateThread,
+        session_id: u64,
+        source: *const u8,
+        source_len: usize,
+        file_name: *const u8,
+        file_name_len: usize,
+    ) -> *mut u8;
     fn javac_frontend_session_destroy(thread: *mut GraalIsolateThread, session_id: u64) -> c_int;
     fn javac_frontend_session_invalidate(
         thread: *mut GraalIsolateThread,
@@ -103,6 +116,8 @@ unsafe extern "C" {
 pub enum FrontendError {
     IsolateCreation(c_int),
     AbiMismatch { expected: u32, actual: u32 },
+    PlatformUnavailable(PathBuf),
+    PlatformConfiguration(c_int),
     NullResult,
     InvalidResult(&'static str),
     InvalidClasspath,
@@ -111,6 +126,56 @@ pub enum FrontendError {
     SessionInvalidate(c_int),
     TearDown(c_int),
 }
+
+impl std::fmt::Display for FrontendError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IsolateCreation(status) => {
+                write!(
+                    formatter,
+                    "native isolate creation failed with status {status}"
+                )
+            }
+            Self::AbiMismatch { expected, actual } => write!(
+                formatter,
+                "native frontend ABI mismatch: expected {expected}, found {actual}"
+            ),
+            Self::PlatformUnavailable(home) => write!(
+                formatter,
+                "native javac platform is missing at {}/lib/ct.sym; keep the platform directory beside the jman executable",
+                home.display()
+            ),
+            Self::PlatformConfiguration(status) => write!(
+                formatter,
+                "native javac platform configuration failed with status {status}"
+            ),
+            Self::NullResult => formatter.write_str("native frontend returned no result"),
+            Self::InvalidResult(message) => write!(formatter, "invalid native result: {message}"),
+            Self::InvalidClasspath => formatter.write_str("invalid native frontend path list"),
+            Self::SessionCreation => formatter.write_str("native session creation failed"),
+            Self::SessionDestroy(status) => {
+                write!(
+                    formatter,
+                    "native session destruction failed with status {status}"
+                )
+            }
+            Self::SessionInvalidate(status) => {
+                write!(
+                    formatter,
+                    "native session invalidation failed with status {status}"
+                )
+            }
+            Self::TearDown(status) => {
+                write!(
+                    formatter,
+                    "native isolate teardown failed with status {status}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for FrontendError {}
 
 pub struct Frontend {
     inner: Rc<FrontendInner>,
@@ -144,6 +209,35 @@ impl Frontend {
                 expected: ABI_VERSION,
                 actual,
             });
+        }
+        let platform_home = match native_platform_home() {
+            Ok(home) => home,
+            Err(error) => {
+                // SAFETY: the isolate is live and still owned by this function.
+                unsafe { graal_tear_down_isolate(thread.as_ptr()) };
+                return Err(error);
+            }
+        };
+        let encoded_home = match platform_home.to_str() {
+            Some(home) => home,
+            None => {
+                // SAFETY: the isolate is live and still owned by this function.
+                unsafe { graal_tear_down_isolate(thread.as_ptr()) };
+                return Err(FrontendError::PlatformUnavailable(platform_home));
+            }
+        };
+        // SAFETY: the platform path remains live for the duration of the native call.
+        let status = unsafe {
+            javac_frontend_configure_platform(
+                thread.as_ptr(),
+                encoded_home.as_ptr(),
+                encoded_home.len(),
+            )
+        };
+        if status != 0 {
+            // SAFETY: the isolate is live and still owned by this function.
+            unsafe { graal_tear_down_isolate(thread.as_ptr()) };
+            return Err(FrontendError::PlatformConfiguration(status));
         }
         Ok(Self {
             inner: Rc::new(FrontendInner { thread }),
@@ -311,6 +405,34 @@ impl Frontend {
     }
 }
 
+fn native_platform_home() -> Result<PathBuf, FrontendError> {
+    if let Some(configured) = std::env::var_os("JMAN_JAVAC_FRONTEND_PLATFORM_HOME") {
+        let home = PathBuf::from(configured);
+        return home
+            .join("lib/ct.sym")
+            .is_file()
+            .then_some(home.clone())
+            .ok_or(FrontendError::PlatformUnavailable(home));
+    }
+
+    let mut candidates = Vec::new();
+    if let Some(directory) = std::env::var_os("JMAN_JAVAC_FRONTEND_LIB_DIR") {
+        candidates.push(PathBuf::from(directory).join("platform"));
+    }
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(directory) = executable.parent()
+    {
+        candidates.push(directory.join("platform"));
+    }
+    if let Some(directory) = option_env!("JMAN_COMPILED_FRONTEND_PLATFORM_HOME") {
+        candidates.push(PathBuf::from(directory));
+    }
+    candidates
+        .into_iter()
+        .find(|home| home.join("lib/ct.sym").is_file())
+        .ok_or_else(|| FrontendError::PlatformUnavailable(PathBuf::from("platform")))
+}
+
 impl ProjectSession {
     pub fn analyze(&self, file_name: &str, source: &str) -> Result<SemanticResult, FrontendError> {
         // SAFETY: the session belongs to this live frontend and inputs outlive the call.
@@ -348,6 +470,22 @@ impl ProjectSession {
         };
         let payload = copy_and_free(self.inner.thread, result)?;
         decode_editor_query_result(&payload)
+    }
+
+    pub fn format(&self, file_name: &str, source: &str) -> Result<FormatResult, FrontendError> {
+        // SAFETY: the session belongs to this live frontend and inputs outlive the call.
+        let result = unsafe {
+            javac_frontend_session_format(
+                self.inner.thread.as_ptr(),
+                self.id.get(),
+                source.as_ptr(),
+                source.len(),
+                file_name.as_ptr(),
+                file_name.len(),
+            )
+        };
+        let payload = copy_and_free(self.inner.thread, result)?;
+        decode_format_result(&payload)
     }
 
     pub fn invalidate(&self, file_name: &str) -> Result<(), FrontendError> {
@@ -569,6 +707,36 @@ pub fn decode_editor_query_result(payload: &[u8]) -> Result<EditorQueryResult, F
         hover,
         definition,
         type_definition,
+    })
+}
+
+pub fn decode_format_result(payload: &[u8]) -> Result<FormatResult, FrontendError> {
+    let mut input = WireReader::new(payload);
+    if input.take(4)? != b"JFF1" {
+        return Err(FrontendError::InvalidResult(
+            "formatter wire version mismatch",
+        ));
+    }
+    let source = input.string()?;
+    let diagnostic_count = input.count()?;
+    let mut diagnostics = Vec::with_capacity(diagnostic_count);
+    for _ in 0..diagnostic_count {
+        diagnostics.push(SemanticDiagnostic {
+            kind: input.string()?,
+            code: input.string()?,
+            start: input.u64()?,
+            end: input.u64()?,
+            line: input.u64()?,
+            column: input.u64()?,
+            message: input.string()?,
+        });
+    }
+    if !input.remaining().is_empty() {
+        return Err(FrontendError::InvalidResult("trailing formatter wire data"));
+    }
+    Ok(FormatResult {
+        source,
+        diagnostics,
     })
 }
 
@@ -849,6 +1017,49 @@ mod tests {
             .analyze("Overlay.java", "class Overlay { int after; }")
             .expect("reanalyze invalidated overlay");
         assert_eq!(second, third);
+    }
+
+    #[test]
+    fn project_session_formats_source_and_preserves_comments_idempotently() {
+        let frontend = Frontend::new().expect("create frontend");
+        let session = frontend
+            .create_session(&[], &[], 25)
+            .expect("create project session");
+        let source = "class Messy{ // keep\nvoid zebra(){} int value; void alpha(){if  (value== 1) {call( 1,2 );}}}";
+
+        let first = session.format("Messy.java", source).expect("format source");
+        assert!(first.diagnostics.is_empty());
+        assert!(first.source.contains("// keep"));
+        assert!(first.source.contains("if (value == 1)"));
+        assert!(first.source.contains("call(1, 2);"));
+        assert!(
+            first.source.find("void alpha()").unwrap() < first.source.find("void zebra()").unwrap(),
+            "{}",
+            first.source
+        );
+
+        let second = session
+            .format("Messy.java", &first.source)
+            .expect("format canonical source");
+        assert_eq!(second, first);
+    }
+
+    #[test]
+    fn project_session_formats_older_releases_inside_the_native_image() {
+        let frontend = Frontend::new().expect("create frontend");
+        let session = frontend
+            .create_session(&[], &[], 17)
+            .expect("create Java 17 session");
+        let result = session
+            .format(
+                "Legacy.java",
+                "import java.util.*; class Legacy{List<String> values=new ArrayList<>();}\n",
+            )
+            .expect("format Java 17 source");
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.source.contains("import java.util.ArrayList;"));
+        assert!(result.source.contains("import java.util.List;"));
     }
 
     #[test]

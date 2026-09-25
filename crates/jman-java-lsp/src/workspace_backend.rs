@@ -1,7 +1,7 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 
-use javac_frontend::{EditorQueryResult, SemanticResult};
+use javac_frontend::{EditorQueryResult, FormatResult, SemanticResult};
 use serde_json::Value;
 
 use crate::{
@@ -119,6 +119,12 @@ impl AnalysisBackend for WorkspaceBackend {
         self.owning_mut(uri)
             .ok_or_else(|| format!("no workspace folder owns {uri}"))?
             .editor_query(uri, file_name, source, cursor)
+    }
+
+    fn format(&mut self, uri: &str, file_name: &str, source: &str) -> Result<FormatResult, String> {
+        self.owning_mut(uri)
+            .ok_or_else(|| format!("no workspace folder owns {uri}"))?
+            .format(uri, file_name, source)
     }
 
     fn workspace_source_files(&self) -> Vec<PathBuf> {

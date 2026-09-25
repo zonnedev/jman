@@ -9,5 +9,6 @@ fn main() {
         println!("cargo::rustc-link-search=native={directory}");
         println!("cargo::rustc-link-lib=dylib=jman_javac_frontend");
         println!("cargo::rustc-link-arg=-Wl,-rpath,{directory}");
+        println!("cargo::rustc-env=JMAN_COMPILED_FRONTEND_PLATFORM_HOME={directory}/platform");
     }
 }

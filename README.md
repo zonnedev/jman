@@ -9,7 +9,8 @@
 
 JMAN is an opinionated, native Java toolchain written in Rust. One executable
 creates projects, resolves dependencies, selects JDKs, builds, tests, runs,
-audits, publishes, and powers Java support in VS Code and Neovim.
+formats source, audits, publishes, and powers Java support in VS Code and
+Neovim.
 
 ```bash
 curl -fsSL https://github.com/zonnedev/jman/releases/latest/download/install.sh | sh
@@ -92,6 +93,7 @@ setup, project overrides, scoped execution, storage, and troubleshooting.
 | Projects | New applications, libraries, multi-module workspaces, Maven import |
 | Dependencies | Maven repositories, BOMs, scopes, exclusions, paths, lockfiles, offline builds |
 | Build | Checks, thin and executable fat JARs, source JARs, Javadocs, annotation processors |
+| Format | Native javac-aware canonical formatting, import expansion, safe member ordering, CI checks |
 | Test | Live JUnit tree, selectors, unit/integration source sets, parallel modules, coverage |
 | Supply chain | Upgrade discovery, transactional updates, OSV audits, signed publishing |
 | Java | Multi-vendor JDK catalog, verified installation, global/project selection, project-aware shims |
@@ -105,9 +107,9 @@ boundary is recorded in the [product contract](docs/product-contract.md) and
 ## Platform status
 
 The current release targets 64-bit glibc-based Linux systems. The Java language
-server requires Java 25 GraalVM for its compiler frontend; builds may target
-and run on supported project JDKs independently. Windows, macOS, ARM, and
-Alpine Linux are not supported yet.
+server bundles its native compiler frontend and matching Java platform symbols;
+builds target and run on independently selected project JDKs. Windows, macOS,
+ARM, and Alpine Linux are not supported yet.
 
 ## Contributing
 

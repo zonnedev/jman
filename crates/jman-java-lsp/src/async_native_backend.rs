@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use javac_frontend::{EditorQueryResult, Frontend, SemanticResult};
+use javac_frontend::{EditorQueryResult, FormatResult, Frontend, SemanticResult};
 use serde_json::Value;
 
 use crate::{AnalysisBackend, CacheStatus, NativeBackend, SourceMetadata};
@@ -19,6 +19,7 @@ enum Command {
     Initialize(Option<String>, Option<Value>),
     Analyze(String, String, String, Reply<SemanticResult>),
     EditorQuery(String, String, String, u32, Reply<EditorQueryResult>),
+    Format(String, String, String, Reply<FormatResult>),
     Sources(Reply<Vec<PathBuf>>),
     Close(String),
     Invalidate(Vec<String>),
@@ -192,6 +193,13 @@ impl AsyncNativeBackend {
                             );
                             let _ = reply.send(result);
                         }
+                        Command::Format(uri, file_name, source, reply) => {
+                            let result = initialization_error.clone().map_or_else(
+                                || backend.format(&uri, &file_name, &source),
+                                |error| Err(format!("project initialization failed: {error}")),
+                            );
+                            let _ = reply.send(result);
+                        }
                         Command::Sources(reply) => {
                             let _ = reply.send(Ok(backend.workspace_source_files()));
                         }
@@ -350,6 +358,17 @@ impl AnalysisBackend for AsyncNativeBackend {
                 file_name.to_owned(),
                 source.to_owned(),
                 cursor,
+                reply,
+            )
+        })
+    }
+
+    fn format(&mut self, uri: &str, file_name: &str, source: &str) -> Result<FormatResult, String> {
+        self.request(|reply| {
+            Command::Format(
+                uri.to_owned(),
+                file_name.to_owned(),
+                source.to_owned(),
                 reply,
             )
         })

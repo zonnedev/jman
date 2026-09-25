@@ -40,8 +40,16 @@ mapfile -t test_sources < <(
     -name '*.java' -print | sort
 )
 
-javac -Werror -Xlint:all -d "${classes_dir}" "${main_sources[@]}" "${test_sources[@]}"
-java -Djava.io.tmpdir="${test_tmp}" -ea -cp "${classes_dir}" io.github.zonnedev.jman.javac.JavacFrontendTest
+javac -Werror -Xlint:all \
+  --add-exports jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED \
+  --add-exports jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED \
+  --add-exports jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED \
+  -d "${classes_dir}" "${main_sources[@]}" "${test_sources[@]}"
+java -Djava.io.tmpdir="${test_tmp}" -ea \
+  --add-exports jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED \
+  --add-exports jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED \
+  --add-exports jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED \
+  -cp "${classes_dir}" io.github.zonnedev.jman.javac.JavacFrontendTest
 java -Djava.io.tmpdir="${test_tmp}" -ea -cp "${classes_dir}" io.github.zonnedev.jman.javac.ProcessedSemanticWorkerTest
 java -Djava.io.tmpdir="${test_tmp}" -ea -cp "${classes_dir}" io.github.zonnedev.jman.maven.importer.MavenModelImporterTest
 java -Djava.io.tmpdir="${test_tmp}" -ea -cp "${classes_dir}" io.github.zonnedev.jman.processor.worker.ProcessorWorkerTest

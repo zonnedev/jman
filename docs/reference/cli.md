@@ -129,6 +129,20 @@ jman check [PATH] [--jobs COUNT] [--offline]
 `--offline` prevents download of a missing managed JDK. Dependencies must
 already match the lockfile and cache.
 
+## jman fmt
+
+Format Java source with JMAN's canonical project-aware formatter.
+
+```text
+jman fmt [PATH] [--check]
+```
+
+`PATH` may be a JMAN, Maven, or Gradle project directory, a source subtree, or
+one `.java` file. The default is the current directory. `--check` reports files
+that differ and exits unsuccessfully without writing. See the
+[formatting guide](../guides/formatting.md) for the canonical style and safety
+behavior.
+
 ## jman build
 
 Compile and package modules.

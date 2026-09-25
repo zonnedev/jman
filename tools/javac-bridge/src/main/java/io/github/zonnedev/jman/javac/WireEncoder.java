@@ -157,6 +157,20 @@ final class WireEncoder {
     }
   }
 
+  static byte[] encode(FormatResult result) {
+    try {
+      ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+      DataOutputStream output = new DataOutputStream(bytes);
+      output.writeBytes("JFF1");
+      writeString(output, result.source());
+      writeDiagnostics(output, result.diagnostics());
+      output.flush();
+      return bytes.toByteArray();
+    } catch (IOException impossible) {
+      throw new AssertionError("In-memory encoding failed", impossible);
+    }
+  }
+
   private static void writeDiagnostics(DataOutputStream output, java.util.List<Diagnostic> diagnostics)
       throws IOException {
     output.writeInt(diagnostics.size());

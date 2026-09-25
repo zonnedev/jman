@@ -6,8 +6,9 @@
 2. Run **JMAN Java: Show Status** from the Command Palette.
 3. Check **View → Output → JMAN Java** for startup, synchronization, or protocol
    errors.
-4. Confirm that `jman.java.javaHome` points to Java 25 GraalVM and that the
-   selected Maven or Gradle wrapper runs successfully from a terminal.
+4. Confirm that the bundled server still has its adjacent
+   `platform/lib/ct.sym` data and that the selected Maven or Gradle wrapper runs
+   successfully from a terminal.
 5. Reproduce the issue with other Java language-server extensions disabled for
    the workspace.
 

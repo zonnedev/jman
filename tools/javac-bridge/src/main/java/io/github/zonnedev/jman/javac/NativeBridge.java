@@ -1,6 +1,7 @@
 package io.github.zonnedev.jman.javac;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
@@ -12,7 +13,8 @@ import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordFactory;
 
 public final class NativeBridge {
-  private static final int ABI_VERSION = 3;
+  private static final int ABI_VERSION = 5;
+  private static Path compilerPlatformHome;
 
   private NativeBridge() {}
 
@@ -24,6 +26,20 @@ public final class NativeBridge {
   @CEntryPoint(name = "javac_frontend_abi_version")
   static int abiVersion(IsolateThread thread) {
     return ABI_VERSION;
+  }
+
+  @CEntryPoint(name = "javac_frontend_configure_platform")
+  static int configurePlatform(
+      IsolateThread thread, CCharPointer homePointer, UnsignedWord homeLength) {
+    try {
+      Path home = Path.of(readUtf8(homePointer, homeLength)).toAbsolutePath().normalize();
+      if (!Files.isRegularFile(home.resolve("lib").resolve("ct.sym"))) return 1;
+      System.setProperty("java.home", home.toString());
+      compilerPlatformHome = home;
+      return 0;
+    } catch (RuntimeException failure) {
+      return 2;
+    }
   }
 
   @CEntryPoint(name = "javac_frontend_parse")
@@ -161,6 +177,28 @@ public final class NativeBridge {
     }
   }
 
+  @CEntryPoint(name = "javac_frontend_session_format")
+  static CCharPointer formatSession(
+      IsolateThread thread,
+      long sessionId,
+      CCharPointer sourcePointer,
+      UnsignedWord sourceLength,
+      CCharPointer fileNamePointer,
+      UnsignedWord fileNameLength) {
+    ensureJavaHome();
+    try {
+      return allocate(
+          WireEncoder.encode(
+              SemanticSessions.format(
+                  sessionId,
+                  readUtf8(fileNamePointer, fileNameLength),
+                  readUtf8(sourcePointer, sourceLength))));
+    } catch (Throwable failure) {
+      failure.printStackTrace(System.err);
+      return WordFactory.nullPointer();
+    }
+  }
+
   @CEntryPoint(name = "javac_frontend_session_destroy")
   static int destroySession(IsolateThread thread, long sessionId) {
     return SemanticSessions.destroy(sessionId) ? 0 : 1;
@@ -230,15 +268,9 @@ public final class NativeBridge {
   }
 
   private static void ensureJavaHome() {
-    if (System.getProperty("java.home") != null) {
-      return;
+    if (compilerPlatformHome == null) {
+      throw new IllegalStateException("the native javac platform has not been configured");
     }
-    String javaHome = System.getenv("JAVA_HOME");
-    if (javaHome == null || javaHome.isBlank()) {
-      throw new IllegalStateException(
-          "java.home is unavailable; set JAVA_HOME to the project JDK before creating the frontend");
-    }
-    System.setProperty("java.home", javaHome);
   }
 
   private static final class BatchInput {

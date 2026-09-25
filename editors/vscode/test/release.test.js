@@ -45,10 +45,16 @@ for (const relative of [
   "server/vineflower.jar",
   "server/jacocoagent.jar",
   "server/jacococli.jar",
+  "server/platform/lib/ct.sym",
   "server/tools/gradle-importer/javac-frontend-model.init.gradle",
 ]) {
   releasePath(relative);
 }
+
+const platformSignature = fs
+  .readFileSync(path.join(extensionRoot, "server/platform/lib/ct.sym"))
+  .subarray(0, 2);
+assert.deepEqual([...platformSignature], [0x50, 0x4b], "ct.sym is not a ZIP archive");
 
 for (const relative of [
   "server/maven-importer.jar",

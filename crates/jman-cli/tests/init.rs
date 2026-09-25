@@ -73,6 +73,85 @@ fn publish_command_exposes_safe_repository_controls() {
 }
 
 #[test]
+fn fmt_checks_formats_idempotently_and_never_partially_writes_invalid_projects() {
+    let temporary = tempfile::tempdir().expect("temporary formatter workspace");
+    let foreign_java_home = temporary.path().join("foreign-java-home");
+    fs::create_dir_all(foreign_java_home.join("lib")).expect("foreign Java platform directory");
+    fs::write(
+        foreign_java_home.join("lib/ct.sym"),
+        "deliberately incompatible platform symbols",
+    )
+    .expect("foreign Java platform symbols");
+    let project = temporary.path().join("formatdemo");
+    let initialized = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .args([
+            "--no-progress",
+            "init",
+            project.to_str().expect("UTF-8 project path"),
+            "--java",
+            "25",
+        ])
+        .output()
+        .expect("initialize formatter fixture");
+    assert!(
+        initialized.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initialized.stderr)
+    );
+    let source = project.join("src/main/java/com/example/formatdemo/Application.java");
+    let messy =
+        "package com.example.formatdemo; import java.util.*; class Application{List<String> values=new ArrayList<>();void zebra( ){} void alpha( ){}}\n";
+    fs::write(&source, messy).expect("write unformatted source");
+
+    let check = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JAVA_HOME", &foreign_java_home)
+        .args(["--no-progress", "fmt", "--check"])
+        .arg(&project)
+        .output()
+        .expect("check formatting");
+    assert!(!check.status.success());
+    assert_eq!(fs::read_to_string(&source).unwrap(), messy);
+
+    let formatted = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JAVA_HOME", &foreign_java_home)
+        .args(["--no-progress", "fmt"])
+        .arg(&project)
+        .output()
+        .expect("format project");
+    assert!(
+        formatted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&formatted.stderr)
+    );
+    let canonical = fs::read_to_string(&source).expect("canonical source");
+    assert!(canonical.contains("import java.util.ArrayList;"));
+    assert!(canonical.contains("import java.util.List;"));
+    assert!(
+        canonical.find("void alpha()").unwrap() < canonical.find("void zebra()").unwrap(),
+        "{canonical}"
+    );
+    let clean = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JAVA_HOME", &foreign_java_home)
+        .args(["--no-progress", "fmt", "--check"])
+        .arg(&project)
+        .output()
+        .expect("recheck formatting");
+    assert!(clean.status.success());
+
+    fs::write(&source, messy).expect("restore unformatted source");
+    let invalid = source.with_file_name("Broken.java");
+    fs::write(&invalid, "class Broken { void run( }\n").expect("write invalid source");
+    let failed = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JAVA_HOME", &foreign_java_home)
+        .args(["--no-progress", "fmt"])
+        .arg(&project)
+        .output()
+        .expect("format invalid project");
+    assert!(!failed.status.success());
+    assert_eq!(fs::read_to_string(&source).unwrap(), messy);
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn outdated_aggregates_workspace_dependencies_and_uses_cached_maven_metadata() {
     let project = tempfile::tempdir().expect("temporary workspace");

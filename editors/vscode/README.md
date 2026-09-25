@@ -28,29 +28,28 @@ keeps editor analysis aligned with the project's real build model.
 
 - Visual Studio Code 1.95 or newer.
 - A 64-bit x86 processor and Linux distribution using glibc.
-- A Java 25 GraalVM installation for the compiler frontend and Java workers.
+- A supported project JDK for builds, tests, and annotation-processor workers.
+  The native compiler frontend and its matching platform symbols are bundled.
 - A trusted local or remote workspace with its project dependencies available.
 
 JMAN may invoke a Maven or Gradle wrapper when importing those project types.
 The wrapper and repositories must therefore be usable from the extension host.
 For Gradle wrappers, JMAN selects the newest installed LTS JDK that the wrapper
-can run on. This build-tool runtime is independent from the Java 25 GraalVM
-used by the native compiler frontend, and JMAN never installs a JDK implicitly.
+can run on. This build-tool runtime is independent from the bundled native
+compiler frontend, and JMAN never installs a JDK implicitly.
 
 ## Getting started
 
 1. Install **JMAN Java** from the Visual Studio Marketplace.
 2. Open a trusted folder containing `jman.toml`, `pom.xml`, `build.gradle`, or
    `build.gradle.kts`.
-3. Set `jman.java.javaHome` to your Java 25 GraalVM installation.
-4. Open a Java source file and run **JMAN Java: Show Status** from the Command
+3. Open a Java source file and run **JMAN Java: Show Status** from the Command
    Palette to confirm the selected build system and index state.
 
 Example workspace settings:
 
 ```json
 {
-  "jman.java.javaHome": "/path/to/graalvm-jdk-25",
   "jman.java.buildJavaHome": "",
   "jman.java.buildSystem": "auto",
   "jman.java.buildSync": "prompt"
@@ -66,15 +65,15 @@ metadata for more than one build tool.
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `jman.java.server.path` | bundled server | Override the `jman` executable used by the extension. |
-| `jman.java.javaHome` | empty | Select the Java 25 GraalVM installation used by JMAN. |
+| `jman.java.javaHome` | empty | Optional fallback JDK exported to Java workers; the native frontend does not use it. |
 | `jman.java.buildJavaHome` | empty | Override the JDK used to run Maven or Gradle; empty lets Gradle select a compatible installed runtime. |
 | `jman.java.buildSystem` | `auto` | Choose `auto`, `jman`, `gradle`, or `maven`. |
 | `jman.java.buildSync` | `prompt` | Choose `manual`, `prompt`, or `automatic` synchronization. |
 | `jman.java.server.extraEnv` | `{}` | Add environment variables to the language-server process. |
 
 The selected build JDK is also used for Gradle and Maven Test Explorer runs and
-for the extension's check, build, test, and run commands. This keeps older build
-tool versions isolated from the Java 25 runtime used by JMAN's native frontend.
+for the extension's check, build, test, and run commands. This keeps build-tool
+runtime selection independent from JMAN's bundled native frontend.
 
 ## Commands
 
@@ -121,8 +120,8 @@ in settings that you would not normally expose to a local build tool.
 ## Troubleshooting
 
 Open **View → Output → JMAN Java** for server startup and protocol diagnostics.
-If startup fails, verify the configured GraalVM path, confirm the project wrapper
-is executable, and run the corresponding build tool from a terminal. Use
+If startup fails, confirm the project wrapper is executable and run the
+corresponding build tool from a terminal. Use
 **JMAN Java: Show Status** to inspect synchronization and indexing failures.
 If no installed JDK can run the Gradle wrapper, install the suggested version
 with `jman java install <major>` or set `jman.java.buildJavaHome`. This setting

@@ -157,8 +157,9 @@ items.
 
 Open **View → Output → JMAN Java**, then verify:
 
-1. `jman.java.javaHome` points to Java 25 GraalVM.
-2. The bundled/default server or `jman.java.server.path` is executable.
+1. The bundled/default server or `jman.java.server.path` is executable and has
+   its adjacent `platform/lib/ct.sym` runtime data.
+2. A compatible project/build JDK is installed.
 3. The workspace is trusted and uses x86-64 glibc Linux.
 4. `mvnw`/`gradlew` is executable when importing that build system.
 
