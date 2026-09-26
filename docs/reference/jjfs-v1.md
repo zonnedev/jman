@@ -83,7 +83,9 @@ delimiter placement are preserved because they can affect the runtime value.
 
 Opening braces normally remain on the declaration or statement line. Every
 brace-delimited body is multiline, including an empty body. Control-flow
-braces are mandatory; JJFS inserts them around an unbraced body.
+braces are mandatory; JJFS inserts them around an unbraced body. Each
+semicolon-terminated statement in a block occupies its own line, including a
+block lambda passed within an enclosing method invocation.
 
 ```java
 void activate(Customer customer) {

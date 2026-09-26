@@ -166,10 +166,12 @@ final class JavaFormatter {
               compiler, files, fileName, normalized, release, compilerOptions);
       String formatted = formatTokens(normalized, task);
       formatted = applyJjfsLayout(compiler, files, fileName, formatted, release, compilerOptions);
-      List<Diagnostic> validation = validate(compiler, files, fileName, formatted, release);
-      return validation.isEmpty()
-          ? new FormatResult(formatted, List.of())
-          : new FormatResult(source, validation);
+      FormatResult lambdaNormalized =
+          normalizeBlockLambdaIndentation(
+              compiler, files, fileName, formatted, release, compilerOptions);
+      return lambdaNormalized.diagnostics().isEmpty()
+          ? lambdaNormalized
+          : new FormatResult(source, lambdaNormalized.diagnostics());
     } catch (IOException exception) {
       throw new IllegalStateException("Unable to format Java source", exception);
     }
@@ -180,30 +182,6 @@ final class JavaFormatter {
         new ArrayList<>(List.of("-proc:none", "--release", Integer.toString(release)));
     if (compilerOptions.contains("--enable-preview")) options.add("--enable-preview");
     return options;
-  }
-
-  private static List<Diagnostic> validate(
-      JavaCompiler compiler,
-      StandardJavaFileManager files,
-      String fileName,
-      String source,
-      int release) {
-    DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-    JavacTask task =
-        (JavacTask)
-            compiler.getTask(
-                null,
-                files,
-                diagnostics,
-                formatOptions(release, List.of()),
-                null,
-                List.of(new StringJavaFileObject(fileName, source)));
-    try {
-      task.parse();
-    } catch (IOException exception) {
-      throw new IllegalStateException("Unable to validate formatted Java source", exception);
-    }
-    return convertErrors(diagnostics);
   }
 
   private static List<Diagnostic> convertErrors(
@@ -1324,6 +1302,76 @@ final class JavaFormatter {
     }
   }
 
+  private static FormatResult normalizeBlockLambdaIndentation(
+      JavaCompiler compiler,
+      StandardJavaFileManager files,
+      String fileName,
+      String source,
+      int release,
+      List<String> compilerOptions) {
+    DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
+    JavacTask task =
+        (JavacTask)
+            compiler.getTask(
+                null,
+                files,
+                diagnostics,
+                formatOptions(release, compilerOptions),
+                null,
+                List.of(new StringJavaFileObject(fileName, source)));
+    try {
+      CompilationUnitTree unit = task.parse().iterator().next();
+      List<Diagnostic> parseDiagnostics = convertErrors(diagnostics);
+      if (!parseDiagnostics.isEmpty()) return new FormatResult(source, parseDiagnostics);
+      SourcePositions positions = Trees.instance(task).getSourcePositions();
+      List<Edit> edits = new ArrayList<>();
+      new TreePathScanner<Void, Void>() {
+        @Override
+        public Void visitLambdaExpression(LambdaExpressionTree lambda, Void unused) {
+          if (lambda.getBody() instanceof BlockTree block) {
+            int lambdaStart = position(positions.getStartPosition(unit, lambda));
+            int blockStart = position(positions.getStartPosition(unit, block));
+            int blockEnd = position(positions.getEndPosition(unit, block));
+            int close = lastTokenPosition(source, task, blockStart, blockEnd, "}");
+            if (lambdaStart >= 0 && blockStart >= 0 && close >= 0) {
+              int lambdaIndent = lineIndent(source, lambdaStart);
+              int closeIndent = lineIndent(source, close);
+              int adjustment = lambdaIndent - closeIndent;
+              if (adjustment > 0) {
+                addLineIndentation(source, blockStart + 1, close, adjustment, edits);
+              }
+            }
+          }
+          return super.visitLambdaExpression(lambda, unused);
+        }
+      }.scan(unit, null);
+      return new FormatResult(applyEdits(source, edits), List.of());
+    } catch (IOException exception) {
+      throw new IllegalStateException("Unable to normalize block lambda indentation", exception);
+    }
+  }
+
+  private static void addLineIndentation(
+      String source, int start, int end, int adjustment, List<Edit> edits) {
+    int lineStart = source.indexOf('\n', start);
+    if (lineStart < 0) return;
+    lineStart++;
+    int finalLineStart = source.lastIndexOf('\n', Math.max(0, end - 1)) + 1;
+    String indentation = " ".repeat(adjustment);
+    while (lineStart <= finalLineStart && lineStart < source.length()) {
+      int content = lineStart;
+      while (content < source.length() && source.charAt(content) == ' ') content++;
+      if (content < source.length()
+          && source.charAt(content) != '\n'
+          && source.charAt(content) != '\r') {
+        edits.add(new Edit(lineStart, lineStart, indentation));
+      }
+      int newline = source.indexOf('\n', lineStart);
+      if (newline < 0) break;
+      lineStart = newline + 1;
+    }
+  }
+
   private static void addParameterLayout(
       String source,
       CompilationUnitTree unit,
@@ -2347,6 +2395,8 @@ final class JavaFormatter {
     private boolean previousMethodTypeArgumentClose;
     private final java.util.ArrayDeque<Boolean> genericMethodArguments =
         new java.util.ArrayDeque<>();
+    private final java.util.ArrayDeque<Integer> blockParenthesisDepths =
+        new java.util.ArrayDeque<>();
     private int previousEnd;
     private boolean lineStart = true;
     private int enumConstantDepth = -1;
@@ -2443,6 +2493,7 @@ final class JavaFormatter {
       }
       boolean closingBrace = text.equals("}");
       if (closingBrace) {
+        if (!blockParenthesisDepths.isEmpty()) blockParenthesisDepths.pop();
         if (enumConstantDepth >= 0
             && indent == enumConstantDepth
             && parenthesisDepth == 0
@@ -2461,7 +2512,7 @@ final class JavaFormatter {
           newline(false);
         } else if (before.equals("{")) {
           newline(false);
-        } else if (before.equals(";") && parenthesisDepth == 0) {
+        } else if (before.equals(";") && atStatementLevel()) {
           newline(blankGap(gap));
         } else if (before.equals("}") && !Set.of("else", "catch", "finally", "while").contains(text)
             && !Set.of(";", ",", ")").contains(text)) {
@@ -2475,6 +2526,7 @@ final class JavaFormatter {
 
       append(text);
       if (text.equals("{")) {
+        blockParenthesisDepths.push(parenthesisDepth);
         indent++;
         if (precededByKeyword(index, "enum")) enumConstantDepth = indent;
       }
@@ -2505,6 +2557,12 @@ final class JavaFormatter {
       if (text.equals(":") && ternaryDepth > 0) ternaryDepth--;
       previousGenericClose = genericClose;
       previousMethodTypeArgumentClose = methodTypeArgumentClose;
+    }
+
+    private boolean atStatementLevel() {
+      return parenthesisDepth == 0
+          || (!blockParenthesisDepths.isEmpty()
+              && parenthesisDepth <= blockParenthesisDepths.peek());
     }
 
     private boolean immediatelyFollowsDocumentationComment(int index) {

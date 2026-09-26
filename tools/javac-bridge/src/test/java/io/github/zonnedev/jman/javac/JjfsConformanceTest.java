@@ -17,6 +17,7 @@ final class JjfsConformanceTest {
     normalizesDeclarationAnnotationsAndModifiers();
     insertsControlFlowBracesAndWrapsLongConditionsAndCalls();
     formatsLongLambdasTernariesLoopsAndResources();
+    preservesStatementBoundariesInsideNestedLambdas();
     resolvesImportConflictsAndHonorsOnePreference();
     wrapsLongThrowsClausesWithoutDetachingTheBrace();
     formatsMultilineAnnotationsAndLongGenericHeaders();
@@ -468,6 +469,53 @@ final class JjfsConformanceTest {
           }
 
           void consume(String value) {
+          }
+        }
+        """);
+  }
+
+  private static void preservesStatementBoundariesInsideNestedLambdas() {
+    assertFormat(
+        """
+        class ConcurrentWork {
+          void execute(int threadCount) {
+            for (int index = 0; index < threadCount; index++) {
+              executor.submit(
+                () -> {
+                ready.countDown(); try {
+                  start.await();
+                  Headers headers = new Headers(); headers.configure(); RequestValues values = new RequestValues(); values.add("name", "duplicate"); Response response = client.post(values); String body = response.body(); consume(body);
+                } finally {
+                  done.countDown();
+                }
+              }
+              );
+            }
+          }
+        }
+        """,
+        """
+        class ConcurrentWork {
+          void execute(int threadCount) {
+            for (int index = 0; index < threadCount; index++) {
+              executor.submit(
+                () -> {
+                  ready.countDown();
+                  try {
+                    start.await();
+                    Headers headers = new Headers();
+                    headers.configure();
+                    RequestValues values = new RequestValues();
+                    values.add("name", "duplicate");
+                    Response response = client.post(values);
+                    String body = response.body();
+                    consume(body);
+                  } finally {
+                    done.countDown();
+                  }
+                }
+              );
+            }
           }
         }
         """);

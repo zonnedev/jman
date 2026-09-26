@@ -32,6 +32,8 @@ Versioning while it approaches a stable 0.3.0 release.
   as structurally complex arguments.
 - JJFS inserts the required separator between a parenthesized inline annotation
   and its annotated parameter or type.
+- JJFS preserves statement boundaries and continuation indentation inside block
+  lambdas passed as method arguments instead of collapsing their bodies.
 
 ## [0.7.1] - 2026-09-22
 
