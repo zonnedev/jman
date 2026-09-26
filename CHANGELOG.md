@@ -16,6 +16,8 @@ Versioning while it remains pre-1.0.
 - Native frontend packaging now preserves each GraalVM distribution's complete
   `java.base` legal directory without requiring Linux-only companion files on
   macOS.
+- Build, test, and release scripts avoid Bash 4-only array loaders so they run
+  with the Bash 3.2 installation provided by macOS.
 
 ## [0.8.1] - 2026-09-26
 

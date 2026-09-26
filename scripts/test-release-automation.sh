@@ -149,6 +149,13 @@ if grep -R -Eq '^rust-version[[:space:]]*=[[:space:]]*"' \
   echo "Workspace crates must inherit workspace.package.rust-version" >&2
   exit 1
 fi
+legacy_array_loader="map""file"
+legacy_array_reader="read""array"
+if grep -R -w -e "${legacy_array_loader}" -e "${legacy_array_reader}" \
+    --include='*.sh' "${project_dir}/scripts"; then
+  echo "Repository scripts must remain compatible with macOS Bash 3.2" >&2
+  exit 1
+fi
 grep -Eq '^test-rust:.*[[:space:]]vineflower([[:space:]]|$)' \
   "${project_dir}/Makefile"
 grep -Eq '^test-rust:.*[[:space:]]jacoco([[:space:]]|$)' \

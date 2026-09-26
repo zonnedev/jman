@@ -27,19 +27,28 @@ export TMPDIR="${test_tmp}"
 rm -rf "${classes_dir}"
 mkdir -p "${classes_dir}"
 
-mapfile -t main_sources < <(
+main_sources=()
+while IFS= read -r source; do
+  main_sources+=("${source}")
+done < <(
   find \
     "${project_dir}/tools/javac-bridge/src/main/java" \
     "${project_dir}/tools/annotation-processor-worker/src/main/java" \
     -name '*.java' -print | sort
 )
-mapfile -t test_sources < <(
+test_sources=()
+while IFS= read -r source; do
+  test_sources+=("${source}")
+done < <(
   find \
     "${project_dir}/tools/javac-bridge/src/test/java" \
     "${project_dir}/tools/annotation-processor-worker/src/test/java" \
     -name '*.java' -print | sort
 )
-mapfile -t maven_test_sources < <(
+maven_test_sources=()
+while IFS= read -r source; do
+  maven_test_sources+=("${source}")
+done < <(
   find "${project_dir}/tools/maven-importer/src/test/java" -name '*.java' -print | sort
 )
 

@@ -7,7 +7,10 @@ source "${project_dir}/scripts/use-test-java.sh"
 classes="${project_dir}/target/processor-worker-classes"
 jar_file="${project_dir}/target/processor-worker.jar"
 processor_source="${project_dir}/tools/annotation-processor-worker/src/main/java/io/github/zonnedev/jman/processor/worker/ProcessorWorker.java"
-mapfile -t semantic_sources < <(
+semantic_sources=()
+while IFS= read -r source; do
+  semantic_sources+=("${source}")
+done < <(
   find "${project_dir}/tools/javac-bridge/src/main/java" \
     -name '*.java' \
     ! -name 'NativeBridge.java' \

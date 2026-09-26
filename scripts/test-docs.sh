@@ -8,7 +8,10 @@ fi
 cd "${project_dir}"
 
 status=0
-mapfile -t markdown_files < <(
+markdown_files=()
+while IFS= read -r source; do
+  markdown_files+=("${source}")
+done < <(
   {
     printf '%s\n' README.md
     find docs -type f -name '*.md'
@@ -40,7 +43,10 @@ for source in "${markdown_files[@]}"; do
   done < <(grep -Eo '\[[^]]+\]\([^)]+\)' "${source}" || true)
 done
 
-mapfile -t commands < <(
+commands=()
+while IFS= read -r command; do
+  commands+=("${command}")
+done < <(
   sed -n '/^enum Command {/,/^}/p' crates/jman-cli/src/main.rs \
     | sed -n 's/^    \([A-Z][A-Za-z]*\)(.*/\1/p' \
     | tr '[:upper:]' '[:lower:]'
@@ -52,7 +58,10 @@ for command in "${commands[@]}"; do
   fi
 done
 
-mapfile -t java_commands < <(
+java_commands=()
+while IFS= read -r command; do
+  java_commands+=("${command}")
+done < <(
   sed -n '/^enum JavaCommand {/,/^}/p' crates/jman-cli/src/main.rs \
     | sed -n 's/^    \([A-Z][A-Za-z]*\)(.*/\1/p' \
     | tr '[:upper:]' '[:lower:]'

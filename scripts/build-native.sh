@@ -27,7 +27,10 @@ fi
 # requiring Linux-only companion files on macOS.
 cp -R "${java_base_legal}/." "${platform_dir}/legal/"
 
-mapfile -t sources < <(find "${project_dir}/tools/javac-bridge/src/main/java" -name '*.java' -print | sort)
+sources=()
+while IFS= read -r source; do
+  sources+=("${source}")
+done < <(find "${project_dir}/tools/javac-bridge/src/main/java" -name '*.java' -print | sort)
 javac -Werror -Xlint:all \
   --add-exports jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED \
   --add-exports jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED \

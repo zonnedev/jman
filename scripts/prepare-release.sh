@@ -70,7 +70,10 @@ if [[ "${old_version}" == "${version}" ]]; then
   exit 1
 fi
 
-mapfile -t workspace_packages < <(
+workspace_packages=()
+while IFS= read -r package; do
+  workspace_packages+=("${package}")
+done < <(
   cargo metadata --format-version 1 --no-deps --locked |
     node -e '
       let input = "";

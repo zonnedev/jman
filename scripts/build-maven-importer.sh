@@ -7,9 +7,10 @@ source "${project_dir}/scripts/use-test-java.sh"
 classes_dir="${project_dir}/target/maven-importer-classes"
 jar_file="${project_dir}/target/maven-importer.jar"
 
-mapfile -t sources < <(
-  find "${project_dir}/tools/maven-importer/src/main/java" -name '*.java' -print | sort
-)
+sources=()
+while IFS= read -r source; do
+  sources+=("${source}")
+done < <(find "${project_dir}/tools/maven-importer/src/main/java" -name '*.java' -print | sort)
 if [[ "${#sources[@]}" -eq 0 ]]; then
   echo 'Maven importer has no Java sources' >&2
   exit 1

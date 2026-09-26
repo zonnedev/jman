@@ -54,7 +54,10 @@ if ! cargo_metadata="$(cargo metadata \
   exit 1
 fi
 
-mapfile -t workspace_packages < <(
+workspace_packages=()
+while IFS= read -r package; do
+  workspace_packages+=("${package}")
+done < <(
   printf '%s' "${cargo_metadata}" |
     node -e '
       let input = "";
