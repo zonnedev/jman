@@ -5,6 +5,8 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-26
+
 ### Added
 
 - JJFS 1 defines JMAN's deterministic Java formatting contract and applies it
