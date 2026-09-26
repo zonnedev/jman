@@ -28,6 +28,32 @@ fi
 
 mkdir -p "${tools_dir}"
 
+download_archive() {
+  local destination="$1"
+  shift
+  local url
+  for url in "$@"; do
+    rm -f -- "${destination}"
+    if curl \
+      --fail \
+      --location \
+      --silent \
+      --show-error \
+      --connect-timeout 30 \
+      --retry 5 \
+      --retry-all-errors \
+      --retry-delay 2 \
+      --retry-max-time 180 \
+      --remove-on-error \
+      --output "${destination}" \
+      "${url}"; then
+      return 0
+    fi
+  done
+  printf 'Unable to download compatibility tool from any configured source\n' >&2
+  return 1
+}
+
 download_gradle() (
   local version="$1" checksum="$2"
   local installation="${tools_dir}/gradle-${version}"
@@ -44,9 +70,10 @@ download_gradle() (
 
   staging="$(mktemp -d "${tools_dir}/.gradle-${version}.XXXXXX")"
   archive="${staging}/gradle.zip"
-  curl --fail --location --silent --show-error --retry 3 \
+  download_archive \
+    "${archive}" \
     "https://services.gradle.org/distributions/gradle-${version}-bin.zip" \
-    --output "${archive}"
+    "https://downloads.gradle.org/distributions/gradle-${version}-bin.zip"
   printf '%s  %s\n' "${checksum}" "${archive}" | sha256sum --check -
   unzip -q "${archive}" -d "${staging}"
   mv -- "${staging}/gradle-${version}" "${installation}"
@@ -67,9 +94,10 @@ download_maven() (
 
   staging="$(mktemp -d "${tools_dir}/.maven-3.9.9.XXXXXX")"
   archive="${staging}/maven.tar.gz"
-  curl --fail --location --silent --show-error --retry 3 \
+  download_archive \
+    "${archive}" \
     https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz \
-    --output "${archive}"
+    https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.9/apache-maven-3.9.9-bin.tar.gz
   printf '%s  %s\n' \
     a555254d6b53d267965a3404ecb14e53c3827c09c3b94b5678835887ab404556bfaf78dcfe03ba76fa2508649dca8531c74bca4d5846513522404d48e8c4ac8b \
     "${archive}" | sha512sum --check -

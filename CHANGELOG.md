@@ -18,6 +18,8 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ### Fixed
 
+- Compatibility-tool provisioning now retries connection-level failures and
+  falls back to alternate official Gradle or Maven download endpoints.
 - JJFS import conflict resolution now preserves types that were already bound
   through a simple name, preventing a fully qualified type with the same name
   from changing annotations or other existing references.

@@ -58,18 +58,34 @@ fi
 
 compatibility_fixture="${test_root}/compatibility-tools"
 fake_bin="${compatibility_fixture}/fake-bin"
+curl_log="${compatibility_fixture}/curl.log"
 mkdir -p "${compatibility_fixture}/scripts" "${fake_bin}"
 cp "${project_dir}/scripts/setup-compatibility-tools.sh" "${compatibility_fixture}/scripts/"
 cat > "${fake_bin}/curl" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >> "${JMAN_FAKE_CURL_LOG:?}"
 exit 1
 EOF
 chmod +x "${fake_bin}/curl"
-if PATH="${fake_bin}:${PATH}" \
+if JMAN_FAKE_CURL_LOG="${curl_log}" PATH="${fake_bin}:${PATH}" \
   "${compatibility_fixture}/scripts/setup-compatibility-tools.sh" >/dev/null 2>&1; then
   echo 'Compatibility tool setup unexpectedly succeeded with a failing download' >&2
   exit 1
 fi
+for expected_option in \
+  '--connect-timeout 30' \
+  '--retry 5' \
+  '--retry-all-errors' \
+  '--retry-delay 2' \
+  '--retry-max-time 180' \
+  '--remove-on-error'; do
+  if ! grep -Fq -- "${expected_option}" "${curl_log}"; then
+    echo "Compatibility tool download omitted resilient curl option: ${expected_option}" >&2
+    exit 1
+  fi
+done
+grep -Fq 'archive.apache.org' "${curl_log}"
+grep -Fq 'repo.maven.apache.org' "${curl_log}"
 if compgen -G "${compatibility_fixture}/target/compatibility-tools/.maven-*" >/dev/null; then
   echo 'Failed compatibility tool download left a staging directory behind' >&2
   exit 1
