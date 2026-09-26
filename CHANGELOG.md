@@ -20,6 +20,8 @@ Versioning while it remains pre-1.0.
   with the Bash 3.2 installation provided by macOS.
 - CLI integration-test JDK fixtures now describe the current Unix platform so
   the Java toolchain tests compile and run on both Linux and macOS.
+- `jman fmt` now resolves symlinked filesystem paths before matching sources to
+  compile units, including macOS's `/var` to `/private/var` temporary paths.
 
 ## [0.8.1] - 2026-09-26
 

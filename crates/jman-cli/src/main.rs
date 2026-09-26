@@ -786,6 +786,8 @@ fn format_project(arguments: &FmtCommand, ui: &Ui) -> Result<()> {
     use jman_java_lsp::NativeBackend;
 
     let target = absolute_path(&arguments.path)?;
+    let target = std::fs::canonicalize(&target)
+        .with_context(|| format!("cannot resolve formatter target {}", target.display()))?;
     let project_root = formatter_project_root(&target)?;
     let sources = java_sources(&target)?;
     let source_count = sources.len();

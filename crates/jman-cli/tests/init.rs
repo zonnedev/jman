@@ -102,11 +102,21 @@ fn fmt_checks_formats_idempotently_and_never_partially_writes_invalid_projects()
     let messy =
         "package com.example.formatdemo; import java.util.*; class Application{List<String> values=new ArrayList<>();void zebra( ){} void alpha( ){}}\n";
     fs::write(&source, messy).expect("write unformatted source");
+    #[cfg(unix)]
+    let formatter_target = {
+        use std::os::unix::fs::symlink;
+
+        let alias = temporary.path().join("formatdemo-alias");
+        symlink(&project, &alias).expect("symlinked formatter project");
+        alias
+    };
+    #[cfg(not(unix))]
+    let formatter_target = project.clone();
 
     let check = Command::new(env!("CARGO_BIN_EXE_jman"))
         .env("JAVA_HOME", &foreign_java_home)
         .args(["--no-progress", "fmt", "--check"])
-        .arg(&project)
+        .arg(&formatter_target)
         .output()
         .expect("check formatting");
     assert!(!check.status.success());
@@ -115,7 +125,7 @@ fn fmt_checks_formats_idempotently_and_never_partially_writes_invalid_projects()
     let formatted = Command::new(env!("CARGO_BIN_EXE_jman"))
         .env("JAVA_HOME", &foreign_java_home)
         .args(["--no-progress", "fmt"])
-        .arg(&project)
+        .arg(&formatter_target)
         .output()
         .expect("format project");
     assert!(
@@ -133,7 +143,7 @@ fn fmt_checks_formats_idempotently_and_never_partially_writes_invalid_projects()
     let clean = Command::new(env!("CARGO_BIN_EXE_jman"))
         .env("JAVA_HOME", &foreign_java_home)
         .args(["--no-progress", "fmt", "--check"])
-        .arg(&project)
+        .arg(&formatter_target)
         .output()
         .expect("recheck formatting");
     assert!(clean.status.success());
@@ -144,7 +154,7 @@ fn fmt_checks_formats_idempotently_and_never_partially_writes_invalid_projects()
     let failed = Command::new(env!("CARGO_BIN_EXE_jman"))
         .env("JAVA_HOME", &foreign_java_home)
         .args(["--no-progress", "fmt"])
-        .arg(&project)
+        .arg(&formatter_target)
         .output()
         .expect("format invalid project");
     assert!(!failed.status.success());
@@ -1434,13 +1444,12 @@ processors = ["sha256:{digest}"]
                 .unwrap_or_default()
                 > 0
         );
+        let covered_source =
+            fs::canonicalize(project.path().join("src/main/java/com/example/App.java"))
+                .expect("canonical covered source");
         assert_eq!(
             report["modules"][0]["files"][0]["path"],
-            project
-                .path()
-                .join("src/main/java/com/example/App.java")
-                .to_string_lossy()
-                .as_ref()
+            covered_source.to_string_lossy().as_ref()
         );
 
         let threshold = Command::new(env!("CARGO_BIN_EXE_jman"))
@@ -2591,13 +2600,9 @@ processors = ["sha256:{digest}"]
     let artifact = project.path().join(".jman/artifacts/generated-app-1.jar");
     assert!(artifact.is_file());
     let first_report = String::from_utf8_lossy(&first_package.stderr);
-    assert!(first_report.contains(
-        artifact
-            .parent()
-            .expect("artifact directory")
-            .to_str()
-            .expect("UTF-8 artifact path")
-    ));
+    let artifact_directory = fs::canonicalize(artifact.parent().expect("artifact directory"))
+        .expect("canonical artifact directory");
+    assert!(first_report.contains(artifact_directory.to_str().expect("UTF-8 artifact path")));
     assert!(first_report.contains("└─ thin"));
     assert!(first_report.contains("generated-app-1.jar"));
     assert!(!first_report.contains("sha256:"));
