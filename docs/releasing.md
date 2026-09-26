@@ -73,13 +73,13 @@ suite.
 Then prepare the coordinated release from the same clean worktree:
 
 ```bash
-make prepare-release VERSION=0.8.0
+make prepare-release VERSION=0.8.1
 ```
 
 The command synchronizes the Rust workspace, Cargo lockfile, VS Code manifests,
 changelogs, workflow example, and versioned documentation. After validation it
-asks whether to create `chore(release): prepare v0.8.0` and the annotated tag
-`git tag -a v0.8.0 -m "v0.8.0"`. A separate final confirmation can atomically
+asks whether to create `chore(release): prepare v0.8.1` and the annotated tag
+`git tag -a v0.8.1 -m "v0.8.1"`. A separate final confirmation can atomically
 push both the current branch and tag to `origin`. Declining either confirmation
 never pushes anything and leaves the prepared state available for review.
 
@@ -106,9 +106,9 @@ GitHub stores Sigstore-backed build provenance for the CLI archive, VSIX, and
 installer. After downloading an artifact, verify both controls:
 
 ```bash
-grep '  jman-0.8.0-linux-x86_64.tar.gz$' SHA256SUMS \
+grep '  jman-0.8.1-linux-x86_64.tar.gz$' SHA256SUMS \
   | sha256sum --check -
-gh attestation verify jman-0.8.0-linux-x86_64.tar.gz \
+gh attestation verify jman-0.8.1-linux-x86_64.tar.gz \
   --repo zonnedev/jman
 ```
 
@@ -140,7 +140,7 @@ release:
 ```bash
 make release
 make package-vscode
-make stage-release TAG=v0.8.0
+make stage-release TAG=v0.8.1
 (cd target/github-release && sha256sum --check SHA256SUMS)
 ```
 

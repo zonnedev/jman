@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.1 - 2026-09-26
+
 ## 0.8.0 - 2026-09-26
 
 - Added `:JmanFormat`, the `<Leader>jf` mapping, and opt-in synchronous
