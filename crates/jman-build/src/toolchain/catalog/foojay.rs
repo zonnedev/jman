@@ -471,6 +471,40 @@ mod tests {
     }
 
     #[test]
+    fn translates_macos_arm64_packages_into_the_internal_catalog() {
+        let packages = vec![FoojayPackage {
+            id: "macos-package".to_owned(),
+            archive_type: "tar.gz".to_owned(),
+            distribution: "temurin".to_owned(),
+            major_version: 25,
+            java_version: "25.0.1+8".to_owned(),
+            release_status: "ga".to_owned(),
+            term_of_support: "lts".to_owned(),
+            operating_system: "macos".to_owned(),
+            lib_c_type: "c_std_lib".to_owned(),
+            architecture: "arm64".to_owned(),
+            package_type: "jdk".to_owned(),
+            javafx_bundled: false,
+            directly_downloadable: true,
+            filename: "temurin-25-macos-aarch64.tar.gz".to_owned(),
+            free_use_in_production: true,
+        }];
+        let platform = Platform {
+            os: "mac",
+            architecture: "aarch64",
+            libc: "libc",
+            archive_type: "tar.gz",
+        };
+
+        let releases = translate_packages(packages, platform);
+
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases[0].os, "mac");
+        assert_eq!(releases[0].architecture, "aarch64");
+        assert_eq!(releases[0].vendor, "temurin");
+    }
+
+    #[test]
     fn excludes_unknown_non_free_and_incompatible_packages() {
         let package = |distribution: &str, free: bool, libc: &str| FoojayPackage {
             id: distribution.to_owned(),

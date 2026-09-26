@@ -2,13 +2,19 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=platform.sh
+source "${project_dir}/scripts/platform.sh"
 extension_dir="${project_dir}/editors/vscode"
 server_dir="${extension_dir}/server"
 output_dir="${project_dir}/target/vscode"
 native_dir="${project_dir}/target/native"
-native_library="${native_dir}/libjman_javac_frontend.so"
+target_platform="$(jman_vscode_target)" || {
+  printf 'JMAN Java does not support this host: %s %s\n' "$(uname -s)" "$(uname -m)" >&2
+  exit 1
+}
+native_library_name="$(jman_native_library_name)"
+native_library="${native_dir}/${native_library_name}"
 extension_version="$(node -p 'require(process.argv[1]).version' "${extension_dir}/package.json")"
-target_platform="linux-x64"
 release_tag="${JMAN_RELEASE_TAG:-}"
 channel="stable"
 package_flags=(
@@ -19,12 +25,6 @@ package_flags=(
 if [[ "${release_tag#v}" == *-* ]]; then
   channel="pre-release"
   package_flags+=(--pre-release)
-fi
-
-if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
-  printf 'JMAN Java %s must be built on Linux x86-64, got %s %s\n' \
-    "${target_platform}" "$(uname -s)" "$(uname -m)" >&2
-  exit 1
 fi
 
 if [[ ! -f "${native_library}" ]]; then
@@ -46,8 +46,16 @@ JMAN_JAVAC_FRONTEND_LIB_DIR="${native_dir}" \
 rm -rf "${server_dir}" "${output_dir}"
 mkdir -p "${server_dir}" "${output_dir}"
 cp "${project_dir}/target/release/jman" "${server_dir}/jman"
-strip --strip-unneeded "${server_dir}/jman"
-cp "${native_library}" "${server_dir}/libjman_javac_frontend.so"
+if [[ "$(jman_host_os)" == macos ]]; then
+  strip -x "${server_dir}/jman"
+else
+  strip --strip-unneeded "${server_dir}/jman"
+fi
+cp "${native_library}" "${server_dir}/${native_library_name}"
+if [[ "$(jman_host_os)" == macos ]]; then
+  codesign --force --sign - "${server_dir}/jman" "${server_dir}/${native_library_name}"
+  codesign --verify --strict "${server_dir}/jman" "${server_dir}/${native_library_name}"
+fi
 cp -R "${native_dir}/platform" "${server_dir}/platform"
 cp "${project_dir}/target/processor-worker.jar" "${server_dir}/processor-worker.jar"
 cp "${project_dir}/target/vineflower-1.12.0.jar" "${server_dir}/vineflower.jar"
@@ -69,8 +77,10 @@ checksum="${package}.sha256"
 unzip -tq "${package}"
 (
   cd "${output_dir}"
-  sha256sum "$(basename "${package}")" > "$(basename "${checksum}")"
-  sha256sum --check "$(basename "${checksum}")"
+  package_name="$(basename "${package}")"
+  printf '%s  %s\n' "$(jman_sha256_file "${package_name}")" "${package_name}" \
+    > "$(basename "${checksum}")"
+  test "$(jman_sha256_file "${package_name}")" = "$(awk '{ print $1 }' "$(basename "${checksum}")")"
 )
 
 printf 'VS Code %s package: %s\n' "${channel}" "${package}"

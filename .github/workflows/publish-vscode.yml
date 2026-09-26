@@ -53,40 +53,44 @@ jobs:
           mkdir -p marketplace-assets
           gh release download "${JMAN_RELEASE_TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
-            --pattern "jman-java-*-linux-x64.vsix" \
+            --pattern "jman-java-*.vsix" \
             --pattern SHA256SUMS \
             --dir marketplace-assets
 
       - name: Verify VSIX identity and checksum
         run: |
-          mapfile -t packages < <(find marketplace-assets -maxdepth 1 -name 'jman-java-*-linux-x64.vsix' -type f)
-          test "${#packages[@]}" -eq 1
-          package="${packages[0]}"
-          package_name="$(basename "${package}")"
-          (
-            cd marketplace-assets
-            grep "  ${package_name}$" SHA256SUMS | sha256sum --check -
-          )
-          unzip -p "${package}" extension/package.json | node -e '
-            let data="";
-            process.stdin.on("data", chunk => data += chunk);
-            process.stdin.on("end", () => {
-              const manifest=JSON.parse(data);
-              if (manifest.publisher !== "zonnedev" || manifest.name !== "jman-java") process.exit(1);
-            });
-          '
-          printf 'VSIX_PATH=%s\n' "${package}" >> "${GITHUB_ENV}"
+          mapfile -t packages < <(find marketplace-assets -maxdepth 1 -name 'jman-java-*.vsix' -type f | sort)
+          test "${#packages[@]}" -eq 2
+          printf '%s\n' "${packages[@]}" | grep -q -- '-darwin-arm64[.]vsix$'
+          printf '%s\n' "${packages[@]}" | grep -q -- '-linux-x64[.]vsix$'
+          for package in "${packages[@]}"; do
+            package_name="$(basename "${package}")"
+            (
+              cd marketplace-assets
+              grep "  ${package_name}$" SHA256SUMS | sha256sum --check -
+            )
+            unzip -p "${package}" extension/package.json | node -e '
+              let data="";
+              process.stdin.on("data", chunk => data += chunk);
+              process.stdin.on("end", () => {
+                const manifest=JSON.parse(data);
+                if (manifest.publisher !== "zonnedev" || manifest.name !== "jman-java") process.exit(1);
+              });
+            '
+          done
 
       - name: Publish to Visual Studio Marketplace
-        working-directory: editors/vscode
         run: |
-          publish_args=(
-            publish
-            --packagePath "${GITHUB_WORKSPACE}/${VSIX_PATH}"
-            --azure-credential
-            --skip-duplicate
-          )
-          if [[ "${JMAN_RELEASE_TAG#v}" == *-* ]]; then
-            publish_args+=(--pre-release)
-          fi
-          npx vsce "${publish_args[@]}"
+          mapfile -t packages < <(find marketplace-assets -maxdepth 1 -name 'jman-java-*.vsix' -type f | sort)
+          for package in "${packages[@]}"; do
+            publish_args=(
+              publish
+              --packagePath "${GITHUB_WORKSPACE}/${package}"
+              --azure-credential
+              --skip-duplicate
+            )
+            if [[ "${JMAN_RELEASE_TAG#v}" == *-* ]]; then
+              publish_args+=(--pre-release)
+            fi
+            editors/vscode/node_modules/.bin/vsce "${publish_args[@]}"
+          done

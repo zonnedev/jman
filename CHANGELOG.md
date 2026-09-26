@@ -1,9 +1,15 @@
 # Changelog
 
 All notable changes to JMAN are documented here. The project follows Semantic
-Versioning while it approaches a stable 0.3.0 release.
+Versioning while it remains pre-1.0.
 
 ## [Unreleased]
+
+### Added
+
+- Release automation, the remote installer, and the VS Code extension now
+  support Apple Silicon macOS alongside x86-64 glibc Linux, with native CLI,
+  compiler-frontend, and platform-targeted VSIX artifacts.
 
 ## [0.8.1] - 2026-09-26
 

@@ -106,10 +106,10 @@ boundary is recorded in the [product contract](docs/product-contract.md) and
 
 ## Platform status
 
-The current release targets 64-bit glibc-based Linux systems. The Java language
-server bundles its native compiler frontend and matching Java platform symbols;
-builds target and run on independently selected project JDKs. Windows, macOS,
-ARM, and Alpine Linux are not supported yet.
+The current release targets x86-64 glibc-based Linux and Apple Silicon macOS.
+The Java language server bundles its native compiler frontend and matching Java
+platform symbols; builds target and run on independently selected project JDKs.
+Windows, Intel macOS, Linux ARM64, and Alpine Linux are not supported yet.
 
 ## Contributing
 

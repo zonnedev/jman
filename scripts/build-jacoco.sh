@@ -2,6 +2,8 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=platform.sh
+source "${project_dir}/scripts/platform.sh"
 version="$(tr -d '[:space:]' < "${project_dir}/tools/jacoco/VERSION")"
 agent_sha256="$(tr -d '[:space:]' < "${project_dir}/tools/jacoco/AGENT_SHA256")"
 cli_sha256="$(tr -d '[:space:]' < "${project_dir}/tools/jacoco/CLI_SHA256")"
@@ -14,13 +16,13 @@ download() {
   local destination="${project_dir}/target/jacoco-${version}-${name}.jar"
 
   if [[ -f "${destination}" ]] &&
-    [[ "$(sha256sum "${destination}" | cut -d' ' -f1)" == "${expected}" ]]; then
+    [[ "$(jman_sha256_file "${destination}")" == "${expected}" ]]; then
     return
   fi
   mkdir -p "$(dirname "${destination}")"
   curl --fail --location --silent --show-error --output "${destination}.tmp" "${url}"
   local actual
-  actual="$(sha256sum "${destination}.tmp" | cut -d' ' -f1)"
+  actual="$(jman_sha256_file "${destination}.tmp")"
   if [[ "${actual}" != "${expected}" ]]; then
     rm -f "${destination}.tmp"
     printf 'JaCoCo %s checksum mismatch: expected %s, got %s\n' \

@@ -16,15 +16,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build and attest release assets
+  build-linux:
+    name: Build Linux x64 assets
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     permissions:
       contents: read
-      id-token: write
-      attestations: write
-      artifact-metadata: write
     env:
       JMAN_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
@@ -97,15 +94,137 @@ jobs:
       - name: Build VS Code extension
         run: make package-vscode
 
-      - name: Stage release assets
-        run: make stage-release TAG="${JMAN_RELEASE_TAG}"
+      - name: Upload Linux assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: platform-assets-linux-${{ env.JMAN_RELEASE_TAG }}
+          path: |
+            target/release-dist/*.tar.gz
+            target/vscode/*.vsix
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
 
-      - name: Attest CLI archive
+  build-macos:
+    name: Build macOS ARM64 assets
+    runs-on: macos-15
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      JMAN_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.JMAN_RELEASE_TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify release tag and host
+        run: |
+          test "$(uname -s)-$(uname -m)" = Darwin-arm64
+          test "$(git cat-file -t "${JMAN_RELEASE_TAG}")" = tag
+          git tag --points-at HEAD --list "${JMAN_RELEASE_TAG}" | grep -Fx "${JMAN_RELEASE_TAG}"
+          ./scripts/verify-release-version.sh "${JMAN_RELEASE_TAG}"
+
+      # The pre-macOS JMAN bootstrap cannot run on macOS. This seed JDK is used
+      # only to build the native frontend; released JMAN manages later JDKs.
+      - name: Set up GraalVM 25
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          distribution: graalvm
+          java-version: "25"
+
+      - name: Select the native-image toolchain
+        run: |
+          native-image --version
+          printf 'JMAN_GRAALVM_HOME=%s\n' "${JAVA_HOME}" >> "${GITHUB_ENV}"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt
+          rustup default 1.97.1
+
+      - name: Install extension dependencies
+        run: npm ci --prefix editors/vscode
+
+      - name: Build and smoke-test macOS packages
+        run: |
+          cargo fmt --all -- --check
+          make test-rust test-installer release package-vscode
+          target/release/jman --version
+
+      - name: Upload macOS assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: platform-assets-macos-${{ env.JMAN_RELEASE_TAG }}
+          path: |
+            target/release-dist/*.tar.gz
+            target/vscode/*.vsix
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  stage:
+    name: Stage and attest release assets
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      JMAN_RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.JMAN_RELEASE_TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Download Linux assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: platform-assets-linux-${{ env.JMAN_RELEASE_TAG }}
+          path: platform-assets/linux
+
+      - name: Download macOS assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: platform-assets-macos-${{ env.JMAN_RELEASE_TAG }}
+          path: platform-assets/macos
+
+      - name: Stage release assets
+        run: |
+          mkdir -p target/release-dist target/vscode
+          find platform-assets -type f -name '*.tar.gz' -exec cp {} target/release-dist/ \;
+          find platform-assets -type f -name '*.vsix' -exec cp {} target/vscode/ \;
+          make stage-release TAG="${JMAN_RELEASE_TAG}"
+
+      - name: Attest CLI archives
         uses: actions/attest@c32b4b8b198b65d0bd9d63490e847ff7b53989d4 # v4.0.0
         with:
           subject-path: target/github-release/*.tar.gz
 
-      - name: Attest VS Code package
+      - name: Attest VS Code packages
         uses: actions/attest@c32b4b8b198b65d0bd9d63490e847ff7b53989d4 # v4.0.0
         with:
           subject-path: target/github-release/*.vsix
@@ -126,7 +245,7 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    needs: build
+    needs: stage
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

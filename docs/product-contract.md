@@ -1,7 +1,8 @@
 # JMAN product and compatibility contract
 
-This document is the release contract for JMAN 0.1.0. It distinguishes behavior
-that is supported and tested from behavior that merely happens to work.
+This document is the release contract for JMAN's current pre-1.0 line. It
+distinguishes behavior that is supported and tested from behavior that merely
+happens to work.
 
 ## Identity and audience
 
@@ -17,7 +18,9 @@ services. It also serves Maven and Gradle workspaces through the language
 server, without coupling the native JMAN build path to either tool.
 
 The `jman.toml`, `jman.lock`, `.jman/`, `JMAN_*`, and `jman.java.*` names are the
-stable data-format, environment, and protocol identifiers for 0.1.x.
+stable data-format, environment, and protocol identifiers for current pre-1.0
+releases. Breaking schema changes still require the explicit versioning and
+migration behavior described below.
 
 ## Supported Maven metadata
 
@@ -46,7 +49,7 @@ model, independently resolves its dependencies, and preserves the result in
 deterministic `jman.toml` and `jman.lock` files. Normal JMAN operations do not
 invoke Maven or Gradle.
 
-The following are explicitly outside the 0.1.x contract:
+The following are explicitly outside the current pre-1.0 contract:
 
 - Maven build plugins, extensions, lifecycle bindings, and arbitrary goals;
 - settings.xml mirrors, servers, credentials, proxies, and encrypted settings;
@@ -64,7 +67,7 @@ Unsupported build-plugin declarations are diagnosed during import instead of
 being silently translated. Compiler arguments, processors, main classes, and
 toolchains must be expressed in `jman.toml` after import.
 
-## Measurable 0.1 release criteria
+## Measurable release criteria
 
 Every release candidate must satisfy all of the following from a clean tree:
 

@@ -10,8 +10,9 @@ versions, commits, or tags.
 
 1. Enable GitHub Actions and permit workflows to create releases with the
    repository `GITHUB_TOKEN`.
-2. Protect `master` and require the `CI / Verify Linux x64` status check before
-   merging.
+2. Protect `master` and require the `CI / Verify Linux x64` and `CI / Verify
+   macOS ARM64` status checks before merging. Both normal CI and tagged releases
+   use the standard Apple Silicon `macos-15` runner.
 3. Create a GitHub environment named `vscode-marketplace`. Add required
    reviewers so Marketplace publication remains a deliberate approval step.
 4. Create an Azure user-assigned managed identity with a federated credential
@@ -66,9 +67,12 @@ plus Temurin 17, 21, and 25. Maven 3.9.9 and Gradle 8.7/8.14.1/9.1.0 are also
 checksum-pinned under `target/compatibility-tools/`. Existing JDK installations
 can be supplied with `JMAN_GRAALVM_HOME` and the `JMAN_TEST_JAVA_*_HOME`
 variables. The release workflow performs the same self-hosted setup and runs
-`make release-gates` against the exact tag before packaging or publishing any
-assets. Normal pushes and pull requests continue to run the smaller `make ci`
-suite.
+`make release-gates` against the exact tag in its Linux validation job. The
+Apple Silicon packaging job uses the pinned `actions/setup-java` action as the
+one-time GraalVM seed because the older Linux-only JMAN bootstrap cannot run on
+macOS; released JMAN then manages ordinary project JDKs itself. Publishing
+waits for both jobs. Normal pushes and pull requests continue to run the
+smaller `make ci` suite.
 
 Then prepare the coordinated release from the same clean worktree:
 
@@ -95,7 +99,10 @@ The Release workflow currently publishes:
 
 - `jman-<version>-linux-x86_64.tar.gz`, containing the CLI, native compiler
   frontend, Java workers, project import support, documentation, and license;
+- `jman-<version>-macos-aarch64.tar.gz`, with the same runtime for Apple
+  Silicon macOS;
 - `jman-java-<version>-linux-x64.vsix`, the Linux x64 VS Code extension;
+- `jman-java-<version>-darwin-arm64.vsix`, the Apple Silicon VS Code extension;
 - `install.sh`, the user-local bootstrap installer;
 - `SHA256SUMS`, covering the CLI, extension, and installer; and
 - `release-manifest.json`, recording versions, target platforms, filenames, and
@@ -125,24 +132,25 @@ complete the [VS Code release checklist](vscode-release-checklist.md). Then open
 **Actions → Publish VS Code Marketplace → Run workflow**, enter the same release
 tag, and approve the `vscode-marketplace` environment deployment.
 
-The publishing workflow downloads the already-reviewed VSIX from the GitHub
-Release, verifies it against `SHA256SUMS`, confirms its publisher and extension
-identity, and publishes it through Marketplace trusted publishing. Tags with a
-prerelease suffix publish to the Marketplace pre-release channel; stable tags
-publish to the stable channel. It does not rebuild or modify the package.
-Re-running it is safe because duplicate versions are skipped.
+The publishing workflow downloads both already-reviewed platform VSIX files
+from the GitHub Release, verifies them against `SHA256SUMS`, confirms their
+publisher and extension identity, and publishes them through Marketplace
+trusted publishing. Tags with a prerelease suffix publish to the Marketplace
+pre-release channel; stable tags publish to the stable channel. It does not
+rebuild or modify either package. Re-running it is safe because duplicate
+versions are skipped.
 
 ## Local artifact rehearsal
 
-To inspect exactly what the workflow will publish without creating a tag or
+To inspect the artifacts for the current host without creating a tag or
 release:
 
 ```bash
 make release
 make package-vscode
-make stage-release TAG=v0.8.1
-(cd target/github-release && sha256sum --check SHA256SUMS)
 ```
 
-The staged files are written to `target/github-release/`. These commands never
-publish, commit, or tag anything.
+The release workflow combines the Linux and macOS job outputs before running
+`make stage-release`; local staging requires both platform pairs to be copied
+into `target/release-dist/` and `target/vscode/`. These commands never publish,
+commit, or tag anything.

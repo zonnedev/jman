@@ -55,7 +55,7 @@ assert.ok(
 
 assert.equal(
   manifest.scripts.package,
-  "vsce package --target linux-x64 --no-dependencies",
+  "vsce package --target $(node ../../scripts/vscode-target.js) --no-dependencies",
 );
 assert.ok(!Object.values(manifest.scripts).some((script) => script.includes("vsce publish")));
 

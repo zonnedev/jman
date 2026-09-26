@@ -133,9 +133,10 @@ relationships may not be discoverable.
 
 ## Platform and current limits
 
-- Release artifacts currently target x86-64 glibc Linux.
-- Windows, macOS, ARM, Alpine/musl, virtual workspaces, and untrusted VS Code
-  workspaces are not supported yet.
+- Release artifacts currently target x86-64 glibc Linux and Apple Silicon
+  macOS.
+- Windows, Intel macOS, Linux ARM64, Alpine/musl, virtual workspaces, and
+  untrusted VS Code workspaces are not supported yet.
 - Process cancellation is best effort across JVM/container boundaries.
 - Maven/Gradle editor import requires a usable wrapper or matching system tool.
 - JMAN does not claim arbitrary build-plugin emulation or perfect compatibility

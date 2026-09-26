@@ -2,6 +2,8 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=platform.sh
+source "${project_dir}/scripts/platform.sh"
 # shellcheck source=use-test-java.sh
 source "${project_dir}/scripts/use-test-java.sh"
 classes_dir="${project_dir}/target/native-classes"
@@ -28,7 +30,9 @@ javac -Werror -Xlint:all \
 cp -R "${project_dir}/tools/javac-bridge/src/main/resources/." "${classes_dir}/"
 image_build_digest="$(
   cd "${classes_dir}"
-  find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
+  while IFS= read -r source; do
+    printf '%s  %s\n' "$(jman_sha256_file "${source}")" "${source}"
+  done < <(find . -type f -print | LC_ALL=C sort) | jman_sha256_stream
 )"
 image_build_id="${image_build_digest:0:8}-${image_build_digest:8:4}-${image_build_digest:12:4}-${image_build_digest:16:4}-${image_build_digest:20:12}"
 

@@ -7,16 +7,15 @@ universal extension.
 
 ## Build and verify
 
-From a clean reviewed checkout on Linux x86-64:
+From a clean reviewed checkout on a supported host:
 
 ```bash
 make package-vscode
-(cd target/vscode && sha256sum --check jman-java-0.8.1-linux-x64.vsix.sha256)
 ```
 
 The packaging command rebuilds the native frontend, Java workers, bundled JMAN
-server, and extension client. It runs the extension tests, validates the native
-artifacts as compatibility-targeted Linux x86-64 ELF files, checks the VSIX ZIP
+server, and extension client. It runs the extension tests, validates Linux x64
+ELF or macOS ARM64 Mach-O artifacts for the current host, checks the VSIX ZIP
 structure, and writes a SHA-256 checksum.
 
 Confirm that `git status --short` contains only the reviewed release changes and
@@ -32,7 +31,7 @@ mkdir -p /tmp/jman-vscode-profile /tmp/jman-vscode-extensions
 code \
   --user-data-dir /tmp/jman-vscode-profile \
   --extensions-dir /tmp/jman-vscode-extensions \
-  --install-extension target/vscode/jman-java-0.8.1-linux-x64.vsix
+  --install-extension target/vscode/jman-java-0.8.1-<platform>.vsix
 ```
 
 Launch VS Code with the same two directory arguments and verify:
@@ -63,9 +62,10 @@ other server for the remainder of acceptance testing.
 2. Open **Actions → Publish VS Code Marketplace → Run workflow** and enter the
    GitHub Release tag that contains the reviewed package.
 3. Approve the protected `vscode-marketplace` environment deployment.
-4. Confirm the listing uses the channel implied by the release tag and targets
-   Linux x64 rather than a universal package. Review its rendered README, icon,
-   links, license, pricing, support details, and installation controls.
+4. Confirm the listing uses the channel implied by the release tag and contains
+   Linux x64 and Darwin ARM64 targets rather than a universal package. Review
+   its rendered README, icon, links, license, pricing, support details, and
+   installation controls.
 5. Install the Marketplace copy into the clean profile and repeat the startup,
    status, completion, and test-discovery smoke checks.
 

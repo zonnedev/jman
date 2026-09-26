@@ -2,8 +2,15 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=platform.sh
+source "${project_dir}/scripts/platform.sh"
 native_dir="${project_dir}/target/native"
-native_library="${native_dir}/libjman_javac_frontend.so"
+platform="$(jman_release_platform)" || {
+  printf 'JMAN releases do not support this host: %s %s\n' "$(uname -s)" "$(uname -m)" >&2
+  exit 1
+}
+native_library_name="$(jman_native_library_name)"
+native_library="${native_dir}/${native_library_name}"
 dist_dir="${project_dir}/target/release-dist"
 stage_root="${project_dir}/target/release-stage"
 
@@ -18,17 +25,11 @@ fi
 "${project_dir}/scripts/build-vineflower.sh"
 "${project_dir}/scripts/build-jacoco.sh"
 JMAN_JAVAC_FRONTEND_LIB_DIR="${native_dir}" \
-  LD_LIBRARY_PATH="${native_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+  "${project_dir}/scripts/with-native-library.sh" "${native_dir}" \
   cargo build --manifest-path "${project_dir}/Cargo.toml" --release -p jman-cli
 
-version="$(LD_LIBRARY_PATH="${native_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+version="$("${project_dir}/scripts/with-native-library.sh" "${native_dir}" \
   "${project_dir}/target/release/jman" --version | awk '{print $2}')"
-case "$(uname -m)" in
-  x86_64) architecture="x86_64" ;;
-  aarch64|arm64) architecture="aarch64" ;;
-  *) architecture="$(uname -m)" ;;
-esac
-platform="$(uname -s | tr '[:upper:]' '[:lower:]')-${architecture}"
 name="jman-${version}-${platform}"
 stage="${stage_root}/${name}"
 archive="${dist_dir}/${name}.tar.gz"
@@ -36,7 +37,7 @@ archive="${dist_dir}/${name}.tar.gz"
 rm -rf "${stage_root}" "${dist_dir}"
 mkdir -p "${stage}/resources/icons" "${stage}/tools" "${dist_dir}"
 cp "${project_dir}/target/release/jman" "${stage}/jman"
-cp "${native_library}" "${stage}/libjman_javac_frontend.so"
+cp "${native_library}" "${stage}/${native_library_name}"
 cp -R "${native_dir}/platform" "${stage}/platform"
 cp "${project_dir}/target/processor-worker.jar" "${stage}/processor-worker.jar"
 cp "${project_dir}/target/vineflower-1.12.0.jar" "${stage}/vineflower.jar"
@@ -49,12 +50,17 @@ cp "${project_dir}/README.md" "${project_dir}/CHANGELOG.md" \
   "${project_dir}/LICENSE" "${project_dir}/THIRD_PARTY_NOTICES.md" "${stage}/"
 cp "${project_dir}/mkdocs.yml" "${stage}/mkdocs.yml"
 cp -R "${project_dir}/docs" "${stage}/docs"
+if [[ "$(jman_host_os)" == macos ]]; then
+  codesign --force --sign - "${stage}/jman" "${stage}/${native_library_name}"
+  codesign --verify --strict "${stage}/jman" "${stage}/${native_library_name}"
+fi
 
-tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
-  -C "${stage_root}" -cf - "${name}" | gzip -n > "${archive}"
+"${project_dir}/scripts/create-release-archive.py" \
+  "${stage_root}" "${name}" "${archive}"
 (
   cd "${dist_dir}"
-  sha256sum "$(basename "${archive}")" > SHA256SUMS
-  sha256sum --check SHA256SUMS
+  archive_name="$(basename "${archive}")"
+  printf '%s  %s\n' "$(jman_sha256_file "${archive_name}")" "${archive_name}" > SHA256SUMS
+  test "$(jman_sha256_file "${archive_name}")" = "$(awk '{ print $1 }' SHA256SUMS)"
 )
 printf 'Release archive: %s\n' "${archive}"

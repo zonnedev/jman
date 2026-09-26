@@ -1,9 +1,9 @@
 # Install JMAN
 
-JMAN releases are self-contained archives for 64-bit glibc-based Linux. Keep
-the archive together: it contains the `jman` executable, the native compiler
-frontend, Java workers, the Maven/Gradle model importers, JaCoCo, and
-Vineflower.
+JMAN releases are self-contained archives for x86-64 glibc-based Linux and
+Apple Silicon macOS. Keep the archive together: it contains the `jman`
+executable, the native compiler frontend, Java workers, the Maven/Gradle model
+importers, JaCoCo, and Vineflower.
 
 ## Quick installation
 
@@ -64,13 +64,18 @@ not match.
 
 ## Manual installation
 
-1. Download the Linux x64 archive and its `SHA256SUMS` file from the
+1. Download the archive for your platform and its `SHA256SUMS` file from the
    [latest GitHub release](https://github.com/zonnedev/jman/releases/latest).
 2. Verify the download from the directory containing both files:
 
    ```bash
+   # Linux x86-64
    grep '  jman-<version>-linux-x86_64.tar.gz$' SHA256SUMS \
      | sha256sum --check -
+
+   # Apple Silicon macOS
+   grep '  jman-<version>-macos-aarch64.tar.gz$' SHA256SUMS \
+     | shasum -a 256 -c -
    ```
 
 3. Extract it into a versioned directory. Replace `<version>` and `<archive>`
@@ -94,7 +99,7 @@ locates its bundled runtime files relative to that executable.
 
 ## Requirements
 
-- Linux on an x86-64 processor with glibc.
+- Linux on an x86-64 processor with glibc, or Apple Silicon macOS.
 - A supported JDK for project compilation. JMAN can install and select one with
   `jman java install --global`.
 - No separate JVM is required for the native language server or formatter;

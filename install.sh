@@ -98,32 +98,47 @@ confirm_java_install() {
 
 require_command curl
 require_command tar
-require_command sha256sum
 require_command mktemp
 require_command awk
 require_command sed
 require_command grep
 require_command uname
 
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{ print $1 }'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{ print $1 }'
+  else
+    fail 'required checksum command not found: sha256sum or shasum'
+  fi
+}
+
 case "${setup_java}" in
   auto | 1 | 0 | true | false | yes | no) ;;
   *) fail 'JMAN_SETUP_JAVA must be auto, 1, or 0' ;;
 esac
 
-[ "$(uname -s)" = Linux ] || fail 'JMAN releases currently support Linux only'
-case "$(uname -m)" in
-  x86_64 | amd64) platform=linux-x86_64 ;;
-  *) fail "unsupported architecture: $(uname -m); JMAN currently publishes Linux x86-64 releases" ;;
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64 | Linux-amd64)
+    platform=linux-x86_64
+    if command -v getconf >/dev/null 2>&1 \
+      && getconf GNU_LIBC_VERSION >/dev/null 2>&1; then
+      :
+    elif command -v ldd >/dev/null 2>&1 \
+      && ldd --version 2>&1 | grep -Eiq 'glibc|gnu libc'; then
+      :
+    else
+      fail 'JMAN Linux releases require glibc'
+    fi
+    ;;
+  Darwin-arm64 | Darwin-aarch64)
+    platform=macos-aarch64
+    ;;
+  *)
+    fail "unsupported platform: $(uname -s) $(uname -m); JMAN publishes Linux x86-64 and macOS ARM64 releases"
+    ;;
 esac
-if command -v getconf >/dev/null 2>&1 \
-  && getconf GNU_LIBC_VERSION >/dev/null 2>&1; then
-  :
-elif command -v ldd >/dev/null 2>&1 \
-  && ldd --version 2>&1 | grep -Eiq 'glibc|gnu libc'; then
-  :
-else
-  fail 'JMAN releases currently require a glibc-based Linux system'
-fi
 
 version="${JMAN_VERSION:-}"
 if [ -z "${version}" ]; then
@@ -160,7 +175,7 @@ esac
 if [ "${#expected_sha256}" -ne 64 ]; then
   fail "${archive_name} has an invalid SHA-256 entry in SHA256SUMS"
 fi
-actual_sha256="$(sha256sum "${archive_file}" | awk '{ print $1 }')"
+actual_sha256="$(sha256_file "${archive_file}")"
 if [ "${actual_sha256}" != "${expected_sha256}" ]; then
   fail "SHA-256 verification failed for ${archive_name}"
 fi
@@ -200,7 +215,12 @@ fi
 temporary_link="${bin_dir}/.jman-link.$$"
 rm -f -- "${temporary_link}"
 ln -s "${install_dir}/jman" "${temporary_link}"
-mv -Tf "${temporary_link}" "${jman_link}"
+if [ "${platform}" = linux-x86_64 ]; then
+  mv -Tf "${temporary_link}" "${jman_link}"
+else
+  rm -f -- "${jman_link}"
+  mv -f "${temporary_link}" "${jman_link}"
+fi
 temporary_link=""
 say "Linked ${jman_link} to JMAN ${version}."
 

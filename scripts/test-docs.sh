@@ -93,6 +93,12 @@ if grep -Fq 'mkdocs-material' docs/requirements.txt \
   status=1
 fi
 
+if grep -Eq 'approaches a stable 0[.]3[.]0|contract for JMAN 0[.]1[.]0|0[.]1[.]x contract' \
+    CHANGELOG.md docs/product-contract.md; then
+  printf 'current release documentation contains a stale historical version contract\n' >&2
+  status=1
+fi
+
 if [[ "${status}" -ne 0 ]]; then
   exit "${status}"
 fi

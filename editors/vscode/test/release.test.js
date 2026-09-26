@@ -32,8 +32,31 @@ function assertElfX64(relative, executable) {
   }
 }
 
-assertElfX64("server/jman", true);
-assertElfX64("server/libjman_javac_frontend.so", false);
+function assertMachOArm64(relative, executable) {
+  const resolved = releasePath(relative);
+  const header = Buffer.alloc(12);
+  const descriptor = fs.openSync(resolved, "r");
+  try {
+    assert.equal(fs.readSync(descriptor, header, 0, header.length, 0), header.length);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  assert.equal(header.readUInt32LE(0), 0xfeedfacf, `${relative} must be a 64-bit Mach-O file`);
+  assert.equal(header.readUInt32LE(4), 0x0100000c, `${relative} must target ARM64`);
+  if (executable) {
+    assert.notEqual(fs.statSync(resolved).mode & 0o111, 0, `${relative} must be executable`);
+  }
+}
+
+if (process.platform === "linux" && process.arch === "x64") {
+  assertElfX64("server/jman", true);
+  assertElfX64("server/libjman_javac_frontend.so", false);
+} else if (process.platform === "darwin" && process.arch === "arm64") {
+  assertMachOArm64("server/jman", true);
+  assertMachOArm64("server/libjman_javac_frontend.dylib", false);
+} else {
+  assert.fail(`unsupported release-test host: ${process.platform}-${process.arch}`);
+}
 
 const nativeBuild = fs.readFileSync(path.join(projectRoot, "scripts/build-native.sh"), "utf8");
 assert.ok(nativeBuild.includes("-march=compatibility"));

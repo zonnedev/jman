@@ -54,6 +54,8 @@ mkdir -p "${release_dist_dir}" "${vscode_dist_dir}"
 
 printf 'cli fixture\n' > "${release_dist_dir}/jman-${workspace_version}-linux-x86_64.tar.gz"
 printf 'vsix fixture\n' > "${vscode_dist_dir}/jman-java-${extension_version}-linux-x64.vsix"
+printf 'macOS CLI fixture\n' > "${release_dist_dir}/jman-${workspace_version}-macos-aarch64.tar.gz"
+printf 'macOS VSIX fixture\n' > "${vscode_dist_dir}/jman-java-${extension_version}-darwin-arm64.vsix"
 
 "${project_dir}/scripts/verify-release-version.sh" "${release_tag}"
 if "${project_dir}/scripts/verify-release-version.sh" "v0.0.0-release-test" >/dev/null 2>&1; then
@@ -85,17 +87,22 @@ node -e '
   const fs = require("fs");
   const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   if (manifest.releaseTag !== process.argv[2]) throw new Error("release tag mismatch");
-  if (manifest.artifacts.length !== 3) throw new Error("artifact count mismatch");
+  if (manifest.artifacts.length !== 5) throw new Error("artifact count mismatch");
+  for (const platform of ["linux-x86_64", "linux-x64", "macos-aarch64", "darwin-arm64", "portable-shell"]) {
+    if (!manifest.artifacts.some(artifact => artifact.platform === platform)) {
+      throw new Error(`missing platform ${platform}`);
+    }
+  }
   for (const artifact of manifest.artifacts) {
     if (!/^[0-9a-f]{64}$/.test(artifact.sha256)) throw new Error("invalid digest");
   }
 ' "${output_dir}/release-manifest.json" "${release_tag}"
 
-test "$(wc -l < "${output_dir}/SHA256SUMS")" -eq 3
+test "$(wc -l < "${output_dir}/SHA256SUMS")" -eq 5
 test -x "${output_dir}/install.sh"
 grep -Fq 'releases/latest/download/release-manifest.json' "${output_dir}/install.sh"
 cp "${release_dist_dir}/jman-${workspace_version}-linux-x86_64.tar.gz" \
-  "${release_dist_dir}/jman-duplicate-linux-x86_64.tar.gz"
+  "${release_dist_dir}/jman-${workspace_version}-duplicate.tar.gz"
 if JMAN_RELEASE_DIST_DIR="${release_dist_dir}" \
   JMAN_VSCODE_DIST_DIR="${vscode_dist_dir}" \
   JMAN_GITHUB_RELEASE_DIR="${output_dir}" \
@@ -121,11 +128,18 @@ grep -q 'make release-gates' "${workflow_dir}/release.yml"
 grep -q 'scripts/setup-compatibility-tools.sh' "${workflow_dir}/release.yml"
 grep -q 'scripts/setup-test-jdks.sh --graalvm' "${workflow_dir}/ci.yml"
 grep -q 'scripts/setup-test-jdks.sh --all' "${workflow_dir}/release.yml"
-if grep -R -Eq 'actions/setup-java|graalvm/setup-graalvm' \
-  "${workflow_dir}/ci.yml" "${workflow_dir}/release.yml"; then
-  echo "CI and release workflows must provision test JDKs through JMAN" >&2
-  exit 1
-fi
+grep -Fq 'name: Verify macOS ARM64' "${workflow_dir}/ci.yml"
+grep -Fq 'runs-on: macos-15' "${workflow_dir}/ci.yml"
+grep -Fq 'actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c' \
+  "${workflow_dir}/ci.yml"
+grep -Fq 'make test-rust test-installer release package-vscode' \
+  "${workflow_dir}/ci.yml"
+grep -Fq 'runs-on: macos-15' "${workflow_dir}/release.yml"
+grep -Fq 'actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c' \
+  "${workflow_dir}/release.yml"
+grep -Fq 'distribution: graalvm' "${workflow_dir}/release.yml"
+grep -Fq 'platform-assets-macos-' "${workflow_dir}/release.yml"
+grep -Fq 'needs: [build-linux, build-macos]' "${workflow_dir}/release.yml"
 grep -Fq 'bootstrap_version="0.7.1"' "${project_dir}/scripts/setup-test-jdks.sh"
 grep -Fq \
   'bootstrap_sha256="989346585606ce1ebf731c4178033936e9b0e1fce397075de84cd11a559e8a31"' \
@@ -164,6 +178,7 @@ for packaging_script in package-release.sh package-vscode.sh; do
   grep -q 'native_dir}/platform' "${project_dir}/scripts/${packaging_script}"
   grep -Fq 'scripts/build-maven-importer.sh' "${project_dir}/scripts/${packaging_script}"
   grep -Fq 'target/maven-importer.jar' "${project_dir}/scripts/${packaging_script}"
+  grep -Fq 'codesign --force --sign -' "${project_dir}/scripts/${packaging_script}"
   if grep -Fq 'target/java-test-classes' "${project_dir}/scripts/${packaging_script}"; then
     echo "${packaging_script} must package the Java 17-targeted Maven importer" >&2
     exit 1

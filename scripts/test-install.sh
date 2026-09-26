@@ -2,6 +2,8 @@
 set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=platform.sh
+source "${project_dir}/scripts/platform.sh"
 if [[ -z "${JMAN_TEST_TEMP_ROOT:-}" ]]; then
   exec "${project_dir}/scripts/run-test-command.sh" "$0" "$@"
 fi
@@ -18,7 +20,9 @@ version="$({
 })"
 test_root="${project_dir}/target/install-script-test"
 release_dir="${test_root}/releases/download/v${version}"
-payload_name="jman-${version}-linux-x86_64"
+platform="$(jman_release_platform)"
+native_library_name="$(jman_native_library_name)"
+payload_name="jman-${version}-${platform}"
 archive_name="${payload_name}.tar.gz"
 payload_dir="${test_root}/payload/${payload_name}"
 state_dir="${test_root}/state"
@@ -56,13 +60,13 @@ case "\$*" in
 esac
 EOF
 chmod +x "${payload_dir}/jman"
-printf 'runtime fixture\n' > "${payload_dir}/libjman_javac_frontend.so"
+printf 'runtime fixture\n' > "${payload_dir}/${native_library_name}"
 mkdir -p "${payload_dir}/platform/lib"
 printf 'compiler platform fixture\n' > "${payload_dir}/platform/lib/ct.sym"
 tar -czf "${release_dir}/${archive_name}" -C "${test_root}/payload" "${payload_name}"
 (
   cd "${release_dir}"
-  sha256sum "${archive_name}" > SHA256SUMS
+  printf '%s  %s\n' "$(jman_sha256_file "${archive_name}")" "${archive_name}" > SHA256SUMS
 )
 cat > "${test_root}/latest-release-manifest.json" <<EOF
 {
@@ -176,5 +180,9 @@ if env \
 fi
 test ! -e "${checksum_home}/.local/bin/jman"
 grep -Fq 'SHA-256 verification failed' "${test_root}/checksum-output"
+
+grep -Fq 'Darwin-arm64 | Darwin-aarch64' "${project_dir}/install.sh"
+grep -Fq 'platform=macos-aarch64' "${project_dir}/install.sh"
+grep -Fq 'shasum -a 256' "${project_dir}/install.sh"
 
 printf 'Remote installer tests passed\n'

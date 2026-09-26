@@ -17,7 +17,7 @@
 Use [GitHub Issues](https://github.com/zonnedev/jman/issues). Include:
 
 - JMAN Java and VS Code versions;
-- Linux distribution and CPU architecture;
+- operating system and CPU architecture;
 - selected build system and synchronization mode;
 - minimal reproduction steps;
 - sanitized JMAN Java output-channel logs.

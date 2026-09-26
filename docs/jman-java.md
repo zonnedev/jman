@@ -278,7 +278,7 @@ Build and install the development extension:
 
 ```bash
 make package-vscode
-code --install-extension target/vscode/jman-java-0.8.1-linux-x64.vsix
+code --install-extension target/vscode/jman-java-0.8.1-<platform>.vsix
 ```
 
 The extension bundles the native compiler frontend and its matching platform

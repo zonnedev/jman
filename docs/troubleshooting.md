@@ -160,7 +160,8 @@ Open **View → Output → JMAN Java**, then verify:
 1. The bundled/default server or `jman.java.server.path` is executable and has
    its adjacent `platform/lib/ct.sym` runtime data.
 2. A compatible project/build JDK is installed.
-3. The workspace is trusted and uses x86-64 glibc Linux.
+3. The workspace is trusted and uses x86-64 glibc Linux or Apple Silicon
+   macOS.
 4. `mvnw`/`gradlew` is executable when importing that build system.
 
 Run **JMAN Java: Show Status** after recovery.
@@ -210,7 +211,7 @@ repositories require HTTPS unless local-development HTTP is explicitly allowed.
 Open [GitHub Issues](https://github.com/zonnedev/jman/issues) with:
 
 - `jman --version` and `jman doctor` output;
-- Linux distribution/architecture and relevant JDK/build-tool versions;
+- operating system/architecture and relevant JDK/build-tool versions;
 - the smallest manifest/project that reproduces the behavior;
 - the exact command and sanitized `-vv` or editor output logs.
 

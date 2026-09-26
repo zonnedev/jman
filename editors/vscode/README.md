@@ -8,9 +8,9 @@ Native Java language support backed by JMAN's Rust language server and GraalVM
 compiler frontend. JMAN Java understands JMAN, Maven, and Gradle workspaces and
 keeps editor analysis aligned with the project's real build model.
 
-> **Preview:** this release supports 64-bit glibc-based Linux systems. Windows,
-> macOS, ARM, Alpine Linux, virtual workspaces, and untrusted workspaces are not
-> supported yet.
+> **Preview:** this release supports x86-64 glibc-based Linux and Apple Silicon
+> macOS. Windows, Intel macOS, Linux ARM64, Alpine Linux, virtual workspaces,
+> and untrusted workspaces are not supported yet.
 
 ## Highlights
 
@@ -27,7 +27,7 @@ keeps editor analysis aligned with the project's real build model.
 ## Requirements
 
 - Visual Studio Code 1.95 or newer.
-- A 64-bit x86 processor and Linux distribution using glibc.
+- An x86-64 Linux distribution using glibc, or Apple Silicon macOS.
 - A supported project JDK for builds, tests, and annotation-processor workers.
   The native compiler frontend and its matching platform symbols are bundled.
 - A trusted local or remote workspace with its project dependencies available.
@@ -143,9 +143,9 @@ changes the build-tool runtime only; Gradle still owns the project's compiler
 toolchain and target release.
 
 Report reproducible problems through [GitHub Issues](https://github.com/zonnedev/jman/issues).
-Include the JMAN Java version, VS Code version, Linux distribution, selected
-build system, and sanitized output-channel logs. See [SUPPORT.md](SUPPORT.md)
-before reporting security-sensitive information.
+Include the JMAN Java version, VS Code version, operating system and
+architecture, selected build system, and sanitized output-channel logs. See
+[SUPPORT.md](SUPPORT.md) before reporting security-sensitive information.
 
 ## License
 

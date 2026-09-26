@@ -60,5 +60,6 @@ overview, see the [product contract](product-contract.md).
 
 !!! note "Current platform"
 
-    JMAN currently ships for 64-bit glibc-based Linux. The editor frontend uses
-    Java 25 GraalVM; project builds can use another supported JDK.
+    JMAN currently ships for x86-64 glibc-based Linux and Apple Silicon macOS.
+    The editor frontend uses Java 25 GraalVM; project builds can use another
+    supported JDK.

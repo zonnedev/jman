@@ -2,11 +2,14 @@ SHELL := /usr/bin/env bash
 UV ?= uv
 DOCS_RUN := $(UV) run --isolated --no-project --with-requirements docs/requirements.txt
 
-NATIVE_FRONTEND := $(CURDIR)/target/native/libjman_javac_frontend.so
-DEBUG_NATIVE_FRONTEND := $(CURDIR)/target/debug/libjman_javac_frontend.so
+HOST_SYSTEM := $(shell uname -s)
+NATIVE_LIBRARY_EXTENSION := $(if $(filter Darwin,$(HOST_SYSTEM)),dylib,so)
+NATIVE_FRONTEND := $(CURDIR)/target/native/libjman_javac_frontend.$(NATIVE_LIBRARY_EXTENSION)
+DEBUG_NATIVE_FRONTEND := $(CURDIR)/target/debug/libjman_javac_frontend.$(NATIVE_LIBRARY_EXTENSION)
 NATIVE_FRONTEND_INPUTS := \
 	$(shell find tools/javac-bridge/src/main -type f) \
 	scripts/build-native.sh \
+	scripts/platform.sh \
 	scripts/setup-test-jdks.sh \
 	scripts/use-test-java.sh
 
@@ -26,7 +29,7 @@ test-toolchain-bootstrap:
 test-rust: $(DEBUG_NATIVE_FRONTEND) vineflower jacoco
 	. "$(CURDIR)/scripts/use-test-java.sh"; \
 	JMAN_JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
-	LD_LIBRARY_PATH="$(CURDIR)/target/native$${LD_LIBRARY_PATH:+:$${LD_LIBRARY_PATH}}" \
+	./scripts/with-native-library.sh "$(CURDIR)/target/native" \
 	./scripts/run-test-command.sh cargo test --workspace
 
 test-java:
@@ -58,19 +61,19 @@ test-coverage: jacoco
 	JMAN_JACOCO_AGENT="$(CURDIR)/target/jacoco-0.8.15-agent.jar" \
 	JMAN_JACOCO_CLI="$(CURDIR)/target/jacoco-0.8.15-cli.jar" \
 	JMAN_JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
-	LD_LIBRARY_PATH="$(CURDIR)/target/native$${LD_LIBRARY_PATH:+:$${LD_LIBRARY_PATH}}" \
+	./scripts/with-native-library.sh "$(CURDIR)/target/native" \
 	./scripts/run-test-command.sh cargo test -p jman-build coverage_ -- --nocapture
 	. "$(CURDIR)/scripts/use-test-java.sh"; \
 	JMAN_JACOCO_AGENT="$(CURDIR)/target/jacoco-0.8.15-agent.jar" \
 	JMAN_JACOCO_CLI="$(CURDIR)/target/jacoco-0.8.15-cli.jar" \
 	JMAN_JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
-	LD_LIBRARY_PATH="$(CURDIR)/target/native$${LD_LIBRARY_PATH:+:$${LD_LIBRARY_PATH}}" \
+	./scripts/with-native-library.sh "$(CURDIR)/target/native" \
 	./scripts/run-test-command.sh cargo test -p jman-cli compiles_tests_and_launches_junit_platform_console -- --nocapture
 
 test-vineflower: vineflower
 	. "$(CURDIR)/scripts/use-test-java.sh"; \
 	JMAN_JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
-	LD_LIBRARY_PATH="$(CURDIR)/target/native" \
+	./scripts/with-native-library.sh "$(CURDIR)/target/native" \
 	./scripts/run-test-command.sh cargo test -p jman-java-lsp --features native-ffi \
 		vineflower_fallback_is_content_addressed_and_locates_overload
 
@@ -95,8 +98,7 @@ test-project-importers: test-java test-maven-import test-gradle-import
 
 test-publishing: $(DEBUG_NATIVE_FRONTEND) vineflower compatibility-tools
 	JMAN_JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
-	LD_LIBRARY_PATH="$(CURDIR)/target/native$${LD_LIBRARY_PATH:+:$${LD_LIBRARY_PATH}}" \
-	cargo build -p jman-cli
+	./scripts/with-native-library.sh "$(CURDIR)/target/native" cargo build -p jman-cli
 	./scripts/test-publishing.sh
 
 native: $(NATIVE_FRONTEND)
@@ -131,7 +133,7 @@ test-lsp: native test-maven-import test-gradle-annotation-processing test-proces
 	. "$(CURDIR)/scripts/use-test-java.sh"; \
 	JAVA_HOME="$$JAVA_HOME" \
 	JMAN_JAVA_LSP_PROCESSOR_WORKER_CLASSPATH="$(CURDIR)/target/processor-worker.jar" \
-	LD_LIBRARY_PATH="$(CURDIR)/target/native" \
+	./scripts/with-native-library.sh "$(CURDIR)/target/native" \
 	./scripts/run-test-command.sh cargo run --quiet -p jman-java-lsp --example processor_lsp_probe -- \
 		"$(CURDIR)/target/debug/jman-java-lsp" \
 		"$(CURDIR)/target/integration-fixtures/gradle-annotation-processing"
