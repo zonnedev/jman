@@ -1383,12 +1383,17 @@ final class JavaFormatter {
             positions.getEndPosition(
                 unit, invocation.getArguments().get(invocation.getArguments().size() - 1)));
     if (start < 0 || end <= start || selectEnd < 0 || firstStart < 0 || lastEnd < 0) return;
+    int open = firstTokenPosition(source, task, selectEnd, firstStart, "(");
+    if (open < 0) return;
     long complexArguments =
         invocation.getArguments().stream().filter(JavaFormatter::complexArgument).count();
-    if (compactWidth(source, start, end) <= 140 && complexArguments < 2) return;
-    int open = firstTokenPosition(source, task, selectEnd, firstStart, "(");
+    int invocationWidth =
+        invocation.getMethodSelect() instanceof MemberSelectTree select
+            ? select.getIdentifier().length() + 1 + compactWidth(source, open, end)
+            : compactWidth(source, start, end);
+    if (invocationWidth <= 140 && complexArguments < 2) return;
     int close = lastTokenPosition(source, task, lastEnd, end, ")");
-    if (open < 0 || close < 0) return;
+    if (close < 0) return;
     int indent = braceDepth(source, task, start) * 2;
     edits.add(new Edit(open + 1, firstStart, "\n" + " ".repeat(indent + 2)));
     for (int index = 1; index < invocation.getArguments().size(); index++) {
@@ -1671,9 +1676,13 @@ final class JavaFormatter {
   }
 
   private static boolean complexArgument(Tree argument) {
-    return argument instanceof LambdaExpressionTree
-        || argument instanceof ConditionalExpressionTree
-        || argument instanceof MethodInvocationTree;
+    if (argument instanceof LambdaExpressionTree || argument instanceof ConditionalExpressionTree) {
+      return true;
+    }
+    if (argument instanceof MethodInvocationTree invocation) {
+      return invocation.getArguments().stream().anyMatch(JavaFormatter::complexArgument);
+    }
+    return false;
   }
 
   private static void addConditionLayout(
@@ -1974,10 +1983,11 @@ final class JavaFormatter {
         width > 140
             || calls.size() >= 5
             || blockLambda
+            || (complex && width > 80)
             || (calls.size() >= 3 && complex)
             || (calls.size() >= 3 && width > 100);
     if (!wrap) return;
-    int indent = braceDepth(source, task, start) * 2 + 4;
+    int indent = braceDepth(source, task, start) * 2 + 2;
     for (MemberSelectTree select : continuationSelects) {
       int expressionEnd = position(positions.getEndPosition(unit, select.getExpression()));
       int selectEnd = position(positions.getEndPosition(unit, select));

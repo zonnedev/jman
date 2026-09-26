@@ -168,10 +168,11 @@ expanded into canonical constructors.
 
 ### Arguments
 
-Argument count alone does not force a call to wrap. A call wraps when it
-exceeds 140 columns, contains an already multiline argument, or contains a
-combination of structurally complex arguments that is difficult to scan. A
-wrapped call uses one argument per line and aligns its closing delimiter with
+Argument count alone does not force a call to wrap. An individual invocation
+wraps when its own method name and arguments exceed 140 columns, contains an
+already multiline argument, or contains a combination of structurally complex
+arguments that is difficult to scan. Its receiver chain is measured separately.
+A wrapped call uses one argument per line and aligns its closing delimiter with
 the containing statement.
 
 ```java
@@ -187,14 +188,14 @@ var customer = customerFactory.create(
 
 A short chain remains inline. The receiver and first invocation always stay on
 the initial line when a chain wraps; every subsequent invocation starts on its
-own line with a four-space chain continuation.
+own line with one JJFS indentation level of continuation.
 
 ```java
 var customer = customerRepository.findById(id).orElseThrow();
 
 var paired = customerRepository.findById(id)
-    .map(customer -> customer.isPaired())
-    .orElseThrow();
+  .map(customer -> customer.isPaired())
+  .orElseThrow();
 ```
 
 A chain stays inline when it has at most two calls and fits within 140 columns.
@@ -203,6 +204,7 @@ fits within 100 columns. A chain wraps when it:
 
 - exceeds 140 columns;
 - contains five or more calls;
+- contains a structurally complex call and exceeds 80 columns;
 - contains at least three calls and an explicit lambda, ternary, nested
   complex call, or other compound argument;
 - contains an already multiline segment; or

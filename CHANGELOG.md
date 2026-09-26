@@ -25,6 +25,9 @@ Versioning while it approaches a stable 0.3.0 release.
   intentional blank lines between statements inside the block.
 - JJFS keeps declaration Javadocs directly attached to the annotations and
   modifiers they document instead of preserving an authored blank separator.
+- JJFS uses one indentation level for fluent-chain continuations and keeps
+  compact lists of simple zero-argument calls inline instead of expanding them
+  as structurally complex arguments.
 
 ## [0.7.1] - 2026-09-22
 

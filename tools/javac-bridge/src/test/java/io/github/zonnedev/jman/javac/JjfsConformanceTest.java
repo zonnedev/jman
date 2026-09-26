@@ -71,8 +71,8 @@ final class JjfsConformanceTest {
 
           String find(Optional<String> customer) {
             return customer.map(value -> value.trim())
-                .filter(value -> !value.isEmpty())
-                .orElseThrow();
+              .filter(value -> !value.isEmpty())
+              .orElseThrow();
           }
 
           void consume(
@@ -81,6 +81,25 @@ final class JjfsConformanceTest {
             String third,
             String fourth
           ) {
+          }
+        }
+        """);
+    assertFormat(
+        """
+        class VetControllerTests {
+          void setup() {
+            BDDMockito.given(this.vets.findAll()).willReturn(Lists.newArrayList(james(), helen()));
+            BDDMockito.given(this.vets.findAll(ArgumentMatchers.any(Pageable.class))).willReturn(new PageImpl<Vet>(Lists.newArrayList(james(), helen())));
+          }
+        }
+        """,
+        """
+        class VetControllerTests {
+          void setup() {
+            BDDMockito.given(this.vets.findAll())
+              .willReturn(Lists.newArrayList(james(), helen()));
+            BDDMockito.given(this.vets.findAll(ArgumentMatchers.any(Pageable.class)))
+              .willReturn(new PageImpl<Vet>(Lists.newArrayList(james(), helen())));
           }
         }
         """);
@@ -415,7 +434,7 @@ final class JjfsConformanceTest {
             return customer.map(value -> {
               return findRelatedCustomerUsingLongRepositoryMethod(value.trim());
             })
-                .orElseThrow();
+              .orElseThrow();
           }
 
           String status(boolean active, boolean paired, boolean blocked) {
