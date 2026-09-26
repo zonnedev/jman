@@ -18,6 +18,8 @@ Versioning while it approaches a stable 0.3.0 release.
 - JJFS import conflict resolution now preserves types that were already bound
   through a simple name, preventing a fully qualified type with the same name
   from changing annotations or other existing references.
+- JJFS removes blank lines immediately after an opening brace while preserving
+  intentional blank lines between statements inside the block.
 
 ## [0.7.1] - 2026-09-22
 

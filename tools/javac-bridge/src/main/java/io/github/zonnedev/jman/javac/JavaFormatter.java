@@ -2447,7 +2447,9 @@ final class JavaFormatter {
       } else if (previous != null) {
         if (gap.contains("\n") && previousAnnotationEnds(index)) {
           newline(false);
-        } else if (before.equals("{") || (before.equals(";") && parenthesisDepth == 0)) {
+        } else if (before.equals("{")) {
+          newline(false);
+        } else if (before.equals(";") && parenthesisDepth == 0) {
           newline(blankGap(gap));
         } else if (before.equals("}") && !Set.of("else", "catch", "finally", "while").contains(text)
             && !Set.of(";", ",", ")").contains(text)) {

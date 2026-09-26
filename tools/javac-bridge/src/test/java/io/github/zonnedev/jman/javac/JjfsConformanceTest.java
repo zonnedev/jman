@@ -22,6 +22,7 @@ final class JjfsConformanceTest {
     formatsMultilineAnnotationsAndLongGenericHeaders();
     formatsRecordComponentsLikeParameters();
     formatsCommentStructureWithoutRewritingProtectedContent();
+    removesBlankLinesImmediatelyInsideBlocks();
     preservesDisabledRegionsCommentsAndLiterals();
     rejectsMalformedFormatterDirectives();
   }
@@ -635,6 +636,42 @@ final class JjfsConformanceTest {
           }
 
           void consume(String customer) {
+          }
+        }
+        """);
+  }
+
+  private static void removesBlankLinesImmediatelyInsideBlocks() {
+    assertFormat(
+        """
+        class PetController {
+          @Deprecated
+          String processUpdateForm(
+            String owner,
+            String pet,
+            String result,
+            String redirectAttributes
+          ) {
+
+            String petName = pet;
+
+            return petName;
+
+          }
+        }
+        """,
+        """
+        class PetController {
+          @Deprecated
+          String processUpdateForm(
+            String owner,
+            String pet,
+            String result,
+            String redirectAttributes
+          ) {
+            String petName = pet;
+
+            return petName;
           }
         }
         """);
