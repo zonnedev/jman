@@ -26,6 +26,7 @@ Versioning while it remains pre-1.0.
   process probe instead of relying on Linux's `/proc` filesystem.
 - Runtime-selection and project-model tests now compare canonical filesystem
   identities, avoiding macOS `/var` alias mismatches.
+- Maven reactor tests now compare canonical POM identities across platforms.
 
 ## [0.8.1] - 2026-09-26
 

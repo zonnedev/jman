@@ -847,7 +847,10 @@ mod tests {
             .expect("effective reactor");
 
         assert_eq!(projects.len(), 2);
-        assert_eq!(projects[1].source, child.join("pom.xml"));
+        assert_eq!(
+            projects[1].source,
+            fs::canonicalize(child.join("pom.xml")).expect("canonical child POM")
+        );
         assert_eq!(projects[1].effective.coordinate.artifact, "child");
         assert_eq!(projects[1].effective.dependencies.len(), 1);
         assert_eq!(projects[1].effective.dependencies[0].artifact, "library");
