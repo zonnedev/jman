@@ -5,6 +5,8 @@ Versioning while it remains pre-1.0.
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-09-27
+
 ### Added
 
 - Release automation, the remote installer, and the VS Code extension now

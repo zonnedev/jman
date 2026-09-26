@@ -31,7 +31,7 @@ mkdir -p /tmp/jman-vscode-profile /tmp/jman-vscode-extensions
 code \
   --user-data-dir /tmp/jman-vscode-profile \
   --extensions-dir /tmp/jman-vscode-extensions \
-  --install-extension target/vscode/jman-java-0.8.1-<platform>.vsix
+  --install-extension target/vscode/jman-java-0.8.2-<platform>.vsix
 ```
 
 Launch VS Code with the same two directory arguments and verify:
