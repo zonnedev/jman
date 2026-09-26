@@ -57,6 +57,8 @@ require("jman").setup({
   build_java_home = nil,     -- optional Maven/Gradle runtime override
   build_system = "auto",     -- auto, jman, gradle, or maven
   build_sync = "prompt",     -- manual, prompt, or automatic
+  format_on_save = false,     -- format Java buffers with JJFS before writing
+  format_timeout_ms = 5000,   -- synchronous formatting timeout
   extra_env = {},            -- additional language-server and task environment
   notify = true,
   keymaps = true,
@@ -85,6 +87,7 @@ compatible build JDK selected by the language server.
 | `:JmanCoveragePattern [selector]` | Cover an exact LSP-prepared test selector |
 | `:JmanCoverageNearest` | Cover the test nearest the cursor |
 | `:JmanCodeAction` | Select a JMAN code action |
+| `:JmanFormat` | Format the current Java buffer with JJFS |
 | `:JmanOrganizeImports` | Apply the organize-imports source action |
 | `:JmanChangeSignature` | Change a method signature and update call sites |
 | `:JmanRebuildIndex` | Rebuild the workspace index |
@@ -111,9 +114,13 @@ their live human-readable test tree in the terminal.
 | `<leader>jl` | Select test |
 | `<leader>ji` | Show status |
 | `<leader>ja` | Code action |
+| `<leader>jf` | Format with JJFS |
 | `<leader>jo` | Organize imports |
 
 Set `keymaps = false` to leave mappings entirely to your configuration.
+Set `format_on_save = true` to run the same full-document JJFS formatter before
+each Java buffer is written. Formatting is restricted to the attached JMAN
+client, so another LSP cannot provide competing edits.
 
 ## Statusline
 

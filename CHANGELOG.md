@@ -12,6 +12,9 @@ Versioning while it approaches a stable 0.3.0 release.
   import normalization, API-first member ordering, mandatory control-flow
   braces, AST-aware wrapping, conservative prose-comment formatting,
   formatter directives, and idempotent safety validation.
+- VS Code and Neovim now expose JJFS through dedicated format commands,
+  editor-native format-on-save configuration, and JMAN-only provider
+  selection that avoids competing language-server edits.
 
 ### Fixed
 

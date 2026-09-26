@@ -46,6 +46,19 @@ compiler frontend, and JMAN never installs a JDK implicitly.
 3. Open a Java source file and run **JMAN Java: Show Status** from the Command
    Palette to confirm the selected build system and index state.
 
+The extension registers JMAN as the default Java formatter. Run **JMAN Java:
+Format Document with JJFS** or VS Code's standard **Format Document** command.
+To format whenever a Java file is saved, add:
+
+```json
+{
+  "[java]": {
+    "editor.defaultFormatter": "zonnedev.jman-java",
+    "editor.formatOnSave": true
+  }
+}
+```
+
 Example workspace settings:
 
 ```json
@@ -85,6 +98,7 @@ runtime selection independent from JMAN's bundled native frontend.
 | **JMAN Java: Build Project** | Build reproducible project outputs. |
 | **JMAN Java: Run Application** | Run the configured application. |
 | **JMAN Java: Run All Tests** | Run the complete test suite. |
+| **JMAN Java: Format Document with JJFS** | Apply canonical full-document JJFS formatting. |
 | **JMAN Java: Change Method Signature** | Apply JMAN's conservative change-signature refactoring. |
 | **JMAN Java: Rebuild Project Index** | Recreate the Java symbol index. |
 | **JMAN Java: Clear Workspace Cache** | Clear cached project data and rebuild it. |

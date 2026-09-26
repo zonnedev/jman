@@ -34,6 +34,8 @@ async function main() {
   const testRunUris = [];
   const spawnedProcesses = [];
   const coverageFiles = [];
+  const formattingRequests = [];
+  const appliedEdits = [];
   const collection = () => {
     const values = new Map();
     return {
@@ -67,6 +69,16 @@ async function main() {
     }
 
     async sendRequest(method, params) {
+      if (method === "textDocument/formatting") {
+        formattingRequests.push(params);
+        return [{
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 2, character: 1 },
+          },
+          newText: "class Greeting {\n}\n",
+        }];
+      }
       if (method === "jman.java/tests/discover") {
         return { items: [
           {
@@ -136,6 +148,10 @@ async function main() {
     },
     Range: class Range {
       constructor(start, end) { this.start = start; this.end = end; }
+    },
+    WorkspaceEdit: class WorkspaceEdit {
+      constructor() { this.edits = []; }
+      replace(uri, range, newText) { this.edits.push({ uri, range, newText }); }
     },
     TestMessage: class TestMessage {
       constructor(message) { this.message = message; }
@@ -215,8 +231,20 @@ async function main() {
           dispose() {},
         };
       },
+      applyEdit(edit) {
+        appliedEdits.push(...edit.edits);
+        return true;
+      },
     },
     window: {
+      activeTextEditor: {
+        document: {
+          languageId: "java",
+          version: 1,
+          uri: { toString() { return "file:///workspace/Greeting.java"; } },
+        },
+        options: { tabSize: 2, insertSpaces: true },
+      },
       createOutputChannel(_name, options) {
         outputChannelOptions = options;
         return logChannel;
@@ -550,8 +578,39 @@ async function main() {
   assert(commands.has("jmanJava.build"));
   assert(commands.has("jmanJava.run"));
   assert(commands.has("jmanJava.test"));
+  assert(commands.has("jmanJava.formatDocument"));
   assert(commands.has("jmanJava.rebuildIndex"));
   assert(commands.has("jmanJava.clearWorkspaceCache"));
+  assert.equal(await commands.get("jmanJava.formatDocument")(), true);
+  assert.deepEqual(formattingRequests, [{
+    textDocument: { uri: "file:///workspace/Greeting.java" },
+    options: { tabSize: 2, insertSpaces: true },
+  }]);
+  assert.equal(appliedEdits.length, 1);
+  assert.equal(appliedEdits[0].newText, "class Greeting {\n}\n");
+  const staleEditor = {
+    document: {
+      languageId: "java",
+      version: 1,
+      uri: { toString() { return "file:///workspace/Stale.java"; } },
+    },
+    options: { tabSize: 2, insertSpaces: true },
+  };
+  const editsBeforeStaleRequest = appliedEdits.length;
+  assert.equal(await extension.formatDocument({
+    async sendRequest() {
+      staleEditor.document.version += 1;
+      return [{
+        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+        newText: "stale",
+      }];
+    },
+  }, staleEditor), false);
+  assert.equal(
+    appliedEdits.length,
+    editsBeforeStaleRequest,
+    "stale formatter edits must not overwrite newer document changes",
+  );
   await commands.get("jmanJava.showStatus")();
   assert.match(shownMessage, /12 indexed, 10 semantic, 2 open, revision 3/);
   assert.match(shownMessage, /11\/12 structural hits/);

@@ -138,7 +138,7 @@ test-vscode-extension:
 
 test-neovim-plugin:
 	@for test in editors/neovim/tests/*.lua; do \
-		nvim --headless -u NONE -i NONE -l "$$test" || exit $$?; \
+		NVIM_LOG_FILE=/dev/null nvim --headless -u NONE -i NONE -l "$$test" || exit $$?; \
 	done
 
 test-installer:

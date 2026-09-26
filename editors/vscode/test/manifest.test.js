@@ -42,6 +42,16 @@ assert.equal(
   manifest.contributes.configuration.properties["jman.java.buildJavaHome"].default,
   "",
 );
+assert.equal(
+  manifest.contributes.configurationDefaults["[java]"]["editor.defaultFormatter"],
+  "zonnedev.jman-java",
+);
+assert.ok(contributedCommands.has("jmanJava.formatDocument"));
+assert.ok(
+  manifest.contributes.menus["editor/context"].some(
+    (entry) => entry.command === "jmanJava.formatDocument" && entry.when === "editorLangId == java",
+  ),
+);
 
 assert.equal(
   manifest.scripts.package,

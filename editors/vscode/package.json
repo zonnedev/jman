@@ -59,6 +59,7 @@
     "onCommand:jmanJava.build",
     "onCommand:jmanJava.run",
     "onCommand:jmanJava.test",
+    "onCommand:jmanJava.formatDocument",
     "onCommand:jmanJava.restart",
     "onCommand:jmanJava.changeSignature",
     "onCommand:jmanJava.rebuildIndex",
@@ -96,6 +97,10 @@
         "title": "JMAN Java: Run All Tests"
       },
       {
+        "command": "jmanJava.formatDocument",
+        "title": "JMAN Java: Format Document with JJFS"
+      },
+      {
         "command": "jmanJava.changeSignature",
         "title": "JMAN Java: Change Method Signature"
       },
@@ -108,6 +113,20 @@
         "title": "JMAN Java: Clear Workspace Cache"
       }
     ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "jmanJava.formatDocument",
+          "when": "editorLangId == java",
+          "group": "1_modification@1"
+        }
+      ]
+    },
+    "configurationDefaults": {
+      "[java]": {
+        "editor.defaultFormatter": "zonnedev.jman-java"
+      }
+    },
     "configuration": {
       "title": "JMAN Java",
       "properties": {

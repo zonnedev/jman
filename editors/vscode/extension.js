@@ -63,6 +63,40 @@ async function prepareProjectOperation(operation, jmanCommand) {
   };
 }
 
+async function formatDocument(languageClient = client, editor = vscode.window.activeTextEditor) {
+  if (!languageClient || !editor || editor.document.languageId !== "java") {
+    vscode.window.showWarningMessage("Open a Java document before formatting with JJFS.");
+    return false;
+  }
+  const documentVersion = editor.document.version;
+  const tabSize = Number(editor.options.tabSize);
+  const edits = await languageClient.sendRequest("textDocument/formatting", {
+    textDocument: { uri: editor.document.uri.toString() },
+    options: {
+      tabSize: Number.isFinite(tabSize) && tabSize > 0 ? tabSize : 2,
+      insertSpaces: editor.options.insertSpaces !== false,
+    },
+  });
+  if (editor.document.version !== documentVersion) {
+    vscode.window.showWarningMessage(
+      "The Java document changed while JJFS was formatting it. Format again to avoid stale edits.",
+    );
+    return false;
+  }
+  const workspaceEdit = new vscode.WorkspaceEdit();
+  for (const edit of edits || []) {
+    workspaceEdit.replace(
+      editor.document.uri,
+      new vscode.Range(
+        new vscode.Position(edit.range.start.line, edit.range.start.character),
+        new vscode.Position(edit.range.end.line, edit.range.end.character),
+      ),
+      edit.newText,
+    );
+  }
+  return vscode.workspace.applyEdit(workspaceEdit);
+}
+
 function createJmanTask(command, operation, args = []) {
   const folder = workspaceRoot();
   if (!folder) return null;
@@ -643,6 +677,7 @@ async function activate(context) {
       if (!selector && runAllTests) return runAllTests();
       return executeWorkspaceOperation("test");
     }),
+    vscode.commands.registerCommand("jmanJava.formatDocument", () => formatDocument()),
     vscode.commands.registerCommand("jman.java.test", (selector) => {
       if (selector && runTestSelector) return runTestSelector(selector);
       return executeNativeJmanTask(command, "test", selector ? ["--tests", selector] : []);
@@ -816,6 +851,7 @@ module.exports = {
   activate,
   deactivate,
   executionCommand,
+  formatDocument,
   populateTestController,
   leafTestItems,
   parseTestEventLine,

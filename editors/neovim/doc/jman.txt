@@ -29,6 +29,8 @@ Setup is required once after the plugin is loaded: >lua
     build_java_home = nil,
     build_system = "auto",
     build_sync = "prompt",
+    format_on_save = false,
+    format_timeout_ms = 5000,
     extra_env = {},
     notify = true,
     keymaps = true,
@@ -50,6 +52,12 @@ build_system ~
 
 build_sync ~
   One of "manual", "prompt", or "automatic".
+
+format_on_save ~
+  Format Java buffers with JJFS immediately before writing them.
+
+format_timeout_ms ~
+  Maximum time in milliseconds to wait for synchronous JJFS formatting.
 
 extra_env ~
   Environment variables added to the server and project operations.
@@ -73,6 +81,7 @@ COMMANDS                                                         *jman-commands*
 :JmanTestPattern {test} Run an exact test selector.
 :JmanTestNearest        Run the test nearest the cursor.
 :JmanCodeAction         Select a JMAN code action.
+:JmanFormat             Format the current Java buffer with JJFS.
 :JmanOrganizeImports    Organize Java imports.
 :JmanChangeSignature    Change a method signature and update call sites.
 :JmanRebuildIndex       Rebuild the workspace source index.
@@ -95,6 +104,7 @@ KEYMAPS                                                           *jman-keymaps*
 <Leader>jl    Select test
 <Leader>ji    Show status
 <Leader>ja    Code action
+<Leader>jf    Format with JJFS
 <Leader>jo    Organize imports
 
 ===============================================================================

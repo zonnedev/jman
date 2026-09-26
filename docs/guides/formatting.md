@@ -77,10 +77,19 @@ When a fragment cannot be classified confidently, JJFS preserves it.
 
 ## Editor formatting
 
-The language server advertises full-document formatting. Use the editor's
-normal **Format Document** command; it returns the same canonical source as
-`jman fmt`. Range and on-type formatting are intentionally not advertised,
-because partial formatting could disagree with import and member ordering.
+The language server advertises full-document formatting and returns the same
+canonical source as `jman fmt`.
+
+In VS Code, JMAN registers itself as the default Java formatter. Run **JMAN
+Java: Format Document with JJFS** or the standard **Format Document** command.
+Enable `editor.formatOnSave` under `[java]` to format on save.
+
+In Neovim, run `:JmanFormat` or press `<Leader>jf`. Set
+`format_on_save = true` in `require("jman").setup(...)` to format before each
+Java buffer write. Both paths restrict formatting to the JMAN client.
+
+Range and on-type formatting are intentionally not advertised, because partial
+formatting could disagree with import and member ordering.
 
 If a document has a syntax error, JMAN leaves it unchanged and reports the
 first javac diagnostic. Fix that diagnostic, then format again.

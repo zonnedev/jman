@@ -4,6 +4,12 @@ All notable changes to the JMAN Java extension are documented here.
 
 ## Unreleased
 
+### Added
+
+- Added an explicit **Format Document with JJFS** command, Java editor context
+  menu entry, and JMAN default-formatter registration for standard formatting
+  and format-on-save workflows.
+
 ## 0.7.1 - 2026-09-22
 
 ## 0.7.0 - 2026-09-22

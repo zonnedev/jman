@@ -6,6 +6,8 @@ local defaults = {
 	build_java_home = nil,
 	build_system = "auto",
 	build_sync = "prompt",
+	format_on_save = false,
+	format_timeout_ms = 5000,
 	extra_env = {},
 	notify = true,
 	keymaps = true,
@@ -284,6 +286,30 @@ end
 
 function M.organize_imports()
 	M.code_actions({ "source.organizeImports" }, true)
+end
+
+local function formatting_options(client, bufnr)
+	return {
+		bufnr = bufnr,
+		id = client.id,
+		async = false,
+		timeout_ms = state.options.format_timeout_ms,
+	}
+end
+
+function M.format(bufnr)
+	bufnr = bufnr or vim.api.nvim_get_current_buf()
+	local client = client_for_buffer(bufnr)
+	if not client then
+		notify("No JMAN Java language server is attached", vim.log.levels.WARN)
+		return false
+	end
+	if not client.server_capabilities or not client.server_capabilities.documentFormattingProvider then
+		notify("The JMAN Java language server does not support formatting", vim.log.levels.WARN)
+		return false
+	end
+	vim.lsp.buf.format(formatting_options(client, bufnr))
+	return true
 end
 
 local function terminal(command, args, title, root, environment)
@@ -762,6 +788,9 @@ local function create_commands()
 		JmanCodeAction = function()
 			M.code_actions(nil, false)
 		end,
+		JmanFormat = function()
+			M.format()
+		end,
 		JmanOrganizeImports = M.organize_imports,
 	}
 	for name, callback in pairs(commands) do
@@ -784,6 +813,20 @@ local function server_environment()
 		environment.JMAN_JAVA_LSP_BUILD_JAVA_HOME = state.options.build_java_home
 	end
 	return environment
+end
+
+local function configure_format_on_save(bufnr)
+	local group = vim.api.nvim_create_augroup("jman_format_on_save", { clear = false })
+	vim.api.nvim_clear_autocmds({ group = group, buffer = bufnr })
+	if state.options.format_on_save then
+		vim.api.nvim_create_autocmd("BufWritePre", {
+			group = group,
+			buffer = bufnr,
+			callback = function()
+				M.format(bufnr)
+			end,
+		})
+	end
 end
 
 local function configure_lsp()
@@ -815,6 +858,7 @@ local function configure_lsp()
 				end,
 			})
 			vim.lsp.codelens.refresh({ bufnr = bufnr })
+			configure_format_on_save(bufnr)
 		end,
 		handlers = {
 			["jman.java/buildSyncStatus"] = function(_, result)
@@ -855,6 +899,7 @@ local function configure_keymaps()
 		{ "<leader>jV", M.coverage, "JMAN Coverage All" },
 		{ "<leader>jl", M.tests, "JMAN List Tests" },
 		{ "<leader>ji", M.show_status, "JMAN Status" },
+		{ "<leader>jf", M.format, "JMAN Format" },
 		{
 			"<leader>ja",
 			function()
@@ -884,6 +929,12 @@ local function validate_options(options)
 	if type(options.extra_env) ~= "table" then
 		error("jman.nvim: extra_env must be a table")
 	end
+	if type(options.format_on_save) ~= "boolean" then
+		error("jman.nvim: format_on_save must be a boolean")
+	end
+	if type(options.format_timeout_ms) ~= "number" or options.format_timeout_ms <= 0 then
+		error("jman.nvim: format_timeout_ms must be a positive number")
+	end
 end
 
 function M.setup(options)
@@ -896,6 +947,8 @@ end
 
 M._test = {
 	build_tool_environment = build_tool_environment,
+	configure_format_on_save = configure_format_on_save,
+	formatting_options = formatting_options,
 	human_test_arguments = human_test_arguments,
 	lsp_diagnostics = lsp_diagnostics,
 	operation_arguments = operation_arguments,

@@ -11,6 +11,7 @@ classpath data with a GraalVM-powered compiler frontend.
 - Go to declaration/definition, implementations, references, and call-aware
   navigation across source and dependency symbols.
 - Rename, conservative change-signature, organize imports, and code actions.
+- Canonical full-document JJFS formatting through commands and format on save.
 - Annotation processing as a normal project-model concern, including Lombok
   generated members when Lombok is on the processor path.
 - Decompiled dependency source fallback when no attached sources exist, while
@@ -36,6 +37,10 @@ classpath data with a GraalVM-powered compiler frontend.
 
 4. Open a Java file and run **JMAN Java: Show Status**.
 
+JMAN is registered as the default Java formatter. Use **JMAN Java: Format
+Document with JJFS**, VS Code's standard **Format Document**, or enable
+`editor.formatOnSave` for `[java]` files.
+
 Use VS Code's Test Explorer for individual tests and coverage, or commands such
 as **Sync Workspace**, **Check Project**, **Build Project**, **Run Application**,
 **Rebuild Project Index**, and **Clear Workspace Cache**.
@@ -54,14 +59,16 @@ Install the repository with your plugin manager and configure the executable:
   opts = {
     cmd = "/path/to/jman",
     build_sync = "prompt",
+    format_on_save = true,
   },
 }
 ```
 
 Then run `:checkhealth jman` and `:JmanStatus`. The plugin exposes commands for
-sync, check, build, run, tests, coverage, code actions, imports, index rebuild,
-cache clearing, and server restart. Standard LSP mappings continue to handle
-definitions, references, symbols, hover, and rename.
+sync, check, build, run, tests, coverage, JJFS formatting, code actions,
+imports, index rebuild, cache clearing, and server restart. Use `:JmanFormat`
+or `<Leader>jf` for explicit formatting. Standard LSP mappings continue to
+handle definitions, references, symbols, hover, and rename.
 
 See the [Neovim plugin guide](https://github.com/zonnedev/jman/tree/main/editors/neovim)
 or `:help jman.nvim` for all options, commands, keymaps, and statusline support.

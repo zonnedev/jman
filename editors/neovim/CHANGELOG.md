@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added `:JmanFormat`, the `<Leader>jf` mapping, and opt-in synchronous
+  `format_on_save` support backed exclusively by JMAN's JJFS formatter.
+
 ## 0.7.1 - 2026-09-22
 
 ## 0.7.0 - 2026-09-22
