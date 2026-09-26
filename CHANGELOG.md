@@ -28,6 +28,8 @@ Versioning while it approaches a stable 0.3.0 release.
 - JJFS uses one indentation level for fluent-chain continuations and keeps
   compact lists of simple zero-argument calls inline instead of expanding them
   as structurally complex arguments.
+- JJFS inserts the required separator between a parenthesized inline annotation
+  and its annotated parameter or type.
 
 ## [0.7.1] - 2026-09-22
 

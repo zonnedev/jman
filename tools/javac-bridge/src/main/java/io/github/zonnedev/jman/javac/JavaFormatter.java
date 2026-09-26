@@ -2517,6 +2517,7 @@ final class JavaFormatter {
     private boolean needsSpace(int index, String previous, String current) {
       if (Set.of(")", "]", ",", ";", ".", "::").contains(current)) return false;
       if (Set.of("(", "[", ".", "::", "@").contains(previous)) return false;
+      if (previousAnnotationEnds(index) && word(current)) return true;
       if (current.equals("(")) {
         if (previousGenericClose) return false;
         return CONTROL_PARENTHESIS.contains(previous)

@@ -145,8 +145,9 @@ Customer create(
 }
 ```
 
-Short parameter annotations remain beside the parameter. A multiline
-annotation moves above its parameter and uses one argument per line.
+Short parameter annotations remain beside the parameter, followed by exactly
+one space before the annotated type or declaration. A multiline annotation
+moves above its parameter and uses one argument per line.
 
 ```java
 Customer create(

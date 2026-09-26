@@ -20,6 +20,7 @@ final class JjfsConformanceTest {
     resolvesImportConflictsAndHonorsOnePreference();
     wrapsLongThrowsClausesWithoutDetachingTheBrace();
     formatsMultilineAnnotationsAndLongGenericHeaders();
+    separatesInlineAnnotationsFromAnnotatedTypes();
     formatsRecordComponentsLikeParameters();
     formatsCommentStructureWithoutRewritingProtectedContent();
     keepsJavadocsAttachedToAnnotatedDeclarations();
@@ -86,20 +87,20 @@ final class JjfsConformanceTest {
         """);
     assertFormat(
         """
-        class VetControllerTests {
+        class CustomerQueryTests {
           void setup() {
-            BDDMockito.given(this.vets.findAll()).willReturn(Lists.newArrayList(james(), helen()));
-            BDDMockito.given(this.vets.findAll(ArgumentMatchers.any(Pageable.class))).willReturn(new PageImpl<Vet>(Lists.newArrayList(james(), helen())));
+            Mocking.given(this.customers.findAll()).willReturn(Values.list(primaryCustomer(), secondaryCustomer()));
+            Mocking.given(this.customers.findAll(Matchers.any(QueryPage.class))).willReturn(new QueryResult<Customer>(Values.list(primaryCustomer(), secondaryCustomer())));
           }
         }
         """,
         """
-        class VetControllerTests {
+        class CustomerQueryTests {
           void setup() {
-            BDDMockito.given(this.vets.findAll())
-              .willReturn(Lists.newArrayList(james(), helen()));
-            BDDMockito.given(this.vets.findAll(ArgumentMatchers.any(Pageable.class)))
-              .willReturn(new PageImpl<Vet>(Lists.newArrayList(james(), helen())));
+            Mocking.given(this.customers.findAll())
+              .willReturn(Values.list(primaryCustomer(), secondaryCustomer()));
+            Mocking.given(this.customers.findAll(Matchers.any(QueryPage.class)))
+              .willReturn(new QueryResult<Customer>(Values.list(primaryCustomer(), secondaryCustomer())));
           }
         }
         """);
@@ -609,6 +610,36 @@ final class JjfsConformanceTest {
         """);
   }
 
+  private static void separatesInlineAnnotationsFromAnnotatedTypes() {
+    assertFormat(
+        """
+        @interface PathVariable { String value(); }
+        class Controller {
+          void find(
+            @PathVariable("ownerId")int ownerId,
+            @PathVariable("somefield" )int fieldId,
+            String third,
+            String fourth
+          ){}
+        }
+        """,
+        """
+        @interface PathVariable {
+          String value();
+        }
+
+        class Controller {
+          void find(
+            @PathVariable("ownerId") int ownerId,
+            @PathVariable("somefield") int fieldId,
+            String third,
+            String fourth
+          ) {
+          }
+        }
+        """);
+  }
+
   private static void formatsRecordComponentsLikeParameters() {
     assertFormat(
         "record Customer(String identifier,String displayName,String emailAddress,String telephoneNumber){}\n",
@@ -664,34 +695,34 @@ final class JjfsConformanceTest {
   private static void removesBlankLinesImmediatelyInsideBlocks() {
     assertFormat(
         """
-        class PetController {
+        class CustomerController {
           @Deprecated
           String processUpdateForm(
-            String owner,
-            String pet,
-            String result,
-            String redirectAttributes
+            String customer,
+            String request,
+            String validation,
+            String redirect
           ) {
 
-            String petName = pet;
+            String requestName = request;
 
-            return petName;
+            return requestName;
 
           }
         }
         """,
         """
-        class PetController {
+        class CustomerController {
           @Deprecated
           String processUpdateForm(
-            String owner,
-            String pet,
-            String result,
-            String redirectAttributes
+            String customer,
+            String request,
+            String validation,
+            String redirect
           ) {
-            String petName = pet;
+            String requestName = request;
 
-            return petName;
+            return requestName;
           }
         }
         """);
