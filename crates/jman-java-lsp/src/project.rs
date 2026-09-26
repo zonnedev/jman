@@ -842,10 +842,11 @@ processors = []
         assert_eq!(loaded.models[0].java_release(), Some(25));
         assert_eq!(loaded.models[0].encoding.as_deref(), Some("UTF-16"));
         assert_eq!(loaded.models[0].compiler_args, ["-parameters"]);
+        let canonical_root = std::fs::canonicalize(&root).expect("canonical project root");
         assert_eq!(
             select_compile_model(
                 &loaded.models,
-                &root.join("src/test/java/demo/DemoTest.java")
+                &canonical_root.join("src/test/java/demo/DemoTest.java")
             )
             .expect("test compile unit")
             .task_path,
@@ -999,9 +1000,10 @@ processors = []
 
         assert_eq!(runtime.java_major, 21);
         assert_eq!(runtime.build_tool_version.as_deref(), Some("8.7"));
+        let canonical_java_home = std::fs::canonicalize(&java_home).unwrap();
         assert_eq!(
             std::fs::read_to_string(root.join("selected-java-home")).unwrap(),
-            java_home.to_string_lossy()
+            canonical_java_home.to_string_lossy()
         );
     }
 

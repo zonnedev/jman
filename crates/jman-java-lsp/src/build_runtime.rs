@@ -469,7 +469,7 @@ mod tests {
             format!("JAVA_VERSION=\"{version}\"\n"),
         )
         .expect("JDK release");
-        home
+        fs::canonicalize(home).expect("canonical JDK home")
     }
 
     fn environment(root: &Path) -> RuntimeEnvironment {

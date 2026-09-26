@@ -24,6 +24,8 @@ Versioning while it remains pre-1.0.
   compile units, including macOS's `/var` to `/private/var` temporary paths.
 - Cache locks now detect abandoned owner processes through a portable Unix
   process probe instead of relying on Linux's `/proc` filesystem.
+- Runtime-selection and project-model tests now compare canonical filesystem
+  identities, avoiding macOS `/var` alias mismatches.
 
 ## [0.8.1] - 2026-09-26
 
