@@ -13,6 +13,7 @@ if [[ ! -f "${native_library}" ]]; then
 fi
 
 "${project_dir}/scripts/test-java.sh"
+"${project_dir}/scripts/build-maven-importer.sh"
 "${project_dir}/scripts/build-processor-worker.sh"
 "${project_dir}/scripts/build-vineflower.sh"
 "${project_dir}/scripts/build-jacoco.sh"
@@ -43,11 +44,7 @@ cp "${project_dir}/target/jacoco-0.8.15-agent.jar" "${stage}/jacocoagent.jar"
 cp "${project_dir}/target/jacoco-0.8.15-cli.jar" "${stage}/jacococli.jar"
 cp "${project_dir}/resources/icons/jman.svg" "${stage}/resources/icons/jman.svg"
 cp -R "${project_dir}/tools/gradle-importer" "${stage}/tools/gradle-importer"
-jar --create \
-  --date=1980-01-01T00:00:02Z \
-  --file "${stage}/maven-importer.jar" \
-  -C "${project_dir}/target/java-test-classes" \
-  io/github/zonnedev/jman/maven/importer
+cp "${project_dir}/target/maven-importer.jar" "${stage}/maven-importer.jar"
 cp "${project_dir}/README.md" "${project_dir}/CHANGELOG.md" \
   "${project_dir}/LICENSE" "${project_dir}/THIRD_PARTY_NOTICES.md" "${stage}/"
 cp "${project_dir}/mkdocs.yml" "${stage}/mkdocs.yml"

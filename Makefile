@@ -10,7 +10,7 @@ NATIVE_FRONTEND_INPUTS := \
 	scripts/setup-test-jdks.sh \
 	scripts/use-test-java.sh
 
-.PHONY: gates release-gates ci test test-toolchain-bootstrap test-rust test-java test-jman-runner test-processor-worker vineflower jacoco maven-tool compatibility-tools test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs docs serve-docs prepare-release package-vscode release stage-release native test-native clean clear
+.PHONY: gates release-gates ci test test-toolchain-bootstrap test-rust test-java test-jman-runner test-processor-worker maven-importer vineflower jacoco maven-tool compatibility-tools test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs docs serve-docs prepare-release package-vscode release stage-release native test-native clean clear
 
 gates: test test-native test-coverage test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-vscode-extension test-neovim-plugin test-installer test-docs
 
@@ -37,6 +37,9 @@ test-jman-runner:
 
 test-processor-worker:
 	./scripts/build-processor-worker.sh
+
+maven-importer:
+	./scripts/build-maven-importer.sh
 
 vineflower:
 	./scripts/build-vineflower.sh

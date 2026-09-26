@@ -20,6 +20,8 @@ Versioning while it approaches a stable 0.3.0 release.
 
 ### Fixed
 
+- The Maven model importer now ships as a Java 17-targeted artifact and runs
+  with the selected build JDK instead of inheriting an unrelated system Java.
 - Compatibility-tool provisioning now retries connection-level failures and
   falls back to alternate official Gradle or Maven download endpoints.
 - JJFS import conflict resolution now preserves types that were already bound

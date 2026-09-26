@@ -33,6 +33,7 @@ if [[ ! -f "${native_library}" ]]; then
 fi
 
 "${project_dir}/scripts/build-processor-worker.sh"
+"${project_dir}/scripts/build-maven-importer.sh"
 "${project_dir}/scripts/build-vineflower.sh"
 "${project_dir}/scripts/build-jacoco.sh"
 JMAN_JAVAC_FRONTEND_LIB_DIR="${native_dir}" \
@@ -54,11 +55,7 @@ cp "${project_dir}/target/jacoco-0.8.15-agent.jar" "${server_dir}/jacocoagent.ja
 cp "${project_dir}/target/jacoco-0.8.15-cli.jar" "${server_dir}/jacococli.jar"
 mkdir -p "${server_dir}/tools"
 cp -R "${project_dir}/tools/gradle-importer" "${server_dir}/tools/gradle-importer"
-jar --create \
-  --date=1980-01-01T00:00:02Z \
-  --file "${server_dir}/maven-importer.jar" \
-  -C "${project_dir}/target/java-test-classes" \
-  io/github/zonnedev/jman/maven/importer
+cp "${project_dir}/target/maven-importer.jar" "${server_dir}/maven-importer.jar"
 
 (
   cd "${extension_dir}"

@@ -11,16 +11,22 @@ workspace="$(cd "$1" && pwd)"
 output="$2"
 cache_dir="$(cd "$(dirname "${output}")" && pwd)/maven-import"
 local_repository="${JMAN_JAVA_LSP_MAVEN_REPOSITORY:-${project_dir}/target/maven-repository}"
-importer_classes="${JMAN_JAVAC_FRONTEND_IMPORTER_CLASSES:-${project_dir}/target/java-test-classes}"
+importer_classes="${JMAN_JAVAC_FRONTEND_IMPORTER_CLASSES:-${project_dir}/target/maven-importer.jar}"
 build_java_home="${JMAN_JAVA_LSP_BUILD_JAVA_HOME:-${JAVA_HOME:-}}"
+importer_java="java"
 maven="${workspace}/mvnw"
 
 if [[ ! -x "${maven}" ]]; then
   maven="${JMAN_JAVA_LSP_MAVEN:-mvn}"
 fi
 if [[ ! -f "${importer_classes}/io/github/zonnedev/jman/maven/importer/MavenModelImporter.class" ]]; then
-  echo "Maven importer classes are missing; run make test-java" >&2
-  exit 1
+  if [[ ! -f "${importer_classes}" ]]; then
+    echo "Maven importer is missing; run make maven-importer" >&2
+    exit 1
+  fi
+fi
+if [[ -x "${build_java_home}/bin/java" ]]; then
+  importer_java="${build_java_home}/bin/java"
 fi
 
 mkdir -p "${cache_dir}" "${local_repository}"
@@ -70,7 +76,7 @@ classpath_file="${cache_dir}/classpath.txt"
 )
 
 touch "${classpath_file}"
-java -cp "${importer_classes}" \
+"${importer_java}" -cp "${importer_classes}" \
   io.github.zonnedev.jman.maven.importer.MavenModelImporter \
   "${effective_pom}" \
   "${classpath_file}" \

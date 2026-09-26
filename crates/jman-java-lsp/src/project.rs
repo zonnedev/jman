@@ -365,7 +365,7 @@ fn import_maven(executable: &Path, root: &Path, output: &Path) -> Result<(), Str
             let packaged = support.join("maven-importer.jar");
             packaged.is_file().then_some(packaged)
         })
-        .unwrap_or_else(|| support.join("target/java-test-classes"));
+        .unwrap_or_else(|| support.join("target/maven-importer.jar"));
     if !importer.exists() {
         return Err(format!(
             "Maven model importer is missing: {}",

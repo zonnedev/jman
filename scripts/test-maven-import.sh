@@ -22,7 +22,7 @@ if [[ -z "${gson_fixture}" ]]; then
     "${project_dir}/target/upstream-fixtures/gson")"
 fi
 local_repository="${project_dir}/target/maven-repository"
-classes_dir="${project_dir}/target/java-test-classes"
+importer_jar="${project_dir}/target/maven-importer.jar"
 maven_java_home="${JMAN_JAVAC_FRONTEND_MAVEN_JAVA_HOME:-${JMAN_TEST_JAVA_17_HOME}}"
 java_21_home="${JMAN_TEST_JAVA_21_HOME}"
 maven_bin="${JMAN_JAVA_LSP_MATRIX_MAVEN:-${project_dir}/target/compatibility-tools/apache-maven-3.9.9/bin/mvn}"
@@ -91,7 +91,7 @@ import_project() {
     local classpath_file
     module_target="$(dirname "${effective_pom}")"
     classpath_file="${module_target}/javac-frontend-classpath.txt"
-    java -cp "${classes_dir}" \
+    "${maven_java_home}/bin/java" -cp "${importer_jar}" \
       io.github.zonnedev.jman.maven.importer.MavenModelImporter \
       "${effective_pom}" \
       "${classpath_file}" \
