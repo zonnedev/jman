@@ -2442,6 +2442,8 @@ final class JavaFormatter {
         }
         indent = Math.max(0, indent - 1);
         if (!lineStart) newline(false);
+      } else if (gap.contains("\n") && immediatelyFollowsDocumentationComment(index)) {
+        newline(false);
       } else if (previous == null && !lineStart && gap.contains("\n")) {
         newline(blankGap(gap));
       } else if (previous != null) {
@@ -2493,6 +2495,13 @@ final class JavaFormatter {
       if (text.equals(":") && ternaryDepth > 0) ternaryDepth--;
       previousGenericClose = genericClose;
       previousMethodTypeArgumentClose = methodTypeArgumentClose;
+    }
+
+    private boolean immediatelyFollowsDocumentationComment(int index) {
+      if (index <= 0) return false;
+      Lexeme preceding = lexemes.get(index - 1);
+      return preceding.comment()
+          && (preceding.kind().startsWith("JAVADOC") || preceding.text().startsWith("/**"));
     }
 
     private boolean needsSpace(int index, String previous, String current) {

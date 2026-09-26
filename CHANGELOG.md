@@ -23,6 +23,8 @@ Versioning while it approaches a stable 0.3.0 release.
   from changing annotations or other existing references.
 - JJFS removes blank lines immediately after an opening brace while preserving
   intentional blank lines between statements inside the block.
+- JJFS keeps declaration Javadocs directly attached to the annotations and
+  modifiers they document instead of preserving an authored blank separator.
 
 ## [0.7.1] - 2026-09-22
 

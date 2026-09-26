@@ -22,6 +22,7 @@ final class JjfsConformanceTest {
     formatsMultilineAnnotationsAndLongGenericHeaders();
     formatsRecordComponentsLikeParameters();
     formatsCommentStructureWithoutRewritingProtectedContent();
+    keepsJavadocsAttachedToAnnotatedDeclarations();
     removesBlankLinesImmediatelyInsideBlocks();
     preservesDisabledRegionsCommentsAndLiterals();
     rejectsMalformedFormatterDirectives();
@@ -673,6 +674,27 @@ final class JjfsConformanceTest {
 
             return petName;
           }
+        }
+        """);
+  }
+
+  private static void keepsJavadocsAttachedToAnnotatedDeclarations() {
+    assertFormat(
+        """
+        /**
+         * A documented test type.
+         */
+
+        @Deprecated
+        class DocumentedTest {
+        }
+        """,
+        """
+        /**
+         * A documented test type.
+         */
+        @Deprecated
+        class DocumentedTest {
         }
         """);
   }

@@ -419,7 +419,9 @@ visibility. Same-visibility overloads are kept together at the first
 overload's position. A private overload remains in the private section.
 
 Nested types always appear last and are ordered internally by visibility.
-Comments and Javadocs move with their declaration.
+Comments and Javadocs move with their declaration. A declaration Javadoc is
+attached directly to its first annotation or modifier without an intervening
+blank line.
 
 Related fields have no blank line between them. Different field groups and
 member categories have exactly one. Constructors, methods—including
