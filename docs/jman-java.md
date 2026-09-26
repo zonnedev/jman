@@ -23,9 +23,10 @@ executing build logic. Failed synchronization preserves the last working
 model, sessions, indexes, and diagnostics.
 
 The exploration currently targets Java 25. On first use, the test scripts
-bootstrap the checksum-pinned JMAN 0.7.1 release and use it to provision
-GraalVM Community 25.3.4.1 under `target/test-toolchains/`, so a fresh shell can run the
-complete gate without a system-wide JDK manager:
+bootstrap the checksum-pinned JMAN release configured in
+`scripts/setup-test-jdks.sh` and use it to provision GraalVM Community
+25.3.4.1 under `target/test-toolchains/`, so a fresh shell can run the complete
+gate without a system-wide JDK manager:
 
 ```bash
 make gates

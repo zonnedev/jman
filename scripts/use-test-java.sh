@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Source this file from repository scripts that require the pinned GraalVM
-# frontend toolchain. JMAN 0.7.1 provisions it on first use.
+# frontend toolchain. The pinned JMAN bootstrap provisions it on first use.
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 "${project_dir}/scripts/setup-test-jdks.sh" --graalvm >/dev/null
 # shellcheck disable=SC1091

@@ -85,6 +85,11 @@ printf '%s\n' 'example v0.5.0' > "${fixture_dir}/.github/workflows/release.yml"
 printf '%s\n' 'jman-java-0.5.0-linux-x64.vsix' > "${fixture_dir}/docs/jman-java.md"
 printf '%s\n' 'git tag -a v0.5.0 -m "v0.5.0"' > "${fixture_dir}/docs/releasing.md"
 printf '%s\n' 'jman-java-0.5.0-linux-x64.vsix' > "${fixture_dir}/docs/vscode-release-checklist.md"
+cat > "${fixture_dir}/scripts/setup-test-jdks.sh" <<'EOF'
+#!/usr/bin/env bash
+bootstrap_version="0.5.0"
+bootstrap_sha256="bootstrap-checksum-is-version-independent"
+EOF
 
 cp "${project_dir}/scripts/prepare-release.sh" "${fixture_dir}/scripts/"
 cp "${project_dir}/scripts/verify-release-version.sh" "${fixture_dir}/scripts/"
@@ -132,6 +137,10 @@ chmod +x "${fixture_dir}/scripts/prepare-release.sh" "${fixture_dir}/scripts/ver
   grep -Fqx '## 0.5.1 - 2026-09-20' editors/vscode/CHANGELOG.md
   grep -Fqx '## 0.5.1 - 2026-09-20' editors/neovim/CHANGELOG.md
   grep -q 'v0.5.1' docs/releasing.md
+  grep -Fqx 'bootstrap_version="0.5.0"' scripts/setup-test-jdks.sh
+  grep -Fqx \
+    'bootstrap_sha256="bootstrap-checksum-is-version-independent"' \
+    scripts/setup-test-jdks.sh
   test "$(git rev-parse HEAD)" = "${initial_commit}"
   if git show-ref --verify --quiet refs/tags/v0.5.1; then
     echo "Declining release confirmation created a tag" >&2
@@ -162,6 +171,32 @@ EOF
     echo "Existing release tag was accepted" >&2
     exit 1
   fi
+
+  prerelease_output="$(
+    JMAN_RELEASE_DATE=2026-09-21 ./scripts/prepare-release.sh 0.6.0-rc.1 <<<'n'
+  )"
+  printf '%s\n' "${prerelease_output}"
+  grep -Fqx 'Would you like to commit and tag v0.6.0-rc.1? [y/N]' \
+    <<<"${prerelease_output}"
+  grep -q '^version = "0.6.0-rc.1"$' Cargo.toml
+  grep -A2 '^name = "demo"$' Cargo.lock | grep -q '^version = "0.6.0-rc.1"$'
+  test "$(node -p 'require("./editors/vscode/package.json").version')" = 0.6.0-rc.1
+  test "$(node -p 'require("./editors/vscode/package-lock.json").version')" = 0.6.0-rc.1
+  grep -Fqx '## [0.6.0-rc.1] - 2026-09-21' CHANGELOG.md
+  grep -Fqx '## 0.6.0-rc.1 - 2026-09-21' editors/vscode/CHANGELOG.md
+  grep -Fqx '## 0.6.0-rc.1 - 2026-09-21' editors/neovim/CHANGELOG.md
+  grep -q 'v0.6.0-rc.1' docs/releasing.md
+  grep -Fqx 'bootstrap_version="0.5.0"' scripts/setup-test-jdks.sh
+  grep -Fqx \
+    'bootstrap_sha256="bootstrap-checksum-is-version-independent"' \
+    scripts/setup-test-jdks.sh
+  test "$(git rev-parse HEAD)" = \
+    "$(git --git-dir="${remote_dir}" rev-parse refs/heads/"$(git symbolic-ref --short HEAD)")"
+  if git show-ref --verify --quiet refs/tags/v0.6.0-rc.1; then
+    echo 'Declining prerelease confirmation created a tag' >&2
+    exit 1
+  fi
+  git restore .
 
   sed -i '/^## \[Unreleased\]$/d' CHANGELOG.md
   git add CHANGELOG.md

@@ -36,6 +36,10 @@ workspace_rust_version="$({
   ' "${project_dir}/Cargo.toml"
 })"
 
+for documentation in README.md docs/jman-java.md docs/releasing.md; do
+  grep -Fq 'scripts/setup-test-jdks.sh' "${project_dir}/${documentation}"
+done
+
 cleanup() {
   rm -rf -- "${test_root}"
   if [[ -n "${unsafe_root}" ]]; then

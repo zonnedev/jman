@@ -60,14 +60,15 @@ npm audit --prefix editors/vscode --audit-level=high
 For a local rehearsal of the tag's full acceptance suite, run
 `make release-gates`. It fetches Spring Petclinic and Gson at fixed Git commits
 into `target/upstream-fixtures/`. Test setup downloads the checksum-pinned JMAN
-0.7.1 release into `target/test-toolchains/` and uses it to install
-GraalVM Community 25.3.4.1 plus Temurin 17, 21, and 25. Maven 3.9.9 and Gradle
-8.7/8.14.1/9.1.0 are also checksum-pinned under `target/compatibility-tools/`.
-Existing JDK installations can be supplied with `JMAN_GRAALVM_HOME` and the
-`JMAN_TEST_JAVA_*_HOME` variables. The release workflow performs the same
-self-hosted setup and runs `make release-gates` against the exact tag before
-packaging or publishing any assets. Normal pushes and pull requests continue
-to run the smaller `make ci` suite.
+bootstrap release configured in `scripts/setup-test-jdks.sh` into
+`target/test-toolchains/` and uses it to install GraalVM Community 25.3.4.1
+plus Temurin 17, 21, and 25. Maven 3.9.9 and Gradle 8.7/8.14.1/9.1.0 are also
+checksum-pinned under `target/compatibility-tools/`. Existing JDK installations
+can be supplied with `JMAN_GRAALVM_HOME` and the `JMAN_TEST_JAVA_*_HOME`
+variables. The release workflow performs the same self-hosted setup and runs
+`make release-gates` against the exact tag before packaging or publishing any
+assets. Normal pushes and pull requests continue to run the smaller `make ci`
+suite.
 
 Then prepare the coordinated release from the same clean worktree:
 

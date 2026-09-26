@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Source this file from compatibility tests that require JDK 17, 21, and 25.
-# JMAN 0.7.1 provisions isolated Temurin installations on first use.
+# The pinned JMAN bootstrap provisions isolated Temurin installations on first use.
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 "${project_dir}/scripts/setup-test-jdks.sh" --compatibility >/dev/null
 # shellcheck disable=SC1091
