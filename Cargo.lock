@@ -876,6 +876,7 @@ dependencies = [
  "hex",
  "javac-frontend",
  "jman-config",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",

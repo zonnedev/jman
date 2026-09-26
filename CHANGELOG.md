@@ -22,6 +22,8 @@ Versioning while it remains pre-1.0.
   the Java toolchain tests compile and run on both Linux and macOS.
 - `jman fmt` now resolves symlinked filesystem paths before matching sources to
   compile units, including macOS's `/var` to `/private/var` temporary paths.
+- Cache locks now detect abandoned owner processes through a portable Unix
+  process probe instead of relying on Linux's `/proc` filesystem.
 
 ## [0.8.1] - 2026-09-26
 

@@ -34,6 +34,7 @@ indicatif = "0.17"
 md-5 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["http2", "json", "multipart", "rustls-tls", "stream"] }
 roxmltree = "0.20"
+rustix = { version = "1.1", features = ["process"] }
 serde = { version = "1.0", features = ["derive"] }
 sha1 = "0.10"
 sha2 = "0.10"

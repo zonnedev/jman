@@ -86,15 +86,31 @@ fn lock_is_stale(path: &Path) -> bool {
     let owner = std::fs::read_to_string(path)
         .ok()
         .and_then(|value| value.trim().parse::<u32>().ok());
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     if let Some(owner) = owner {
-        return !Path::new("/proc").join(owner.to_string()).exists();
+        return !process_is_alive(owner);
     }
     std::fs::metadata(path)
         .ok()
         .and_then(|metadata| metadata.modified().ok())
         .and_then(|modified| modified.elapsed().ok())
         .is_some_and(|age| age > std::time::Duration::from_secs(60 * 60))
+}
+
+#[cfg(unix)]
+fn process_is_alive(owner: u32) -> bool {
+    use rustix::{io::Errno, process::Pid};
+
+    let Ok(owner) = i32::try_from(owner) else {
+        return false;
+    };
+    let Some(owner) = Pid::from_raw(owner) else {
+        return false;
+    };
+    match rustix::process::test_kill_process(owner) {
+        Ok(()) | Err(Errno::PERM) => true,
+        Err(_) => false,
+    }
 }
 
 impl Drop for FileLock {
@@ -140,10 +156,22 @@ mod tests {
             std::env::temp_dir().join(format!("jman-java-abandoned-lock-{}", std::process::id()));
         let lock = cache.with_extension("lock");
         std::fs::write(&lock, "4294967295\n").unwrap();
+        assert!(lock_is_stale(&lock));
         let acquired = FileLock::acquire(&cache).unwrap();
         assert!(lock.is_file());
         drop(acquired);
         assert!(!lock.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lock_owned_by_current_process_is_not_abandoned() {
+        let cache =
+            std::env::temp_dir().join(format!("jman-java-live-lock-{}", std::process::id()));
+        let lock = cache.with_extension("lock");
+        std::fs::write(&lock, format!("{}\n", std::process::id())).unwrap();
+        assert!(!lock_is_stale(&lock));
+        std::fs::remove_file(lock).unwrap();
     }
 
     #[test]
