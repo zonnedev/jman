@@ -2268,6 +2268,7 @@ packaging = "jar"
         .exists());
 }
 
+#[cfg(unix)]
 #[test]
 fn java_use_selects_an_installed_project_toolchain() {
     let project = tempfile::tempdir().expect("temporary project");
@@ -3166,7 +3167,7 @@ fn validate_shell_syntax_if_available(shell: &str, script: &str) {
     );
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn isolated_jman(cache: &Path, data: &Path, config: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_jman"));
     command
@@ -3177,12 +3178,12 @@ fn isolated_jman(cache: &Path, data: &Path, config: &Path) -> Command {
     command
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn fake_managed_jdk(data: &Path, version: &str, major: u16, label: &str) -> PathBuf {
     fake_managed_jdk_for_vendor(data, "temurin", version, major, label)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn fake_managed_jdk_for_vendor(
     data: &Path,
     vendor: &str,
@@ -3192,9 +3193,24 @@ fn fake_managed_jdk_for_vendor(
 ) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
-    let home = data
-        .join("jdks")
-        .join(format!("{vendor}-{}-linux-x64", version.replace('+', "_")));
+    let os = if cfg!(target_os = "macos") {
+        "mac"
+    } else {
+        "linux"
+    };
+    let architecture = match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "aarch64",
+        "arm" => "arm",
+        "powerpc64" => "ppc64le",
+        "s390x" => "s390x",
+        "riscv64" => "riscv64",
+        other => other,
+    };
+    let home = data.join("jdks").join(format!(
+        "{vendor}-{}-{os}-{architecture}",
+        version.replace('+', "_")
+    ));
     fs::create_dir_all(home.join("bin")).expect("managed JDK bin");
     for executable in ["java", "javac", "jar"] {
         let path = home.join("bin").join(executable);
@@ -3213,8 +3229,8 @@ fn fake_managed_jdk_for_vendor(
         vendor: vendor.to_owned(),
         version: version.to_owned(),
         major,
-        os: "linux".to_owned(),
-        architecture: "x64".to_owned(),
+        os: os.to_owned(),
+        architecture: architecture.to_owned(),
         checksum: "sha256:test".to_owned(),
         home: home.clone(),
     };

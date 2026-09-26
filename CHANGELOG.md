@@ -18,6 +18,8 @@ Versioning while it remains pre-1.0.
   macOS.
 - Build, test, and release scripts avoid Bash 4-only array loaders so they run
   with the Bash 3.2 installation provided by macOS.
+- CLI integration-test JDK fixtures now describe the current Unix platform so
+  the Java toolchain tests compile and run on both Linux and macOS.
 
 ## [0.8.1] - 2026-09-26
 
