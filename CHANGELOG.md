@@ -11,6 +11,12 @@ Versioning while it remains pre-1.0.
   support Apple Silicon macOS alongside x86-64 glibc Linux, with native CLI,
   compiler-frontend, and platform-targeted VSIX artifacts.
 
+### Fixed
+
+- Native frontend packaging now preserves each GraalVM distribution's complete
+  `java.base` legal directory without requiring Linux-only companion files on
+  macOS.
+
 ## [0.8.1] - 2026-09-26
 
 ## [0.8.0] - 2026-09-26

@@ -153,6 +153,13 @@ grep -Eq '^test-rust:.*[[:space:]]vineflower([[:space:]]|$)' \
   "${project_dir}/Makefile"
 grep -Eq '^test-rust:.*[[:space:]]jacoco([[:space:]]|$)' \
   "${project_dir}/Makefile"
+grep -Fq 'cp -R "${java_base_legal}/." "${platform_dir}/legal/"' \
+  "${project_dir}/scripts/build-native.sh"
+if grep -Fq 'for legal_file in LICENSE ADDITIONAL_LICENSE_INFO ASSEMBLY_EXCEPTION' \
+    "${project_dir}/scripts/build-native.sh"; then
+  echo "Native packaging must accept the platform-provided GraalVM legal-file set" >&2
+  exit 1
+fi
 for packaging_target in release package-vscode; do
   if ! grep -Eq "^${packaging_target}:.*[[:space:]]native([[:space:]]|$)" \
     "${project_dir}/Makefile"; then

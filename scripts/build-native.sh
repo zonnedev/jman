@@ -17,9 +17,15 @@ if [[ ! -f "${JAVA_HOME}/lib/ct.sym" ]]; then
   exit 1
 fi
 cp "${JAVA_HOME}/lib/ct.sym" "${platform_dir}/lib/ct.sym"
-for legal_file in LICENSE ADDITIONAL_LICENSE_INFO ASSEMBLY_EXCEPTION; do
-  cp "${JAVA_HOME}/legal/java.base/${legal_file}" "${platform_dir}/legal/${legal_file}"
-done
+java_base_legal="${JAVA_HOME}/legal/java.base"
+if [[ ! -f "${java_base_legal}/LICENSE" ]]; then
+  printf 'GraalVM java.base license is missing: %s\n' "${java_base_legal}/LICENSE" >&2
+  exit 1
+fi
+# GraalVM distributions do not expose an identical java.base legal-file set on
+# every platform. Preserve the complete platform-provided directory instead of
+# requiring Linux-only companion files on macOS.
+cp -R "${java_base_legal}/." "${platform_dir}/legal/"
 
 mapfile -t sources < <(find "${project_dir}/tools/javac-bridge/src/main/java" -name '*.java' -print | sort)
 javac -Werror -Xlint:all \
