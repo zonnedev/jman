@@ -125,6 +125,11 @@ for workflow in ci.yml release.yml; do
 done
 grep -q 'make ci' "${workflow_dir}/ci.yml"
 grep -q 'make release-gates' "${workflow_dir}/release.yml"
+build_jman_plan="$(make -s -n -C "${project_dir}" build-jman)"
+grep -Fq 'cargo build -p jman-cli' <<<"${build_jman_plan}"
+build_plan="$(make -s -n -C "${project_dir}" build)"
+grep -Fq './scripts/package-release.sh' <<<"${build_plan}"
+grep -Fq './scripts/package-vscode.sh' <<<"${build_plan}"
 grep -q 'scripts/setup-compatibility-tools.sh' "${workflow_dir}/release.yml"
 grep -q 'scripts/setup-test-jdks.sh --graalvm' "${workflow_dir}/ci.yml"
 grep -q 'scripts/setup-test-jdks.sh --all' "${workflow_dir}/release.yml"

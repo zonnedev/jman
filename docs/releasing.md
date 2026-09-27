@@ -146,9 +146,12 @@ To inspect the artifacts for the current host without creating a tag or
 release:
 
 ```bash
-make release
-make package-vscode
+make build
 ```
+
+This builds the local development binary, CLI release archive, checksum, and
+platform-specific VS Code VSIX. The Neovim integration is source-only and does
+not require a separate packaging step.
 
 The release workflow combines the Linux and macOS job outputs before running
 `make stage-release`; local staging requires both platform pairs to be copied

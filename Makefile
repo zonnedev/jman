@@ -13,7 +13,15 @@ NATIVE_FRONTEND_INPUTS := \
 	scripts/setup-test-jdks.sh \
 	scripts/use-test-java.sh
 
-.PHONY: gates release-gates ci test test-toolchain-bootstrap test-rust test-java test-jman-runner test-processor-worker maven-importer vineflower jacoco maven-tool compatibility-tools test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs docs serve-docs prepare-release package-vscode release stage-release native test-native clean clear
+.PHONY: build build-jman gates release-gates ci test test-toolchain-bootstrap test-rust test-java test-jman-runner test-processor-worker maven-importer vineflower jacoco maven-tool compatibility-tools test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs docs serve-docs prepare-release package-vscode release stage-release native test-native clean clear
+
+build-jman: $(DEBUG_NATIVE_FRONTEND)
+	JMAN_JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
+	./scripts/with-native-library.sh "$(CURDIR)/target/native" \
+	cargo build -p jman-cli
+	@printf 'JMAN debug binary: %s\n' "$(CURDIR)/target/debug/jman"
+
+build: build-jman package
 
 gates: test test-native test-coverage test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-vscode-extension test-neovim-plugin test-installer test-docs
 

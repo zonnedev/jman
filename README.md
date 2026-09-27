@@ -116,6 +116,19 @@ Windows, Intel macOS, Linux ARM64, and Alpine Linux are not supported yet.
 
 ## Contributing
 
+Build a directly runnable development binary with:
+
+```bash
+make build-jman
+./target/debug/jman --version
+```
+
+Use `make build` to produce every generated artifact for the current host: the
+development binary, release archive, checksum, and platform-specific VS Code
+VSIX. Outputs are written under `target/release-dist/` and `target/vscode/`.
+The Neovim integration is shipped directly as Lua source and has no separate
+build artifact.
+
 Use `make ci` for the normal push suite and `make release-gates` for the full
 tag acceptance suite, including pinned real-world projects and the
 Maven/Gradle/JDK compatibility matrix. The test setup bootstraps the
