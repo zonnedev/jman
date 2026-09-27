@@ -10,8 +10,9 @@ Versioning while it remains pre-1.0.
 - Annotated Git release tags now drive user-facing build identity; development
   builds include commit distance, Git SHA, and tracked-worktree state as SemVer
   build metadata while tagged releases retain their exact version.
-- The Makefile now exposes `build-jman` for a runnable development CLI and
-  `build` for all generated artifacts supported by the current host.
+- The Makefile now exposes `build-jman` for a runnable development CLI, `run`
+  for incremental local execution, and `build` for all generated artifacts
+  supported by the current host.
 - Java catalog discovery, installed-JDK lookup, reuse, removal, and installation
   now share one native host-platform identity, including macOS AArch64, so JMAN
   never reuses or displays a JDK built for another OS or architecture.

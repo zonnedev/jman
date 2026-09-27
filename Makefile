@@ -13,13 +13,28 @@ NATIVE_FRONTEND_INPUTS := \
 	scripts/setup-test-jdks.sh \
 	scripts/use-test-java.sh
 
-.PHONY: build build-jman gates release-gates ci test test-toolchain-bootstrap test-rust test-java test-jman-runner test-processor-worker maven-importer vineflower jacoco maven-tool compatibility-tools test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs docs serve-docs prepare-release package-vscode release stage-release native test-native clean clear
+# Treat goals following `make run --` as JMAN arguments instead of Make targets.
+ifeq ($(firstword $(MAKECMDGOALS)),run)
+.SILENT:
+RUN_ARGUMENTS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+ifneq ($(strip $(RUN_ARGUMENTS)),)
+RUN_TARGETS := $(sort $(RUN_ARGUMENTS))
+.PHONY: $(RUN_TARGETS)
+$(RUN_TARGETS):
+	@:
+endif
+endif
+
+.PHONY: build build-jman run gates release-gates ci test test-toolchain-bootstrap test-rust test-java test-jman-runner test-processor-worker maven-importer vineflower jacoco maven-tool compatibility-tools test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs docs serve-docs prepare-release package-vscode release stage-release native test-native clean clear
 
 build-jman: $(DEBUG_NATIVE_FRONTEND)
 	JMAN_JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
 	./scripts/with-native-library.sh "$(CURDIR)/target/native" \
 	cargo build -p jman-cli
 	@printf 'JMAN debug binary: %s\n' "$(CURDIR)/target/debug/jman"
+
+run: build-jman
+	"$(CURDIR)/target/debug/jman" $(if $(strip $(RUN_ARGUMENTS)),$(RUN_ARGUMENTS),--help)
 
 build: build-jman package
 

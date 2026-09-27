@@ -130,6 +130,8 @@ test "$(grep -c 'target/release/jman --version)' "${workflow_dir}/release.yml")"
 test "$(grep -c 'jman ${JMAN_RELEASE_TAG#v}' "${workflow_dir}/release.yml")" -eq 2
 build_jman_plan="$(make -s -n -C "${project_dir}" build-jman)"
 grep -Fq 'cargo build -p jman-cli' <<<"${build_jman_plan}"
+run_plan="$(make -s -n -C "${project_dir}" run -- --version)"
+grep -Fq 'target/debug/jman" --version' <<<"${run_plan}"
 build_plan="$(make -s -n -C "${project_dir}" build)"
 grep -Fq './scripts/package-release.sh' <<<"${build_plan}"
 grep -Fq './scripts/package-vscode.sh' <<<"${build_plan}"

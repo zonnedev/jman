@@ -123,6 +123,14 @@ make build-jman
 ./target/debug/jman --version
 ```
 
+For a build-and-run cycle, pass JMAN arguments after `--`:
+
+```bash
+make run -- java list --installed
+```
+
+Running `make run` without additional arguments displays the CLI help.
+
 Tagged builds report the exact release version. Builds from later commits add
 traceable semantic-version metadata such as
 `0.8.2+dev.3.g8fa23cd12345`; see the
