@@ -5,6 +5,12 @@ Versioning while it remains pre-1.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Java catalog discovery, installed-JDK lookup, reuse, removal, and installation
+  now share one native host-platform identity, including macOS AArch64, so JMAN
+  never reuses or displays a JDK built for another OS or architecture.
+
 ## [0.8.2] - 2026-09-27
 
 ### Added

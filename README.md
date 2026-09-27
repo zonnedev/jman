@@ -41,6 +41,9 @@ JMAN can be the source of truth for Java across your shell, projects, builds,
 and editors. It discovers multiple vendors, verifies downloads, keeps installed
 JDKs outside disposable caches, and uses project-aware command shims so `java`,
 `javac`, `jar`, and the remaining JDK commands follow the effective selection.
+Catalog results and installations are automatically restricted to the current
+operating system and processor architecture, including native Apple Silicon
+JDKs on macOS.
 
 ```console
 $ jman java list --lts

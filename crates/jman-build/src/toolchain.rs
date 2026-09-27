@@ -277,6 +277,7 @@ pub struct ToolchainManager {
     catalog_root: PathBuf,
     client: reqwest::Client,
     provider: Box<dyn JdkCatalogProvider>,
+    platform: Platform<'static>,
 }
 
 impl ToolchainManager {
@@ -312,6 +313,15 @@ impl ToolchainManager {
         data_dir: &Path,
         provider: Box<dyn JdkCatalogProvider>,
     ) -> Result<Self, BuildError> {
+        Self::with_provider_for_platform(cache_dir, data_dir, provider, current_platform())
+    }
+
+    fn with_provider_for_platform(
+        cache_dir: &Path,
+        data_dir: &Path,
+        provider: Box<dyn JdkCatalogProvider>,
+        platform: Platform<'static>,
+    ) -> Result<Self, BuildError> {
         let client = reqwest::Client::builder()
             .user_agent(concat!("jman/", env!("CARGO_PKG_VERSION")))
             // Redirects are followed manually so every hop crosses the same
@@ -326,6 +336,7 @@ impl ToolchainManager {
             catalog_root: cache_dir.join("catalog"),
             client,
             provider,
+            platform,
         })
     }
 
@@ -362,7 +373,11 @@ impl ToolchainManager {
                 .map_err(|source| io_error(&metadata, source))?;
             if let Ok(mut jdk) = serde_json::from_slice::<ManagedJdk>(&bytes) {
                 jdk.version = normalize_managed_version(&jdk.version, jdk.major);
-                if jdk.home == entry.path() && javac_path(&jdk.home).is_file() {
+                if jdk.os == self.platform.os
+                    && jdk.architecture == self.platform.architecture
+                    && jdk.home == entry.path()
+                    && javac_path(&jdk.home).is_file()
+                {
                     jdks.push(jdk);
                 }
             }
@@ -458,7 +473,7 @@ impl ToolchainManager {
             .provider
             .fetch_catalog(
                 &self.client,
-                current_platform(),
+                self.platform,
                 cached.map(|cache| &cache.validators),
             )
             .await?
@@ -479,8 +494,8 @@ impl ToolchainManager {
                 schema: CATALOG_CACHE_SCHEMA,
                 fetched_at: now,
                 provider: self.provider.id().to_owned(),
-                os: platform_os().to_owned(),
-                architecture: platform_arch().to_owned(),
+                os: self.platform.os.to_owned(),
+                architecture: self.platform.architecture.to_owned(),
                 validators,
                 releases,
             }),
@@ -499,8 +514,8 @@ impl ToolchainManager {
         };
         if cache.schema != CATALOG_CACHE_SCHEMA
             || cache.provider != self.provider.id()
-            || cache.os != platform_os()
-            || cache.architecture != platform_arch()
+            || cache.os != self.platform.os
+            || cache.architecture != self.platform.architecture
         {
             return Ok(None);
         }
@@ -540,8 +555,8 @@ impl ToolchainManager {
         self.catalog_root.join(format!(
             "{}-{}-{}.json",
             self.provider.id(),
-            platform_os(),
-            platform_arch()
+            self.platform.os,
+            self.platform.architecture
         ))
     }
 
@@ -704,8 +719,8 @@ impl ToolchainManager {
             "{}-{}-{}-{}",
             request.vendor,
             sanitize(&artifact.release.version),
-            platform_os(),
-            platform_arch()
+            self.platform.os,
+            self.platform.architecture
         );
         let destination = self.root.join(install_name);
         let archive = self.root.join(format!(
@@ -731,16 +746,7 @@ impl ToolchainManager {
             .await
             .map_err(|source| io_error(&extraction, source))?;
         extract_archive(&archive, &extraction).await?;
-        let mut home = single_root(&extraction).await?;
-        if !javac_path(&home).is_file() && javac_path(&home.join("Contents/Home")).is_file() {
-            home = home.join("Contents/Home");
-        }
-        if !javac_path(&home).is_file() {
-            return Err(BuildError::Invalid(format!(
-                "downloaded JDK archive has no compiler at {}",
-                javac_path(&home).display()
-            )));
-        }
+        let home = extracted_jdk_home(&extraction).await?;
         if destination.exists() {
             fs::remove_dir_all(&destination)
                 .await
@@ -755,8 +761,8 @@ impl ToolchainManager {
             vendor: request.vendor.clone(),
             version: artifact.release.version,
             major: artifact.release.major,
-            os: platform_os().to_owned(),
-            architecture: platform_arch().to_owned(),
+            os: self.platform.os.to_owned(),
+            architecture: self.platform.architecture.to_owned(),
             checksum: format!("sha256:{}", artifact.checksum_sha256),
             home: destination,
         };
@@ -770,10 +776,11 @@ impl ToolchainManager {
 
     fn lock_path(&self, request: &ToolchainRequest) -> Result<PathBuf, BuildError> {
         Ok(self.root.join(format!(
-            ".install-{}-{}-{}.lock",
+            ".install-{}-{}-{}-{}.lock",
             request.vendor,
             request.major()?,
-            platform_arch()
+            self.platform.os,
+            self.platform.architecture
         )))
     }
 
@@ -781,15 +788,31 @@ impl ToolchainManager {
         &self,
         request: &ToolchainRequest,
     ) -> Result<ResolvedArtifact, BuildError> {
-        self.provider
+        let artifact = self
+            .provider
             .resolve(
                 &self.client,
-                current_platform(),
+                self.platform,
                 &request.vendor,
                 &request.version,
                 request.exact(),
             )
-            .await
+            .await?;
+        if artifact.release.os != self.platform.os
+            || artifact.release.architecture != self.platform.architecture
+            || artifact.release.archive_type != self.platform.archive_type
+        {
+            return Err(BuildError::Invalid(format!(
+                "JDK catalog returned {}-{} ({}) for a {}-{} ({}) installation",
+                artifact.release.os,
+                artifact.release.architecture,
+                artifact.release.archive_type,
+                self.platform.os,
+                self.platform.architecture,
+                self.platform.archive_type
+            )));
+        }
+        Ok(artifact)
     }
 
     async fn download_verified(
@@ -1019,6 +1042,22 @@ async fn single_root(directory: &Path) -> Result<PathBuf, BuildError> {
     Ok(first.path())
 }
 
+async fn extracted_jdk_home(directory: &Path) -> Result<PathBuf, BuildError> {
+    let root = single_root(directory).await?;
+    if javac_path(&root).is_file() {
+        return Ok(root);
+    }
+    let macos_home = root.join("Contents/Home");
+    if javac_path(&macos_home).is_file() {
+        return Ok(macos_home);
+    }
+    Err(BuildError::Invalid(format!(
+        "downloaded JDK archive has no compiler at {} or {}",
+        javac_path(&root).display(),
+        javac_path(&macos_home).display()
+    )))
+}
+
 fn platform_os() -> &'static str {
     if cfg!(target_os = "macos") {
         "mac"
@@ -1080,6 +1119,7 @@ fn catalog_result(
     let mut jdks = cache
         .releases
         .iter()
+        .filter(|release| release.os == cache.os && release.architecture == cache.architecture)
         .filter(|release| major.is_none_or(|major| release.major == major))
         .filter(|release| !lts_only || release.lts)
         .map(|release| AvailableJdk {
@@ -1272,7 +1312,34 @@ mod tests {
         assert_eq!(normalize_managed_version("8.0.504+1", 8), "8u504-b01");
     }
 
+    #[tokio::test]
+    async fn locates_the_java_home_inside_a_macos_jdk_bundle() {
+        let directory = tempfile::tempdir().expect("extraction directory");
+        let extraction = directory.path().join("extraction");
+        let home = extraction.join("temurin-25.jdk/Contents/Home");
+        fs::create_dir_all(home.join("bin"))
+            .await
+            .expect("macOS JDK bin directory");
+        fs::write(javac_path(&home), b"compiler")
+            .await
+            .expect("macOS javac");
+
+        assert_eq!(
+            extracted_jdk_home(&extraction)
+                .await
+                .expect("macOS JDK home"),
+            home
+        );
+    }
+
     struct StaticProvider;
+
+    const MACOS_AARCH64: Platform<'static> = Platform {
+        os: "mac",
+        architecture: "aarch64",
+        libc: "libc",
+        archive_type: "tar.gz",
+    };
 
     impl JdkCatalogProvider for StaticProvider {
         fn id(&self) -> &'static str {
@@ -1309,15 +1376,30 @@ mod tests {
         fn resolve<'a>(
             &'a self,
             _client: &'a reqwest::Client,
-            _platform: Platform<'a>,
-            _vendor: &'a str,
-            _version: &'a str,
+            platform: Platform<'a>,
+            vendor: &'a str,
+            version: &'a str,
             _exact: bool,
         ) -> catalog::ProviderFuture<'a, ResolvedArtifact> {
-            Box::pin(async {
-                Err(BuildError::Invalid(
-                    "static provider does not resolve downloads".to_owned(),
-                ))
+            Box::pin(async move {
+                Ok(ResolvedArtifact {
+                    release: CatalogRelease {
+                        vendor: vendor.to_owned(),
+                        version: version.to_owned(),
+                        major: version.parse().unwrap_or(21),
+                        lts: true,
+                        os: platform.os.to_owned(),
+                        architecture: platform.architecture.to_owned(),
+                        archive_type: platform.archive_type.to_owned(),
+                        filename: "test-jdk.tar.gz".to_owned(),
+                        source_id: "opaque-test-id".to_owned(),
+                    },
+                    download_url: reqwest::Url::parse(
+                        "https://github.com/adoptium/temurin21-binaries/releases/download/jdk/test-jdk.tar.gz",
+                    )
+                    .expect("static download URL"),
+                    checksum_sha256: "0".repeat(64),
+                })
             })
         }
     }
@@ -1344,6 +1426,59 @@ mod tests {
             .expect("catalog cache");
         assert_eq!(stored.provider, "static-test");
         assert_eq!(stored.releases[0].source_id, "opaque-test-id");
+    }
+
+    #[tokio::test]
+    async fn macos_arm_platform_scopes_catalog_cache_and_installed_jdks() {
+        let root = tempfile::tempdir().expect("toolchain root");
+        let manager = ToolchainManager::with_provider_for_platform(
+            root.path(),
+            root.path(),
+            Box::new(StaticProvider),
+            MACOS_AARCH64,
+        )
+        .expect("manager");
+
+        let available = manager
+            .available(None, false, false)
+            .await
+            .expect("macOS ARM catalog");
+        assert_eq!(available.jdks[0].os, "mac");
+        assert_eq!(available.jdks[0].architecture, "aarch64");
+        assert_eq!(
+            manager
+                .catalog_cache_path()
+                .file_name()
+                .expect("catalog filename"),
+            "static-test-mac-aarch64.json"
+        );
+        let artifact = manager
+            .resolve_asset(&ToolchainRequest {
+                version: "21".to_owned(),
+                vendor: "temurin".to_owned(),
+            })
+            .await
+            .expect("macOS ARM artifact");
+        assert_eq!(artifact.release.os, "mac");
+        assert_eq!(artifact.release.architecture, "aarch64");
+
+        let native =
+            fake_install_for_platform(root.path(), "21.0.1+1", 21, 7, "mac", "aarch64").await;
+        let foreign = fake_install_for_platform(root.path(), "21.0.1+1", 21, 9, "mac", "x64").await;
+
+        let installed = manager.list().await.expect("installed macOS ARM JDKs");
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].home, native);
+        assert!(foreign.is_dir());
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn apple_silicon_is_detected_as_macos_aarch64() {
+        assert_eq!(current_platform().os, MACOS_AARCH64.os);
+        assert_eq!(current_platform().architecture, MACOS_AARCH64.architecture);
+        assert_eq!(current_platform().libc, MACOS_AARCH64.libc);
+        assert_eq!(current_platform().archive_type, MACOS_AARCH64.archive_type);
     }
 
     #[tokio::test]
@@ -1612,9 +1747,28 @@ mod tests {
     }
 
     async fn fake_install(cache: &Path, version: &str, major: u16, payload_size: usize) -> PathBuf {
+        fake_install_for_platform(
+            cache,
+            version,
+            major,
+            payload_size,
+            platform_os(),
+            platform_arch(),
+        )
+        .await
+    }
+
+    async fn fake_install_for_platform(
+        cache: &Path,
+        version: &str,
+        major: u16,
+        payload_size: usize,
+        os: &str,
+        architecture: &str,
+    ) -> PathBuf {
         let home = cache
             .join("jdks")
-            .join(format!("temurin-{}", sanitize(version)));
+            .join(format!("temurin-{}-{os}-{architecture}", sanitize(version)));
         fs::create_dir_all(home.join("bin")).await.expect("JDK bin");
         fs::write(javac_path(&home), b"compiler")
             .await
@@ -1626,8 +1780,8 @@ mod tests {
             vendor: "temurin".to_owned(),
             version: version.to_owned(),
             major,
-            os: platform_os().to_owned(),
-            architecture: platform_arch().to_owned(),
+            os: os.to_owned(),
+            architecture: architecture.to_owned(),
             checksum: "sha256:test".to_owned(),
             home: home.clone(),
         };

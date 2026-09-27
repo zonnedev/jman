@@ -148,6 +148,10 @@ Temurin is the default download distribution. Pass `--vendor <name>` when
 installing another distribution, for example `zulu` or `corretto`; later
 installed-JDK commands infer the vendor from project/global selection or a
 unique installed match.
+JMAN automatically limits catalog results and installation selection to the
+current operating system and processor architecture. On Apple Silicon,
+`jman java install 25` therefore installs the native macOS AArch64 package;
+there is no architecture flag to configure.
 See [Java toolchains](../guides/java-toolchains.md) for catalog filters,
 verification, cache behavior, project overrides, and shell integration.
 

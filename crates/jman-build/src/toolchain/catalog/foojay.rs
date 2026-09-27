@@ -505,6 +505,34 @@ mod tests {
     }
 
     #[test]
+    fn requests_native_macos_arm64_packages_from_foojay() {
+        let provider = FoojayProvider::new().expect("provider");
+        let client = Client::new();
+        let request = provider
+            .package_request(
+                &client,
+                Platform {
+                    os: "mac",
+                    architecture: "aarch64",
+                    libc: "libc",
+                    archive_type: "tar.gz",
+                },
+            )
+            .expect("package request")
+            .build()
+            .expect("HTTP request");
+        let parameters = request
+            .url()
+            .query_pairs()
+            .collect::<std::collections::HashMap<_, _>>();
+
+        assert_eq!(parameters.get("operating_system").unwrap(), "macos");
+        assert_eq!(parameters.get("architecture").unwrap(), "aarch64");
+        assert_eq!(parameters.get("libc_type").unwrap(), "libc");
+        assert_eq!(parameters.get("archive_type").unwrap(), "tar.gz");
+    }
+
+    #[test]
     fn excludes_unknown_non_free_and_incompatible_packages() {
         let package = |distribution: &str, free: bool, libc: &str| FoojayPackage {
             id: distribution.to_owned(),

@@ -17,7 +17,9 @@ jman java list --major 21 --vendor temurin --all
 
 The default table combines local and remote releases, marks installed entries,
 and shows only the latest matching release per vendor. `--all` expands every
-matching remote release. Filters compose.
+matching remote release. Filters compose. Both installed and remote entries
+are restricted to the machine's current operating system and processor
+architecture; JMAN does not expose cross-platform JDK archives in this command.
 
 To show only installed JDKs, with no network access:
 
@@ -47,7 +49,8 @@ SHA-256 digest from the provider, requires HTTPS, validates every initial and
 redirected host, verifies the downloaded bytes, and only then makes the JDK
 available. `--global` also selects the exact installed release as the current
 user's default. The selection is durable: catalog and artifact cache cleanup
-does not delete installed JDKs.
+does not delete installed JDKs. Platform selection is automatic: for example,
+an Apple Silicon build of JMAN requests and installs a native macOS AArch64 JDK.
 
 `jman java setup` creates project-aware shims for the commands supplied by that
 JDK and prints the one line to add to Bash, Zsh, or Fish. For example:

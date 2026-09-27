@@ -233,7 +233,9 @@ jman java install VERSION [--vendor VENDOR] [--offline]
 `VERSION` can be a feature release such as `21` or an exact version such as
 `25.0.1+8`. Temurin is the default download vendor. Offline mode selects only
 an already installed match from that vendor. `--global` selects the exact
-installed release as the current user's default after installation.
+installed release as the current user's default after installation. JMAN
+automatically selects the current operating system and processor architecture;
+cross-platform JDK installation is intentionally not exposed.
 
 ## jman java list
 
@@ -245,7 +247,8 @@ jman java list [--installed] [--all] [--major RELEASE] [--lts]
 The default merges installed and available releases into a compact table.
 `--installed` filters the result to JDKs installed by JMAN and never contacts
 the remote catalog. `--all` disables latest-per-vendor
-compaction. `--refresh` revalidates even a fresh cache entry.
+compaction. `--refresh` revalidates even a fresh cache entry. Local and remote
+results are limited to the current operating system and architecture.
 
 ## jman java remove
 
