@@ -30,6 +30,12 @@ JMAN_JAVAC_FRONTEND_LIB_DIR="${native_dir}" \
 
 version="$("${project_dir}/scripts/with-native-library.sh" "${native_dir}" \
   "${project_dir}/target/release/jman" --version | awk '{print $2}')"
+release_tag="${JMAN_RELEASE_TAG:-}"
+if [[ -n "${release_tag}" && "${version}" != "${release_tag#v}" ]]; then
+  printf 'Packaged JMAN version %s does not match release tag %s\n' \
+    "${version}" "${release_tag}" >&2
+  exit 1
+fi
 name="jman-${version}-${platform}"
 stage="${stage_root}/${name}"
 archive="${dist_dir}/${name}.tar.gz"

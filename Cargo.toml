@@ -8,6 +8,7 @@ members = [
     "crates/javac-frontend",
     "crates/jman-java-lsp",
     "crates/jman-publish",
+    "crates/jman-version",
 ]
 resolver = "3"
 
@@ -31,6 +32,7 @@ flate2 = "1.0"
 fs2 = "0.4"
 hex = "0.4"
 indicatif = "0.17"
+jman-version = { path = "crates/jman-version" }
 md-5 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["http2", "json", "multipart", "rustls-tls", "stream"] }
 roxmltree = "0.20"

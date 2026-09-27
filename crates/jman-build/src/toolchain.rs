@@ -323,7 +323,7 @@ impl ToolchainManager {
         platform: Platform<'static>,
     ) -> Result<Self, BuildError> {
         let client = reqwest::Client::builder()
-            .user_agent(concat!("jman/", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("jman/{}", jman_version::BUILD_VERSION))
             // Redirects are followed manually so every hop crosses the same
             // distribution-scoped domain trust policy.
             .redirect(reqwest::redirect::Policy::none())

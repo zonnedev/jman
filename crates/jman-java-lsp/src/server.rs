@@ -448,7 +448,7 @@ impl<'backend> Server<'backend> {
                         },
                         "serverInfo": {
                             "name": "io.github.zonnedev.jman.lsp",
-                            "version": env!("CARGO_PKG_VERSION")
+                            "version": jman_version::BUILD_VERSION
                         }
                     }
                 }))

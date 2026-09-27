@@ -63,7 +63,7 @@ impl RepositoryClient {
         offline: bool,
     ) -> Result<Self, ResolverError> {
         let client = reqwest::Client::builder()
-            .user_agent(concat!("jman/", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("jman/{}", jman_version::BUILD_VERSION))
             .pool_max_idle_per_host(16)
             .build()
             .map_err(|source| ResolverError::Request {

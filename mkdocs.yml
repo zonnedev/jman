@@ -47,6 +47,7 @@ nav:
       - JJFS 1 specification: reference/jjfs-v1.md
       - Manifest: reference/manifest.md
       - Lockfile, cache, and outputs: reference/storage.md
+      - Version identity: reference/versioning.md
       - Environment variables: reference/environment.md
       - Compatibility: compatibility-matrix.md
       - Product contract: product-contract.md

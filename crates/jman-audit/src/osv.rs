@@ -54,7 +54,7 @@ impl OsvProvider {
             ));
         }
         let client = reqwest::Client::builder()
-            .user_agent(concat!("jman/", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("jman/{}", jman_version::BUILD_VERSION))
             .timeout(std::time::Duration::from_secs(15))
             .build()
             .map_err(|source| AuditError::Request {

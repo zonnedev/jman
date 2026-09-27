@@ -1,0 +1,13 @@
+[package]
+name = "jman-version"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dev-dependencies]
+tempfile = "3.0"
+
+[lints]
+workspace = true

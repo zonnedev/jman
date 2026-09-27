@@ -42,6 +42,13 @@ JMAN_JAVAC_FRONTEND_LIB_DIR="${native_dir}" \
     --manifest-path "${project_dir}/Cargo.toml" \
     --release \
     -p jman-cli
+server_version="$("${project_dir}/scripts/with-native-library.sh" "${native_dir}" \
+  "${project_dir}/target/release/jman" --version | awk '{print $2}')"
+if [[ -n "${release_tag}" && "${server_version}" != "${release_tag#v}" ]]; then
+  printf 'Packaged JMAN version %s does not match release tag %s\n' \
+    "${server_version}" "${release_tag}" >&2
+  exit 1
+fi
 
 rm -rf "${server_dir}" "${output_dir}"
 mkdir -p "${server_dir}" "${output_dir}"

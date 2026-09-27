@@ -123,6 +123,11 @@ make build-jman
 ./target/debug/jman --version
 ```
 
+Tagged builds report the exact release version. Builds from later commits add
+traceable semantic-version metadata such as
+`0.8.2+dev.3.g8fa23cd12345`; see the
+[version identity reference](docs/reference/versioning.md).
+
 Use `make build` to produce every generated artifact for the current host: the
 development binary, release archive, checksum, and platform-specific VS Code
 VSIX. Outputs are written under `target/release-dist/` and `target/vscode/`.

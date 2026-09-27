@@ -9,6 +9,7 @@ license.workspace = true
 dirs.workspace = true
 futures.workspace = true
 hex.workspace = true
+jman-version.workspace = true
 reqwest.workspace = true
 roxmltree.workspace = true
 serde.workspace = true

@@ -125,6 +125,9 @@ for workflow in ci.yml release.yml; do
 done
 grep -q 'make ci' "${workflow_dir}/ci.yml"
 grep -q 'make release-gates' "${workflow_dir}/release.yml"
+test "$(grep -c 'fetch-depth: 0' "${workflow_dir}/ci.yml")" -eq 2
+test "$(grep -c 'target/release/jman --version)' "${workflow_dir}/release.yml")" -eq 2
+test "$(grep -c 'jman ${JMAN_RELEASE_TAG#v}' "${workflow_dir}/release.yml")" -eq 2
 build_jman_plan="$(make -s -n -C "${project_dir}" build-jman)"
 grep -Fq 'cargo build -p jman-cli' <<<"${build_jman_plan}"
 build_plan="$(make -s -n -C "${project_dir}" build)"
@@ -198,6 +201,7 @@ for packaging_script in package-release.sh package-vscode.sh; do
   grep -Fq 'scripts/build-maven-importer.sh' "${project_dir}/scripts/${packaging_script}"
   grep -Fq 'target/maven-importer.jar' "${project_dir}/scripts/${packaging_script}"
   grep -Fq 'codesign --force --sign -' "${project_dir}/scripts/${packaging_script}"
+  grep -Fq 'does not match release tag' "${project_dir}/scripts/${packaging_script}"
   if grep -Fq 'target/java-test-classes' "${project_dir}/scripts/${packaging_script}"; then
     echo "${packaging_script} must package the Java 17-targeted Maven importer" >&2
     exit 1

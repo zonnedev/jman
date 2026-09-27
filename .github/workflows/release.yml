@@ -89,7 +89,10 @@ jobs:
         run: make release-gates
 
       - name: Build CLI archive
-        run: make release
+        run: |
+          make release
+          test "$(./scripts/with-native-library.sh target/native \
+            target/release/jman --version)" = "jman ${JMAN_RELEASE_TAG#v}"
 
       - name: Build VS Code extension
         run: make package-vscode
@@ -160,7 +163,8 @@ jobs:
         run: |
           cargo fmt --all -- --check
           make test-rust test-installer release package-vscode
-          target/release/jman --version
+          test "$(./scripts/with-native-library.sh target/native \
+            target/release/jman --version)" = "jman ${JMAN_RELEASE_TAG#v}"
 
       - name: Upload macOS assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -12,6 +12,7 @@ flate2.workspace = true
 fs2.workspace = true
 hex.workspace = true
 jman-config = { path = "../jman-config" }
+jman-version.workspace = true
 reqwest.workspace = true
 roxmltree.workspace = true
 serde.workspace = true

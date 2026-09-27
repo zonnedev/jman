@@ -31,7 +31,11 @@ use dependency_report::{dependency_path_tree, terminal_text};
 use ui::Ui;
 
 #[derive(Debug, Parser)]
-#[command(name = "jman", version, about = "A fast, self-contained Java tool")]
+#[command(
+    name = "jman",
+    version = jman_version::BUILD_VERSION,
+    about = "A fast, self-contained Java tool"
+)]
 struct Cli {
     /// Suppress status and progress output.
     #[arg(long, global = true, conflicts_with = "verbose")]

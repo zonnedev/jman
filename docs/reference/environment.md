@@ -77,6 +77,10 @@ graph.
 
 ## Maintainer-only variables
 
+`JMAN_BUILD_VERSION` supplies an explicit semantic build identity when Git
+metadata is unavailable to an external reproducible build. Ordinary local and
+release builds derive their identity automatically and should not set it.
+
 The repository's build, integration-test, and release scripts define additional
 `JMAN_*` variables for bundled tool paths and fixtures. They
 are not part of the supported end-user configuration surface. Consult the

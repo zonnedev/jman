@@ -87,6 +87,13 @@ asks whether to create `chore(release): prepare v0.8.2` and the annotated tag
 push both the current branch and tag to `origin`. Declining either confirmation
 never pushes anything and leaves the prepared state available for review.
 
+Annotated tags are the final release identity. An exact clean tag reports the
+plain version, while development commits report the nearest release plus
+source metadata, such as `0.8.2+dev.3.g8fa23cd12345`. Release jobs fetch full
+history and reject a packaged binary whose version differs from the tag. See
+the [version identity reference](reference/versioning.md) for the complete
+contract and fallback behavior.
+
 Tags whose version contains a hyphen, such as `-rc.1`, become GitHub
 pre-releases. Stable semantic versions become normal releases. A failed or
 interrupted release can be retried from **Actions → Release → Run workflow** by
