@@ -77,19 +77,19 @@ smaller `make ci` suite.
 Then prepare the coordinated release from the same clean worktree:
 
 ```bash
-make prepare-release VERSION=0.8.2
+make prepare-release VERSION=0.8.3
 ```
 
 The command synchronizes the Rust workspace, Cargo lockfile, VS Code manifests,
 changelogs, workflow example, and versioned documentation. After validation it
-asks whether to create `chore(release): prepare v0.8.2` and the annotated tag
-`git tag -a v0.8.2 -m "v0.8.2"`. A separate final confirmation can atomically
+asks whether to create `chore(release): prepare v0.8.3` and the annotated tag
+`git tag -a v0.8.3 -m "v0.8.3"`. A separate final confirmation can atomically
 push both the current branch and tag to `origin`. Declining either confirmation
 never pushes anything and leaves the prepared state available for review.
 
 Annotated tags are the final release identity. An exact clean tag reports the
 plain version, while development commits report the nearest release plus
-source metadata, such as `0.8.2+dev.3.g8fa23cd12345`. Release jobs fetch full
+source metadata, such as `0.8.3+dev.3.g8fa23cd12345`. Release jobs fetch full
 history and reject a packaged binary whose version differs from the tag. See
 the [version identity reference](reference/versioning.md) for the complete
 contract and fallback behavior.
@@ -120,9 +120,9 @@ GitHub stores Sigstore-backed build provenance for the CLI archive, VSIX, and
 installer. After downloading an artifact, verify both controls:
 
 ```bash
-grep '  jman-0.8.2-linux-x86_64.tar.gz$' SHA256SUMS \
+grep '  jman-0.8.3-linux-x86_64.tar.gz$' SHA256SUMS \
   | sha256sum --check -
-gh attestation verify jman-0.8.2-linux-x86_64.tar.gz \
+gh attestation verify jman-0.8.3-linux-x86_64.tar.gz \
   --repo zonnedev/jman
 ```
 

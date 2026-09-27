@@ -790,14 +790,14 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "javac-frontend"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "jman-audit"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "dirs",
  "futures",
@@ -814,7 +814,7 @@ dependencies = [
 
 [[package]]
 name = "jman-build"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "dirs",
  "flate2",
@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "jman-cli"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -863,7 +863,7 @@ dependencies = [
 
 [[package]]
 name = "jman-config"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "serde",
  "thiserror",
@@ -872,7 +872,7 @@ dependencies = [
 
 [[package]]
 name = "jman-java-lsp"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "base64",
  "dirs",
@@ -890,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "jman-publish"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "anyhow",
  "base64",
@@ -910,7 +910,7 @@ dependencies = [
 
 [[package]]
 name = "jman-resolver"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "dirs",
  "futures",
@@ -927,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "jman-version"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "tempfile",
 ]

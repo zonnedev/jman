@@ -5,6 +5,8 @@ Versioning while it remains pre-1.0.
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-09-27
+
 ### Changed
 
 - Annotated Git release tags now drive user-facing build identity; development
