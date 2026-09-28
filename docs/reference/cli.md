@@ -20,6 +20,7 @@ Create a project or import Maven metadata.
 ```text
 jman init [PATH] [--import] [--lib] [--group GROUP] [--java RELEASE]
           [--version VERSION] [--modules A,B] [--main-class CLASS]
+          [--repository-url URL]
 ```
 
 - `--import` imports a detected Maven project without prompting.
@@ -28,6 +29,13 @@ jman init [PATH] [--import] [--lib] [--group GROUP] [--java RELEASE]
   `--version` defaults to `0.1.0-SNAPSHOT`.
 - `--modules` creates a workspace root and comma-separated child modules.
 - `--main-class` overrides the generated `<group>.<name>.Application`.
+- `--repository-url` records and uses a Maven-compatible repository instead
+  of Maven Central.
+
+JAR projects and modules include JJFS-formatted production and JUnit test
+sources. Initialization also declares JUnit Platform Console Standalone in
+test scope and resolves `jman.lock`, so `jman run` (applications) and
+`jman test` work immediately.
 
 ```bash
 jman init inventory --group dev.example --java 21 \
@@ -68,7 +76,8 @@ The default scope is `compile`. Processor scope writes to
 ```bash
 jman add com.fasterxml.jackson.core:jackson-databind@2.17.2
 jman add org.projectlombok:lombok@1.18.34 --scope processor
-jman add org.junit.jupiter:junit-jupiter@5.10.2 --scope test --path modules/api
+jman add org.junit.platform:junit-platform-console-standalone@1.12.2 \
+  --scope test --path modules/api
 ```
 
 ## jman remove

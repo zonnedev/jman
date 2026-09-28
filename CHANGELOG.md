@@ -5,6 +5,15 @@ Versioning while it remains pre-1.0.
 
 ## [Unreleased]
 
+### Added
+
+- `jman init` now generates JJFS-formatted production and JUnit test sources
+  for applications, libraries, and workspace modules, declares JUnit Platform
+  Console Standalone in test scope, and resolves the initial lockfiles so new
+  projects are ready for `jman run` and `jman test`.
+- `jman init --repository-url` can scaffold and resolve a project against an
+  explicit Maven-compatible repository.
+
 ## [0.8.4] - 2026-09-28
 
 ### Added

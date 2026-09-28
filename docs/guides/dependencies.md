@@ -12,7 +12,7 @@ The add coordinate format is `group:artifact@version`:
 jman add com.fasterxml.jackson.core:jackson-databind@2.17.2
 jman add org.postgresql:postgresql@42.7.4 --scope runtime
 jman add jakarta.servlet:jakarta.servlet-api@6.1.0 --scope provided
-jman add org.junit.jupiter:junit-jupiter@5.10.2 --scope test
+jman add org.junit.platform:junit-platform-console-standalone@1.12.2 --scope test
 jman add org.projectlombok:lombok@1.18.34 --scope processor
 ```
 

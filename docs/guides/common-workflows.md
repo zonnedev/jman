@@ -33,18 +33,20 @@ jman publish --dry-run
 The dry run stages a Maven-shaped repository under `.jman/publications/`
 without installing or uploading it.
 
-## Add a runtime driver and a test library
+## Add a runtime driver or replace the generated test engine
 
 ```bash
 jman add org.postgresql:postgresql@42.7.4 --scope runtime
-jman add org.junit.jupiter:junit-jupiter@5.10.2 --scope test
+jman add org.junit.platform:junit-platform-console-standalone@1.12.2 --scope test
 jman tree
 jman why org.postgresql:postgresql
 ```
 
 Use `runtime` for code needed when the application starts but not while its
-sources compile. Both declarations are written to `jman.toml`, resolved, and
-locked transactionally.
+sources compile. `jman init` already declares JUnit Platform Console
+Standalone; the second command is useful for an older project or after
+removing/replacing its test engine. Both declarations are written to
+`jman.toml`, resolved, and locked transactionally.
 
 ## Add Lombok as an annotation processor
 

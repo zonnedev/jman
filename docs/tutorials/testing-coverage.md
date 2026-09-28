@@ -3,10 +3,14 @@
 This tutorial adds unit and integration tests, runs precise selectors, and
 turns coverage expectations into a checked project policy.
 
-## 1. Declare a JUnit engine
+## 1. Start with a JUnit engine
+
+New projects created by `jman init` already contain a sample test and the
+JUnit Platform Console Standalone dependency. For an existing project that
+does not have a JUnit engine yet, add it explicitly:
 
 ```bash
-jman add org.junit.jupiter:junit-jupiter@5.10.2 --scope test
+jman add org.junit.platform:junit-platform-console-standalone@1.12.2 --scope test
 ```
 
 Place fast tests in `src/test/java` and broader tests in

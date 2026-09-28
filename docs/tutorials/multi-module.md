@@ -15,7 +15,9 @@ cd example-platform
 ```
 
 The root manifest lists both modules and uses aggregator packaging. Each module
-has its own manifest and lockfile; create source roots as you add code.
+has its own manifest and lockfile plus JJFS-formatted `Library.java` and
+`LibraryTest.java` starting points. Replace those examples as the modules take
+shape.
 
 ## 2. Make the API reusable
 
@@ -41,7 +43,8 @@ mkdir -p api/src/main/java/dev/example/api
 package dev.example.api;
 
 public final class Greeting {
-  private Greeting() {}
+  private Greeting() {
+  }
 
   public static String forName(String name) {
     return "Hello, " + name + "!";

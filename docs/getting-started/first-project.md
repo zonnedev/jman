@@ -1,7 +1,7 @@
 # Your first JMAN project
 
-This tutorial creates a small Java application, adds a real test dependency,
-runs a JUnit test, and packages the result.
+This tutorial creates a small Java application, runs its generated JUnit test,
+and packages the result.
 
 ## 1. Create the application
 
@@ -14,53 +14,34 @@ jman init greeting \
 cd greeting
 ```
 
-JMAN creates `jman.toml`, `jman.lock`, and the standard Java source/resource
-directories. Replace `src/main/java/dev/example/greeting/Application.java`
-with a small function that can be tested directly:
+JMAN creates `jman.toml`, resolves `jman.lock`, declares JUnit Platform Console
+Standalone in test scope, and generates JJFS-formatted production and test
+sources. The generated application is ready to run:
+
+```bash
+jman run
+```
+
+Its `src/main/java/dev/example/greeting/Application.java` starts as:
 
 ```java
 package dev.example.greeting;
 
 public final class Application {
-  private Application() {}
-
-  public static void main(String[] args) {
-    var name = args.length == 0 ? "World" : args[0];
-    System.out.println(greeting(name));
+  private Application() {
   }
 
-  static String greeting(String name) {
-    return "Hello, " + name + "!";
+  public static void main(String[] args) {
+    System.out.println(greeting());
+  }
+
+  static String greeting() {
+    return "Hello from greeting!";
   }
 }
 ```
 
-Run it with and without an application argument:
-
-```bash
-jman run
-jman run -- Ada
-```
-
-## 2. Add JUnit
-
-Declare JUnit only on the test classpath:
-
-```bash
-jman add org.junit.jupiter:junit-jupiter@5.10.2 --scope test
-```
-
-`jman add` updates `jman.toml`, resolves the graph, and rewrites `jman.lock` as
-one operation. Inspect what was selected:
-
-```bash
-jman tree
-jman why org.junit.jupiter:junit-jupiter
-```
-
-## 3. Write a test
-
-Create `src/test/java/dev/example/greeting/GreetingTest.java`:
+The companion `src/test/java/dev/example/greeting/ApplicationTest.java` is:
 
 ```java
 package dev.example.greeting;
@@ -68,15 +49,15 @@ package dev.example.greeting;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-final class GreetingTest {
+final class ApplicationTest {
   @Test
-  void buildsAGreeting() {
-    Assertions.assertEquals("Hello, Ada!", Application.greeting("Ada"));
+  void createsGreeting() {
+    Assertions.assertEquals("Hello from greeting!", Application.greeting());
   }
 }
 ```
 
-Run it:
+## 2. Run the test
 
 ```bash
 jman test
@@ -85,7 +66,14 @@ jman test
 JMAN reports modules, suites, and individual cases as they complete. A final
 summary contains the real suite duration and pass/fail/skip totals.
 
-## 4. Check and package
+Inspect the generated dependency graph and why the runner is present:
+
+```bash
+jman tree
+jman why org.junit.platform:junit-platform-console-standalone
+```
+
+## 3. Check and package
 
 ```bash
 jman check
@@ -105,7 +93,7 @@ java -jar .jman/artifacts/greeting-1.0.0-fat.jar
 The exact fat-JAR suffix is shown by `jman build`; use that reported path when
 the project name or version differs.
 
-## 5. Try the reproducible path
+## 4. Try the reproducible path
 
 Once dependencies and the JDK are cached, confirm the project works without
 network access:

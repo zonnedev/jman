@@ -25,10 +25,13 @@ manual installation, non-interactive options, and verification details.
 ```console
 $ jman init hello --main-class dev.example.Application
 $ cd hello
-$ jman add org.junit.jupiter:junit-jupiter@5.10.2 --scope test
-$ jman test
 $ jman run
+$ jman test
 ```
+
+`jman init` creates JJFS-formatted production and test sources, declares the
+JUnit Platform on the test classpath, and resolves the initial lockfile. The
+new project is ready to run and test immediately.
 
 JMAN uses a readable `jman.toml` manifest and a deterministic `jman.lock`. Its
 normal build path does not invoke Maven or Gradle, but existing Maven projects

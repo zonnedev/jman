@@ -31,6 +31,9 @@ mod ui;
 use dependency_report::{dependency_path_tree, terminal_text};
 use ui::Ui;
 
+const SCAFFOLD_JUNIT_COORDINATE: &str = "org.junit.platform:junit-platform-console-standalone";
+const SCAFFOLD_JUNIT_VERSION: &str = "1.12.2";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "jman",
@@ -139,6 +142,9 @@ struct Init {
     /// Application entry point; defaults to <group>.<name>.Application.
     #[arg(long, conflicts_with = "lib")]
     main_class: Option<String>,
+    /// Maven-compatible repository used by the generated project.
+    #[arg(long, value_name = "URL")]
+    repository_url: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -3457,6 +3463,7 @@ async fn scaffold_project(arguments: &Init, target: &Path, ui: &Ui) -> Result<()
         }
     }
     let activity = ui.activity(format!("Creating project {}", target.display()));
+    let repositories = scaffold_repositories(arguments.repository_url.as_deref());
     let mut root_manifest = scaffold_manifest(
         &arguments.group,
         name,
@@ -3480,6 +3487,7 @@ async fn scaffold_project(arguments: &Init, target: &Path, ui: &Ui) -> Result<()
             }))
         },
     )?;
+    root_manifest.repositories.clone_from(&repositories);
     if let Some(toolchain) = existing_toolchain {
         if jman_config::java_feature_version(&toolchain.jdk)
             .is_some_and(|major| major < arguments.java)
@@ -3494,29 +3502,22 @@ async fn scaffold_project(arguments: &Init, target: &Path, ui: &Ui) -> Result<()
     }
     let mut projects = vec![(target.to_owned(), root_manifest)];
     for module in &arguments.modules {
-        projects.push((
-            target.join(module),
-            scaffold_manifest(
-                &arguments.group,
-                module,
-                &arguments.version,
-                arguments.java,
-                "jar",
-                Vec::new(),
-                None,
-            )?,
-        ));
+        let mut manifest = scaffold_manifest(
+            &arguments.group,
+            module,
+            &arguments.version,
+            arguments.java,
+            "jar",
+            Vec::new(),
+            None,
+        )?;
+        manifest.repositories.clone_from(&repositories);
+        projects.push((target.join(module), manifest));
     }
     let mut files = Vec::<(PathBuf, String)>::new();
     for (directory, manifest) in &projects {
         let manifest_text = manifest.to_toml().context("could not generate jman.toml")?;
-        files.push((directory.join("jman.toml"), manifest_text.clone()));
-        files.push((
-            directory.join("jman.lock"),
-            empty_lock(&manifest_text, arguments.java)
-                .to_toml()
-                .context("could not generate jman.lock")?,
-        ));
+        files.push((directory.join("jman.toml"), manifest_text));
         let package = format!(
             "{}/{}",
             arguments.group.replace('.', "/"),
@@ -3524,8 +3525,6 @@ async fn scaffold_project(arguments: &Init, target: &Path, ui: &Ui) -> Result<()
         );
         let main_root = directory.join("src/main/java").join(&package);
         let test_root = directory.join("src/test/java").join(&package);
-        files.push((main_root.join(".gitkeep"), String::new()));
-        files.push((test_root.join(".gitkeep"), String::new()));
         files.push((directory.join("src/main/resources/.gitkeep"), String::new()));
         files.push((directory.join("src/test/resources/.gitkeep"), String::new()));
         if let Some(main_class) = &manifest.project.main_class {
@@ -3537,15 +3536,32 @@ async fn scaffold_project(arguments: &Init, target: &Path, ui: &Ui) -> Result<()
                 .join(class_package.replace('.', "/"));
             files.push((
                 source_root.join(format!("{class_name}.java")),
-                format!(
-                    "package {class_package};\n\npublic final class {class_name} {{\n\
-                     \x20   private {class_name}() {{}}\n\n\
-                     \x20   public static void main(String[] args) {{\n\
-                     \x20       System.out.println(\"Hello from {}!\");\n\
-                     \x20   }}\n}}\n",
-                    manifest.project.name
-                ),
+                scaffold_application_source(class_package, class_name, &manifest.project.name),
             ));
+            files.push((
+                directory
+                    .join("src/test/java")
+                    .join(class_package.replace('.', "/"))
+                    .join(format!("{class_name}Test.java")),
+                scaffold_application_test_source(class_package, class_name, &manifest.project.name),
+            ));
+        } else if manifest.project.packaging == "jar" {
+            let class_package = format!(
+                "{}.{}",
+                arguments.group,
+                java_package_segment(&manifest.project.name)
+            );
+            files.push((
+                main_root.join("Library.java"),
+                scaffold_library_source(&class_package, &manifest.project.name),
+            ));
+            files.push((
+                test_root.join("LibraryTest.java"),
+                scaffold_library_test_source(&class_package, &manifest.project.name),
+            ));
+        } else {
+            files.push((main_root.join(".gitkeep"), String::new()));
+            files.push((test_root.join(".gitkeep"), String::new()));
         }
     }
     files.push((
@@ -3567,6 +3583,16 @@ async fn scaffold_project(arguments: &Init, target: &Path, ui: &Ui) -> Result<()
         tokio::fs::write(&path, contents)
             .await
             .with_context(|| format!("could not write {}", path.display()))?;
+    }
+    for (directory, _) in &projects {
+        sync_one(directory, false, false, Some(&activity))
+            .await
+            .with_context(|| {
+                format!(
+                    "could not prepare dependencies for generated project {}",
+                    directory.display()
+                )
+            })?;
     }
     activity.finish(format!("Created {}", target.display()));
     ui.success(format!(
@@ -3594,6 +3620,17 @@ fn scaffold_manifest(
     modules: Vec<String>,
     main_class: Option<String>,
 ) -> Result<Manifest> {
+    let dependencies = if packaging == "jar" {
+        Dependencies {
+            test: BTreeMap::from([(
+                SCAFFOLD_JUNIT_COORDINATE.to_owned(),
+                SCAFFOLD_JUNIT_VERSION.to_owned(),
+            )]),
+            ..Dependencies::default()
+        }
+    } else {
+        Dependencies::default()
+    };
     let manifest = Manifest {
         manifest_version: MANIFEST_VERSION,
         project: Project {
@@ -3618,7 +3655,7 @@ fn scaffold_manifest(
         publishing: None,
         audit: None,
         repositories: Vec::new(),
-        dependencies: Dependencies::default(),
+        dependencies,
         annotation_processors: BTreeMap::new(),
         path_dependencies: BTreeMap::new(),
     };
@@ -3626,16 +3663,70 @@ fn scaffold_manifest(
     Ok(manifest)
 }
 
-fn empty_lock(manifest: &str, java_release: u16) -> Lockfile {
-    Lockfile {
-        lock_version: LOCK_VERSION,
-        manifest_hash: sha256(manifest.as_bytes()),
-        workspace_hash: sha256(manifest.as_bytes()),
-        platform: platform_id(),
-        toolchain: LockedToolchain { java_release },
-        packages: Vec::new(),
-        classpath: LockedClasspaths::default(),
-    }
+fn scaffold_repositories(repository_url: Option<&str>) -> Vec<Repository> {
+    repository_url.map_or_else(Vec::new, |url| {
+        vec![Repository {
+            id: "project".to_owned(),
+            url: url.to_owned(),
+        }]
+    })
+}
+
+fn scaffold_application_source(package: &str, class: &str, project: &str) -> String {
+    format!(
+        "package {package};\n\n\
+         public final class {class} {{\n\
+         \x20 private {class}() {{\n\
+         \x20 }}\n\n\
+         \x20 public static void main(String[] args) {{\n\
+         \x20   System.out.println(greeting());\n\
+         \x20 }}\n\n\
+         \x20 static String greeting() {{\n\
+         \x20   return \"Hello from {project}!\";\n\
+         \x20 }}\n\
+         }}\n"
+    )
+}
+
+fn scaffold_application_test_source(package: &str, class: &str, project: &str) -> String {
+    format!(
+        "package {package};\n\n\
+         import org.junit.jupiter.api.Assertions;\n\
+         import org.junit.jupiter.api.Test;\n\n\
+         final class {class}Test {{\n\
+         \x20 @Test\n\
+         \x20 void createsGreeting() {{\n\
+         \x20   Assertions.assertEquals(\"Hello from {project}!\", {class}.greeting());\n\
+         \x20 }}\n\
+         }}\n"
+    )
+}
+
+fn scaffold_library_source(package: &str, project: &str) -> String {
+    format!(
+        "package {package};\n\n\
+         public final class Library {{\n\
+         \x20 private Library() {{\n\
+         \x20 }}\n\n\
+         \x20 public static String name() {{\n\
+         \x20   return \"{project}\";\n\
+         \x20 }}\n\
+         }}\n"
+    )
+}
+
+fn scaffold_library_test_source(package: &str, project: &str) -> String {
+    format!(
+        "package {package};\n\n\
+         import org.junit.jupiter.api.Assertions;\n\
+         import org.junit.jupiter.api.Test;\n\n\
+         final class LibraryTest {{\n\
+         \x20 @Test\n\
+         \x20 void exposesLibraryName() {{\n\
+         \x20   Assertions.assertEquals(\"{project}\", Library.name());\n\
+         \x20 }}\n\
+         }}\n"
+    )
 }
 
 fn validate_scaffold_name(kind: &str, name: &str) -> Result<()> {

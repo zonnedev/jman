@@ -769,11 +769,17 @@ fn lsp_command_accepts_the_stdio_flag_appended_by_editor_clients() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn initializes_native_app_library_and_workspace() {
     let root = tempfile::tempdir().expect("temporary root");
+    let cache = tempfile::tempdir().expect("temporary cache");
+    let repository = tempfile::tempdir().expect("temporary repository");
+    write_scaffold_junit_fixture(repository.path());
+    let repository_url = format!("file://{}", repository.path().display());
     let binary = env!("CARGO_BIN_EXE_jman");
     let app = root.path().join("hello-app");
     let output = Command::new(binary)
+        .env("JMAN_CACHE_DIR", cache.path())
         .args([
             "--no-progress",
             "init",
@@ -782,6 +788,8 @@ fn initializes_native_app_library_and_workspace() {
             "dev.example",
             "--java",
             "17",
+            "--repository-url",
+            &repository_url,
         ])
         .output()
         .expect("initialize app");
@@ -792,19 +800,84 @@ fn initializes_native_app_library_and_workspace() {
     );
     let manifest = fs::read_to_string(app.join("jman.toml")).expect("app manifest");
     assert!(manifest.contains("main-class = \"dev.example.hello_app.Application\""));
+    assert!(
+        manifest.contains("\"org.junit.platform:junit-platform-console-standalone\" = \"1.12.2\"")
+    );
     assert!(app
         .join("src/main/java/dev/example/hello_app/Application.java")
         .is_file());
+    let application =
+        fs::read_to_string(app.join("src/main/java/dev/example/hello_app/Application.java"))
+            .expect("application source");
+    assert_eq!(
+        application,
+        r#"package dev.example.hello_app;
+
+public final class Application {
+  private Application() {
+  }
+
+  public static void main(String[] args) {
+    System.out.println(greeting());
+  }
+
+  static String greeting() {
+    return "Hello from hello-app!";
+  }
+}
+"#
+    );
+    let application_test =
+        fs::read_to_string(app.join("src/test/java/dev/example/hello_app/ApplicationTest.java"))
+            .expect("application test source");
+    assert!(application_test.contains("import org.junit.jupiter.api.Assertions;"));
+    assert!(application_test.contains("@Test\n  void createsGreeting()"));
+    assert!(application_test
+        .contains("Assertions.assertEquals(\"Hello from hello-app!\", Application.greeting());"));
     assert!(app.join("jman.lock").is_file());
+    assert!(fs::read_to_string(app.join("jman.lock"))
+        .expect("app lock")
+        .contains("artifact = \"junit-platform-console-standalone\""));
     assert!(app.join("src/main/resources").is_dir());
+    let format = Command::new(binary)
+        .args([
+            "--no-progress",
+            "fmt",
+            "--check",
+            app.to_str().expect("UTF-8 path"),
+        ])
+        .output()
+        .expect("check generated formatting");
+    assert!(
+        format.status.success(),
+        "{}",
+        String::from_utf8_lossy(&format.stderr)
+    );
+    let run = Command::new(binary)
+        .env("JMAN_CACHE_DIR", cache.path())
+        .args(["--no-progress", "run", app.to_str().expect("UTF-8 path")])
+        .output()
+        .expect("run generated application");
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(run.stdout).expect("UTF-8 application output"),
+        "Hello from hello-app!\n"
+    );
 
     let library = root.path().join("utilities");
     assert!(Command::new(binary)
+        .env("JMAN_CACHE_DIR", cache.path())
         .args([
             "--quiet",
             "init",
             library.to_str().expect("UTF-8 path"),
             "--lib",
+            "--repository-url",
+            &repository_url,
         ])
         .status()
         .expect("initialize library")
@@ -812,15 +885,38 @@ fn initializes_native_app_library_and_workspace() {
     assert!(!fs::read_to_string(library.join("jman.toml"))
         .expect("library manifest")
         .contains("main-class"));
+    assert!(library
+        .join("src/main/java/com/example/utilities/Library.java")
+        .is_file());
+    assert!(library
+        .join("src/test/java/com/example/utilities/LibraryTest.java")
+        .is_file());
+    let format = Command::new(binary)
+        .args([
+            "--no-progress",
+            "fmt",
+            "--check",
+            library.to_str().expect("UTF-8 path"),
+        ])
+        .output()
+        .expect("check generated library formatting");
+    assert!(
+        format.status.success(),
+        "{}",
+        String::from_utf8_lossy(&format.stderr)
+    );
 
     let workspace = root.path().join("platform");
     assert!(Command::new(binary)
+        .env("JMAN_CACHE_DIR", cache.path())
         .args([
             "--quiet",
             "init",
             workspace.to_str().expect("UTF-8 path"),
             "--modules",
             "core,service",
+            "--repository-url",
+            &repository_url,
         ])
         .status()
         .expect("initialize workspace")
@@ -834,8 +930,29 @@ fn initializes_native_app_library_and_workspace() {
             .join(module)
             .join("src/main/java/com/example")
             .join(module)
-            .is_dir());
+            .join("Library.java")
+            .is_file());
+        assert!(workspace
+            .join(module)
+            .join("src/test/java/com/example")
+            .join(module)
+            .join("LibraryTest.java")
+            .is_file());
     }
+    let format = Command::new(binary)
+        .args([
+            "--no-progress",
+            "fmt",
+            "--check",
+            workspace.to_str().expect("UTF-8 path"),
+        ])
+        .output()
+        .expect("check generated workspace formatting");
+    assert!(
+        format.status.success(),
+        "{}",
+        String::from_utf8_lossy(&format.stderr)
+    );
 
     let repeated = Command::new(binary)
         .args(["init", app.to_str().expect("UTF-8 path")])
@@ -857,7 +974,14 @@ vendor = "zulu"
     )
     .expect("toolchain-only manifest");
     let upgraded = Command::new(binary)
-        .args(["--quiet", "init", pinned.to_str().expect("UTF-8 path")])
+        .env("JMAN_CACHE_DIR", cache.path())
+        .args([
+            "--quiet",
+            "init",
+            pinned.to_str().expect("UTF-8 path"),
+            "--repository-url",
+            &repository_url,
+        ])
         .output()
         .expect("upgrade toolchain manifest");
     assert!(
@@ -1691,6 +1815,28 @@ fn write_minimal_pom(project: &std::path::Path, group: &str) {
         ),
     )
     .expect("POM");
+}
+
+fn write_scaffold_junit_fixture(repository: &std::path::Path) {
+    let artifact = repository.join("org/junit/platform/junit-platform-console-standalone/1.12.2");
+    fs::create_dir_all(&artifact).expect("JUnit fixture directory");
+    fs::write(
+        artifact.join("junit-platform-console-standalone-1.12.2.pom"),
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>org.junit.platform</groupId>
+  <artifactId>junit-platform-console-standalone</artifactId>
+  <version>1.12.2</version>
+</project>
+"#,
+    )
+    .expect("JUnit fixture POM");
+    fs::write(
+        artifact.join("junit-platform-console-standalone-1.12.2.jar"),
+        b"fixture",
+    )
+    .expect("JUnit fixture JAR");
 }
 
 #[cfg(unix)]

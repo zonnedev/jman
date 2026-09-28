@@ -9,10 +9,10 @@ greeting/
 ├── jman.lock
 ├── src/
 │   ├── main/
-│   │   ├── java/
+│   │   ├── java/dev/example/greeting/Application.java
 │   │   └── resources/
 │   ├── test/
-│   │   ├── java/
+│   │   ├── java/dev/example/greeting/ApplicationTest.java
 │   │   └── resources/
 │   └── integrationTest/
 │       ├── java/
@@ -64,7 +64,8 @@ main-class = "dev.example.greeting.Application"
 
 A library omits `main-class` and can be scaffolded with `jman init --lib`.
 `jman run` requires a configured main class, while both project types can be
-built and published.
+built, tested, and published. Both scaffolds include a test-scoped JUnit
+Platform dependency and a JJFS-formatted example test.
 
 ## Multi-module roots
 
