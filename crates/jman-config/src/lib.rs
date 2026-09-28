@@ -35,8 +35,27 @@ pub enum ConfigError {
         actual: u32,
         supported: u32,
     },
+    #[error(
+        "{path} selects a Java toolchain but does not define a JMAN project; add [project] or run `jman init`"
+    )]
+    ToolchainOnly { path: PathBuf },
     #[error("invalid configuration: {0}")]
     Validation(String),
+}
+
+/// A parsed `jman.toml`, which may select only Java or define a full project.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ManifestFile {
+    Toolchain(ToolchainManifest),
+    Project(Box<Manifest>),
+}
+
+/// A `jman.toml` that selects Java without declaring a native JMAN project.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct ToolchainManifest {
+    pub manifest_version: u32,
+    pub toolchain: Toolchain,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -357,16 +376,12 @@ impl Manifest {
     ///
     /// Returns an error when the file cannot be read, parsed, or validated.
     pub fn read(path: &Path) -> Result<Self, ConfigError> {
-        let text = fs::read_to_string(path).map_err(|source| ConfigError::Read {
-            path: path.to_owned(),
-            source,
-        })?;
-        let manifest: Self = toml::from_str(&text).map_err(|source| ConfigError::Parse {
-            path: path.to_owned(),
-            source,
-        })?;
-        manifest.validate()?;
-        Ok(manifest)
+        match ManifestFile::read(path)? {
+            ManifestFile::Project(manifest) => Ok(*manifest),
+            ManifestFile::Toolchain(_) => Err(ConfigError::ToolchainOnly {
+                path: path.to_owned(),
+            }),
+        }
     }
 
     /// Validate schema compatibility and semantic invariants.
@@ -392,11 +407,7 @@ impl Manifest {
             validate_java_name("main class", main_class)?;
         }
         if let Some(toolchain) = &self.toolchain {
-            let major = toolchain
-                .jdk
-                .split('.')
-                .next()
-                .and_then(|value| value.parse::<u16>().ok());
+            let major = java_feature_version(&toolchain.jdk);
             if major.is_none_or(|major| major < self.project.java_release) {
                 return Err(ConfigError::Validation(format!(
                     "toolchain JDK `{}` must be a valid version at least as new as Java release {}",
@@ -453,6 +464,93 @@ impl Manifest {
     }
 
     /// Serialize a validated manifest deterministically.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when validation or TOML serialization fails.
+    pub fn to_toml(&self) -> Result<String, ConfigError> {
+        self.validate()?;
+        Ok(toml::to_string_pretty(self)?)
+    }
+}
+
+impl ManifestFile {
+    /// Parse and validate either supported `jman.toml` mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be read, parsed, or validated.
+    pub fn read(path: &Path) -> Result<Self, ConfigError> {
+        #[derive(Deserialize)]
+        struct ManifestProbe {
+            project: Option<toml::Value>,
+        }
+
+        let text = fs::read_to_string(path).map_err(|source| ConfigError::Read {
+            path: path.to_owned(),
+            source,
+        })?;
+        let probe: ManifestProbe = toml::from_str(&text).map_err(|source| ConfigError::Parse {
+            path: path.to_owned(),
+            source,
+        })?;
+        if probe.project.is_some() {
+            let manifest: Manifest =
+                toml::from_str(&text).map_err(|source| ConfigError::Parse {
+                    path: path.to_owned(),
+                    source,
+                })?;
+            manifest.validate()?;
+            return Ok(Self::Project(Box::new(manifest)));
+        }
+
+        let manifest: ToolchainManifest =
+            toml::from_str(&text).map_err(|source| ConfigError::Parse {
+                path: path.to_owned(),
+                source,
+            })?;
+        manifest.validate()?;
+        Ok(Self::Toolchain(manifest))
+    }
+
+    #[must_use]
+    pub const fn toolchain(&self) -> Option<&Toolchain> {
+        match self {
+            Self::Toolchain(manifest) => Some(&manifest.toolchain),
+            Self::Project(manifest) => manifest.toolchain.as_ref(),
+        }
+    }
+
+    #[must_use]
+    pub const fn is_project(&self) -> bool {
+        matches!(self, Self::Project(_))
+    }
+}
+
+impl ToolchainManifest {
+    /// Validate schema compatibility and the selected JDK identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported schema or invalid selection.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.manifest_version != MANIFEST_VERSION {
+            return Err(ConfigError::UnsupportedVersion {
+                kind: "manifest",
+                actual: self.manifest_version,
+                supported: MANIFEST_VERSION,
+            });
+        }
+        if java_feature_version(&self.toolchain.jdk).is_none() {
+            return Err(ConfigError::Validation(format!(
+                "toolchain JDK `{}` must be a valid Java version",
+                self.toolchain.jdk
+            )));
+        }
+        validate_jdk_vendor(&self.toolchain.vendor)
+    }
+
+    /// Serialize a validated toolchain-only manifest deterministically.
     ///
     /// # Errors
     ///
@@ -592,6 +690,23 @@ fn validate_jdk_vendor(vendor: &str) -> Result<(), ConfigError> {
             "JDK vendor `{vendor}` must be a lowercase identifier"
         )))
     }
+}
+
+/// Return the Java feature version from a major or exact JDK version.
+#[must_use]
+pub fn java_feature_version(version: &str) -> Option<u16> {
+    let digit_count = version.bytes().take_while(u8::is_ascii_digit).count();
+    if digit_count == 0 {
+        return None;
+    }
+    let suffix = &version[digit_count..];
+    if !suffix.is_empty() && !matches!(suffix.as_bytes()[0], b'.' | b'+' | b'-') {
+        return None;
+    }
+    version[..digit_count]
+        .parse::<u16>()
+        .ok()
+        .filter(|major| *major > 0)
 }
 
 fn validate_publishing(publishing: &Publishing) -> Result<(), ConfigError> {
@@ -830,6 +945,71 @@ mod tests {
         assert!(text.contains("[dependencies.compile]"));
         assert!(text.contains("modules = ["));
         assert!(text.contains("[path-dependencies]"));
+    }
+
+    #[test]
+    fn toolchain_only_manifest_is_valid_but_not_a_build_manifest() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("jman.toml");
+        fs::write(
+            &path,
+            r#"manifest-version = 1
+
+[toolchain]
+jdk = "25"
+vendor = "zulu"
+"#,
+        )
+        .expect("toolchain manifest");
+
+        let document = ManifestFile::read(&path).expect("valid jman.toml");
+        assert!(!document.is_project());
+        assert_eq!(document.toolchain().expect("toolchain").jdk, "25");
+        assert!(matches!(
+            Manifest::read(&path),
+            Err(ConfigError::ToolchainOnly { .. })
+        ));
+    }
+
+    #[test]
+    fn toolchain_only_manifest_accepts_exact_versions_without_a_patch_component() {
+        let manifest = ToolchainManifest {
+            manifest_version: MANIFEST_VERSION,
+            toolchain: Toolchain {
+                jdk: "27+35".to_owned(),
+                vendor: "zulu".to_owned(),
+            },
+        };
+
+        assert!(manifest.validate().is_ok());
+        assert!(manifest
+            .to_toml()
+            .expect("valid manifest")
+            .contains("jdk = \"27+35\""));
+    }
+
+    #[test]
+    fn toolchain_only_manifest_rejects_project_configuration_without_project() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("jman.toml");
+        fs::write(
+            &path,
+            r#"manifest-version = 1
+
+[toolchain]
+jdk = "25"
+vendor = "zulu"
+
+[dependencies.compile]
+"org.example:library" = "1"
+"#,
+        )
+        .expect("invalid manifest");
+
+        assert!(matches!(
+            ManifestFile::read(&path),
+            Err(ConfigError::Parse { .. })
+        ));
     }
 
     #[test]

@@ -144,13 +144,13 @@ Inside a project that needs Java 25:
 
 ```bash
 jman java install 25 --vendor zulu
-jman java use 25 --vendor zulu
 jman java which
 java --version
 ```
 
-The project pin wins only inside that project. Outside it, the exact global
-selection remains effective.
+Installation creates or updates the nearest `jman.toml`; no separate selection
+command is needed. The directory pin wins only inside that tree. Outside it,
+the exact global selection remains effective.
 
 ## Run one command with another installed JDK
 

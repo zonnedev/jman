@@ -311,15 +311,17 @@ jman doctor services/orders
 
 ```text
 jman java install VERSION [--vendor VENDOR] [--offline]
-                          [--global]
+                          [--path PATH | --global]
 ```
 
 `VERSION` can be a feature release such as `21` or an exact version such as
 `25.0.1+8`. Temurin is the default download vendor. Offline mode selects only
-an already installed match from that vendor. `--global` selects the exact
-installed release as the current user's default after installation. JMAN
-automatically selects the current operating system and processor architecture;
-cross-platform JDK installation is intentionally not exposed.
+an already installed match from that vendor. By default, the command also
+selects the JDK in the nearest `jman.toml`, creating a toolchain-only manifest
+in the current directory when needed. `--path` changes that directory context.
+`--global` instead selects the exact installed release as the current user's
+default. JMAN automatically selects the current operating system and processor
+architecture; cross-platform JDK installation is intentionally not exposed.
 
 ```bash
 jman java install 21 --global
@@ -353,11 +355,11 @@ jman java remove VERSION [--vendor VENDOR] [--all] [--dry-run]
 ```
 
 `--all` removes every installed match for the requested major. Pin-safety is
-checked against the nearest project at `--path`; `--force` overrides a project
-pin. A globally selected JDK must be replaced before it can be removed. Without
-`--vendor`, JMAN uses a matching project selection, then a matching global
-selection, then a unique installed vendor; ambiguous matches require an
-explicit vendor.
+checked against the nearest `jman.toml` at `--path`; `--force` overrides a
+directory or project pin. A globally selected JDK must be replaced before it
+can be removed. Without `--vendor`, JMAN uses a matching local selection, then
+a matching global selection, then a unique installed vendor; ambiguous matches
+require an explicit vendor.
 
 ```bash
 jman java remove 21 --dry-run
@@ -371,11 +373,12 @@ jman java use VERSION [--vendor VENDOR] [--path PATH | --global]
 ```
 
 Select a JDK that is already installed. The default writes the version/vendor
-into the nearest project's `[toolchain]` section. `--global` instead records
-the exact installed release as the current user's default. When `--vendor` is
-omitted, JMAN uses a matching project selection, then a matching global
-selection, then a unique installed vendor. Ambiguous matches require an
-explicit vendor. This command never downloads a JDK.
+into the nearest `jman.toml`, creating a toolchain-only manifest at `--path`
+when needed. `--global` instead records the exact installed release as the
+current user's default. When `--vendor` is omitted, JMAN uses a matching
+directory or project selection, then a matching global selection, then a
+unique installed vendor. Ambiguous matches require an explicit vendor. This
+command never downloads a JDK.
 
 ```bash
 jman java use 25 --vendor zulu
@@ -388,8 +391,9 @@ jman java use 21 --global
 jman java which [PATH] [--format human|json|home|shell]
 ```
 
-Print the effective managed JDK and its selection source. The nearest project
-pin wins over the global selection. `home` prints only the JDK directory;
+Print the effective managed JDK and its selection source. The nearest
+directory or project selection wins over the global selection. `home` prints
+only the JDK directory;
 `shell` prints a POSIX `JAVA_HOME` export.
 
 ```bash
@@ -405,9 +409,9 @@ jman java exec [VERSION] [--vendor VENDOR] [--path PATH] -- COMMAND [ARGUMENTS..
 
 Execute a command with the effective JDK's `JAVA_HOME` and `bin` directory.
 Supplying `VERSION` selects a matching installed JDK for this invocation only.
-Without `--vendor`, JMAN uses a matching project selection, then a matching
-global selection, then a unique installed vendor; ambiguous matches require an
-explicit vendor.
+Without `--vendor`, JMAN uses a matching directory or project selection, then
+a matching global selection, then a unique installed vendor; ambiguous matches
+require an explicit vendor.
 
 ```bash
 jman java exec -- java --version

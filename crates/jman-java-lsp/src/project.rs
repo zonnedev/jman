@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use jman_config::{Lockfile, Manifest};
+use jman_config::{Lockfile, Manifest, ManifestFile};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -96,7 +96,13 @@ impl CompileModel {
 pub fn detect_build_tools(root: &Path) -> Vec<BuildTool> {
     let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
     let mut tools = Vec::new();
-    if root.join("jman.toml").is_file() {
+    let jman_toml = root.join("jman.toml");
+    if jman_toml.is_file()
+        && !matches!(
+            ManifestFile::read(&jman_toml),
+            Ok(ManifestFile::Toolchain(_))
+        )
+    {
         tools.push(BuildTool::Jman { root: root.clone() });
     }
     let gradlew = root.join("gradlew");
@@ -786,6 +792,27 @@ mod tests {
         assert!(matches!(&tools[1], BuildTool::Gradle { .. }));
         assert!(matches!(&tools[2], BuildTool::Maven { .. }));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn toolchain_only_jman_toml_does_not_replace_the_project_build_system() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let root = directory.path();
+        std::fs::write(
+            root.join("jman.toml"),
+            r#"manifest-version = 1
+
+[toolchain]
+jdk = "21"
+vendor = "temurin"
+"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("pom.xml"), "<project/>").unwrap();
+
+        let tools = detect_build_tools(root);
+        assert_eq!(tools.len(), 1);
+        assert!(matches!(&tools[0], BuildTool::Maven { .. }));
     }
 
     #[test]

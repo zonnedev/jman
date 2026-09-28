@@ -843,6 +843,32 @@ fn initializes_native_app_library_and_workspace() {
         .expect("repeat initialization");
     assert!(!repeated.status.success());
     assert!(String::from_utf8_lossy(&repeated.stderr).contains("non-empty directory"));
+
+    let pinned = root.path().join("pinned-app");
+    fs::create_dir_all(&pinned).expect("pinned directory");
+    fs::write(
+        pinned.join("jman.toml"),
+        r#"manifest-version = 1
+
+[toolchain]
+jdk = "25"
+vendor = "zulu"
+"#,
+    )
+    .expect("toolchain-only manifest");
+    let upgraded = Command::new(binary)
+        .args(["--quiet", "init", pinned.to_str().expect("UTF-8 path")])
+        .output()
+        .expect("upgrade toolchain manifest");
+    assert!(
+        upgraded.status.success(),
+        "{}",
+        String::from_utf8_lossy(&upgraded.stderr)
+    );
+    let upgraded = fs::read_to_string(pinned.join("jman.toml")).expect("upgraded manifest");
+    assert!(upgraded.contains("[project]"));
+    assert!(upgraded.contains("jdk = \"25\""));
+    assert!(upgraded.contains("vendor = \"zulu\""));
 }
 
 #[test]
@@ -1580,13 +1606,23 @@ fn maven_import_prefers_the_project_wrapper_and_translates_its_effective_model()
 
 #[cfg(unix)]
 #[test]
-fn maven_import_uses_system_maven_when_the_wrapper_is_absent() {
+fn maven_import_uses_system_maven_and_preserves_a_directory_toolchain() {
     let project = tempfile::tempdir().expect("temporary project");
     let cache = tempfile::tempdir().expect("temporary cache");
     let commands = tempfile::tempdir().expect("commands");
     write_minimal_pom(project.path(), "native.example");
     write_effective_model(project.path(), "system.example");
     write_fake_maven(&commands.path().join("mvn"), "system-called", true);
+    fs::write(
+        project.path().join("jman.toml"),
+        r#"manifest-version = 1
+
+[toolchain]
+jdk = "25"
+vendor = "zulu"
+"#,
+    )
+    .expect("directory toolchain manifest");
 
     let output = Command::new(env!("CARGO_BIN_EXE_jman"))
         .env("JMAN_CACHE_DIR", cache.path())
@@ -1608,6 +1644,8 @@ fn maven_import_uses_system_maven_when_the_wrapper_is_absent() {
     assert!(project.path().join("system-called").is_file());
     let manifest = fs::read_to_string(project.path().join("jman.toml")).expect("manifest");
     assert!(manifest.contains("group = \"system.example\""));
+    assert!(manifest.contains("jdk = \"25\""));
+    assert!(manifest.contains("vendor = \"zulu\""));
 }
 
 #[cfg(unix)]
@@ -2985,6 +3023,73 @@ vendor = "temurin"
     );
     let switched_config = fs::read_to_string(config.join("config.toml")).expect("user config");
     assert!(switched_config.contains("jdk = \"17.0.12+7\""));
+}
+
+#[cfg(unix)]
+#[test]
+fn java_install_selects_the_current_directory_with_a_toolchain_only_jman_toml() {
+    let root = tempfile::tempdir().expect("isolated Java home");
+    let cache = root.path().join("cache");
+    let data = root.path().join("data");
+    let config = root.path().join("config");
+    let project = root.path().join("plain-directory");
+    let nested = project.join("nested");
+    fs::create_dir_all(&nested).expect("plain directory");
+    let java_25 = fake_managed_jdk_for_vendor(&data, "zulu", "25.0.4+1", 25, "zulu-25");
+
+    let installed = isolated_jman(&cache, &data, &config)
+        .current_dir(&project)
+        .args([
+            "java",
+            "install",
+            "25",
+            "--vendor",
+            "zulu",
+            "--offline",
+            "--no-progress",
+        ])
+        .output()
+        .expect("install and select directory Java");
+    assert!(
+        installed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    let manifest = fs::read_to_string(project.join("jman.toml")).expect("toolchain manifest");
+    assert!(manifest.contains("manifest-version = 1"));
+    assert!(manifest.contains("[toolchain]"));
+    assert!(manifest.contains("jdk = \"25\""));
+    assert!(manifest.contains("vendor = \"zulu\""));
+    assert!(!manifest.contains("[project]"));
+
+    let which = isolated_jman(&cache, &data, &config)
+        .args([
+            "java",
+            "which",
+            nested.to_str().expect("nested path"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("inspect directory Java");
+    assert!(which.status.success());
+    let which: serde_json::Value =
+        serde_json::from_slice(&which.stdout).expect("directory selection JSON");
+    assert_eq!(which["version"], "25.0.4+1");
+    assert_eq!(which["source"], "directory");
+    assert_eq!(which["home"], java_25.to_string_lossy().as_ref());
+    assert_eq!(
+        which["sourcePath"],
+        project.join("jman.toml").to_string_lossy().as_ref()
+    );
+
+    let build = isolated_jman(&cache, &data, &config)
+        .args(["build", project.to_str().expect("project path")])
+        .output()
+        .expect("reject toolchain-only build");
+    assert!(!build.status.success());
+    assert!(String::from_utf8_lossy(&build.stderr)
+        .contains("selects a Java toolchain but does not define a JMAN project"));
 }
 
 #[cfg(target_os = "linux")]

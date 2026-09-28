@@ -67,17 +67,21 @@ machine:
 
 ```console
 $ jman java install 27 --vendor zulu
-$ jman java use 27 --vendor zulu
 $ jman java which
 ```
 
-Selection precedence is the nearest project's `[toolchain]` configuration,
-then the exact global selection. Use `jman java list --installed` for a
-network-free view of installed JDKs. Commands that operate on an installed JDK
-infer its vendor from the project selection, global selection, or a unique
-installed match; `--vendor` is only required when the choice is ambiguous. The
-[Java toolchain guide](docs/guides/java-toolchains.md) covers vendors, shell
-setup, project overrides, scoped execution, storage, and troubleshooting.
+Without `--global`, installation creates or updates the nearest `jman.toml`.
+In a plain directory it creates a lightweight file containing only
+`manifest-version` and `[toolchain]`; in a JMAN project it updates the same
+project manifest. Maven and Gradle remain the build system because JMAN
+distinguishes the two forms by content. Selection precedence is the nearest
+`[toolchain]`, then the exact global selection. Use `jman java list
+--installed` for a network-free view of installed JDKs. Commands that operate
+on an installed JDK infer its vendor from the directory selection, global
+selection, or a unique installed match; `--vendor` is only required when the
+choice is ambiguous. The [Java toolchain guide](docs/guides/java-toolchains.md)
+covers vendors, shell setup, directory overrides, scoped execution, storage,
+and troubleshooting.
 
 ## Start here
 
@@ -100,7 +104,7 @@ setup, project overrides, scoped execution, storage, and troubleshooting.
 | Format | [JJFS 1](docs/reference/jjfs-v1.md), native javac-aware formatting, canonical imports, API-first member ordering, CI checks |
 | Test | Live JUnit tree, selectors, unit/integration source sets, parallel modules, coverage |
 | Supply chain | Upgrade discovery, transactional updates, OSV audits, signed publishing |
-| Java | Multi-vendor JDK catalog, verified installation, global/project selection, project-aware shims |
+| Java | Multi-vendor JDK catalog, verified installation, global/directory selection, project-aware shims |
 | Editors | Native Java LSP, VS Code Test Explorer, Neovim commands and CodeLens |
 
 The [documentation home](docs/index.md) contains task-oriented tutorials,

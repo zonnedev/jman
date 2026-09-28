@@ -25,12 +25,13 @@ Install the requested major/vendor explicitly, or select an existing one:
 
 ```bash
 jman java install 21 --vendor temurin --global
+# Or, when it is already installed:
 jman java use 21 --vendor temurin --global
 ```
 
-Omit `--global` from `java use` when setting a project override. `java use`
-only selects an existing installation; `java install ... --global` performs
-both operations.
+Omit `--global` when setting a directory or project override. `java install`
+downloads and selects in one operation; `java use` switches to an existing
+installation without downloading.
 
 JMAN does not install editor build runtimes implicitly.
 
@@ -47,10 +48,10 @@ java --version
 
 Then follow the first matching case:
 
-1. If `jman java which` reports a project selection, that project's
+1. If `jman java which` reports a directory or project selection, the nearest
    `[toolchain]` section overrides the global selection. Run `jman java use 25
-   --vendor <vendor>` without `--global` to change that project, or remove its
-   `[toolchain]` section to inherit the global selection.
+   --vendor <vendor>` without `--global` to change it, or remove that section
+   (or a toolchain-only `jman.toml`) to inherit the global selection.
 2. If `command -v java` does not report a `jman/shims/java` path, create the
    shims with `jman java setup`, then evaluate `jman shell init` for the current
    shell. The default is `~/.local/share/jman/shims/java` on Linux and

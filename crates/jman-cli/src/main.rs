@@ -14,8 +14,9 @@ use clap_complete::{generate, shells};
 use futures::{stream, StreamExt, TryStreamExt};
 use jman_config::{
     Build, CoverageFormat, Dependencies, LockedClasspaths, LockedPackage, LockedToolchain,
-    Lockfile, Manifest, MavenCompatibility, MavenDependencyMetadata, MavenManagedDependency,
-    Project, Repository, Toolchain as ManifestToolchain, LOCK_VERSION, MANIFEST_VERSION,
+    Lockfile, Manifest, ManifestFile, MavenCompatibility, MavenDependencyMetadata,
+    MavenManagedDependency, Project, Repository, Toolchain as ManifestToolchain, ToolchainManifest,
+    LOCK_VERSION, MANIFEST_VERSION,
 };
 use jman_resolver::{
     plugin_coordinates, AnnotationProcessor, Coordinate, Dependency, DependencyResolver,
@@ -521,8 +522,11 @@ struct JavaVersion {
     #[arg(long)]
     offline: bool,
     /// Select the exact installed release as the user-wide default.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "path")]
     global: bool,
+    /// Directory whose nearest jman.toml receives the selection.
+    #[arg(long, default_value = ".")]
+    path: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -532,7 +536,7 @@ struct JavaUse {
     /// JDK vendor to select.
     #[arg(long)]
     vendor: Option<String>,
-    /// Project directory.
+    /// Directory whose nearest jman.toml receives the selection.
     #[arg(long, default_value = ".", conflicts_with = "global")]
     path: PathBuf,
     /// Select the matching installed JDK as the user-wide default.
@@ -542,7 +546,7 @@ struct JavaUse {
 
 #[derive(Debug, Args)]
 struct JavaWhich {
-    /// Directory used to discover the nearest JMAN project.
+    /// Directory used to discover the nearest Java selection.
     #[arg(default_value = ".")]
     path: PathBuf,
     /// Output format.
@@ -557,7 +561,7 @@ struct JavaExec {
     /// JDK vendor used with an explicit version.
     #[arg(long, requires = "version")]
     vendor: Option<String>,
-    /// Directory used to discover the effective project selection.
+    /// Directory used to discover the effective Java selection.
     #[arg(long, default_value = ".")]
     path: PathBuf,
     /// Command and arguments to execute.
@@ -637,10 +641,10 @@ struct JavaRemove {
     /// Show targets without deleting them.
     #[arg(long)]
     dry_run: bool,
-    /// Remove even when the selected project pins this JDK.
+    /// Remove even when the selected directory or project pins this JDK.
     #[arg(long)]
     force: bool,
-    /// Project used for pin-safety checks.
+    /// Directory used for pin-safety checks.
     #[arg(long, default_value = ".")]
     path: PathBuf,
 }
@@ -863,7 +867,13 @@ fn formatter_project_root(target: &Path) -> Result<PathBuf> {
         target
     };
     let jman_root = find_workspace_root(directory);
-    if jman_root.join("jman.toml").is_file() {
+    let jman_toml = jman_root.join("jman.toml");
+    if jman_toml.is_file()
+        && !matches!(
+            ManifestFile::read(&jman_toml),
+            Ok(ManifestFile::Toolchain(_))
+        )
+    {
         return Ok(jman_root);
     }
     let mut nearest_maven = None;
@@ -2294,7 +2304,7 @@ async fn java_command(arguments: Java, ui: &Ui) -> Result<()> {
             let jdk = manager
                 .install_with_progress(
                     &ToolchainRequest {
-                        version: arguments.version,
+                        version: arguments.version.clone(),
                         vendor: vendor.clone(),
                     },
                     arguments.offline,
@@ -2313,6 +2323,8 @@ async fn java_command(arguments: Java, ui: &Ui) -> Result<()> {
                     "Selected {} JDK {} globally",
                     jdk.vendor, jdk.version
                 ));
+            } else {
+                select_local_java(&jdk, &arguments.version, &arguments.path, ui).await?;
             }
         }
         JavaCommand::List(arguments) => list_java(&manager, arguments, ui).await?,
@@ -2332,32 +2344,7 @@ async fn java_command(arguments: Java, ui: &Ui) -> Result<()> {
                     jdk.vendor, jdk.version
                 ));
             } else {
-                let target = absolute_path(&arguments.path)?;
-                let directory = if target.is_file() {
-                    target
-                        .parent()
-                        .context("Java selection path has no parent directory")?
-                } else {
-                    &target
-                };
-                let (path, mut manifest) = nearest_manifest(directory)?.with_context(|| {
-                    format!(
-                        "no jman.toml was found at or above {}; run this command inside a JMAN project",
-                        directory.display()
-                    )
-                })?;
-                manifest.toolchain = Some(ManifestToolchain {
-                    jdk: arguments.version.clone(),
-                    vendor: jdk.vendor.clone(),
-                });
-                let text = manifest
-                    .to_toml()
-                    .context("invalid JDK selection for this project")?;
-                write_atomically(&path, &text).await?;
-                ui.success(format!(
-                    "Pinned {} to {} JDK {}",
-                    manifest.project.name, jdk.vendor, arguments.version
-                ));
+                select_local_java(&jdk, &arguments.version, &arguments.path, ui).await?;
             }
         }
         JavaCommand::Which(arguments) => {
@@ -2370,10 +2357,79 @@ async fn java_command(arguments: Java, ui: &Ui) -> Result<()> {
     Ok(())
 }
 
+async fn select_local_java(
+    jdk: &jman_build::toolchain::ManagedJdk,
+    requested_version: &str,
+    path: &Path,
+    ui: &Ui,
+) -> Result<()> {
+    let target = absolute_path(path)?;
+    let directory = if target.is_file() {
+        target
+            .parent()
+            .context("Java selection path has no parent directory")?
+            .to_owned()
+    } else {
+        target
+    };
+    if !directory.is_dir() {
+        bail!(
+            "Java selection directory does not exist: {}",
+            directory.display()
+        );
+    }
+
+    let selection = ManifestToolchain {
+        jdk: requested_version.to_owned(),
+        vendor: jdk.vendor.clone(),
+    };
+    let existing = nearest_manifest_file(&directory)?;
+    let (manifest_path, text, subject) = match existing {
+        Some((manifest_path, ManifestFile::Project(mut manifest))) => {
+            manifest.toolchain = Some(selection);
+            let subject = manifest.project.name.clone();
+            let text = manifest
+                .to_toml()
+                .context("invalid JDK selection for this project")?;
+            (manifest_path, text, subject)
+        }
+        Some((manifest_path, ManifestFile::Toolchain(mut manifest))) => {
+            manifest.toolchain = selection;
+            let subject = manifest_path
+                .parent()
+                .unwrap_or(&directory)
+                .display()
+                .to_string();
+            let text = manifest
+                .to_toml()
+                .context("invalid directory JDK selection")?;
+            (manifest_path, text, subject)
+        }
+        None => {
+            let manifest_path = directory.join("jman.toml");
+            let manifest = ToolchainManifest {
+                manifest_version: MANIFEST_VERSION,
+                toolchain: selection,
+            };
+            let text = manifest
+                .to_toml()
+                .context("invalid directory JDK selection")?;
+            (manifest_path, text, directory.display().to_string())
+        }
+    };
+    write_atomically(&manifest_path, &text).await?;
+    ui.success(format!(
+        "Selected {} JDK {} for {subject}",
+        jdk.vendor, requested_version
+    ));
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum JavaSelectionSource {
     Project,
+    Directory,
     Global,
 }
 
@@ -2381,6 +2437,7 @@ impl JavaSelectionSource {
     const fn label(self) -> &'static str {
         match self {
             Self::Project => "project",
+            Self::Directory => "directory",
             Self::Global => "global configuration",
         }
     }
@@ -2436,18 +2493,16 @@ async fn resolve_installed_java(
     } else {
         &target
     };
-    if let Some((_manifest_path, manifest)) = nearest_manifest(directory)? {
-        if let Some(selection) = manifest_toolchain_request(&manifest) {
-            if java_versions_overlap(version, &selection.version)? {
-                return installed_java(
-                    manager,
-                    &ToolchainRequest {
-                        version: version.to_owned(),
-                        vendor: selection.vendor,
-                    },
-                )
-                .await;
-            }
+    if let Some(selection) = nearest_java_selection(directory)? {
+        if java_versions_overlap(version, &selection.request.version)? {
+            return installed_java(
+                manager,
+                &ToolchainRequest {
+                    version: version.to_owned(),
+                    vendor: selection.request.vendor,
+                },
+            )
+            .await;
         }
     }
 
@@ -2525,18 +2580,16 @@ async fn effective_java(
     } else {
         &target
     };
-    if let Some((manifest_path, manifest)) = nearest_manifest(directory)? {
-        if let Some(request) = manifest_toolchain_request(&manifest) {
-            let jdk = installed_java(manager, &request).await?;
-            return Ok(EffectiveJava {
-                vendor: jdk.vendor,
-                version: jdk.version,
-                major: jdk.major,
-                home: jdk.home,
-                source: JavaSelectionSource::Project,
-                source_path: manifest_path,
-            });
-        }
+    if let Some(selection) = nearest_java_selection(directory)? {
+        let jdk = installed_java(manager, &selection.request).await?;
+        return Ok(EffectiveJava {
+            vendor: jdk.vendor,
+            version: jdk.version,
+            major: jdk.major,
+            home: jdk.home,
+            source: selection.source,
+            source_path: selection.path,
+        });
     }
 
     let config_path = jman_build::toolchain::default_config_file();
@@ -2559,13 +2612,43 @@ async fn effective_java(
     })
 }
 
-fn nearest_manifest(directory: &Path) -> Result<Option<(PathBuf, Manifest)>> {
+fn nearest_manifest_file(directory: &Path) -> Result<Option<(PathBuf, ManifestFile)>> {
     for ancestor in directory.ancestors() {
         let path = ancestor.join("jman.toml");
         if path.is_file() {
-            let manifest = Manifest::read(&path)
+            let manifest = ManifestFile::read(&path)
                 .with_context(|| format!("could not read {}", path.display()))?;
             return Ok(Some((path, manifest)));
+        }
+    }
+    Ok(None)
+}
+
+struct JavaManifestSelection {
+    path: PathBuf,
+    request: jman_build::toolchain::ToolchainRequest,
+    source: JavaSelectionSource,
+}
+
+fn nearest_java_selection(directory: &Path) -> Result<Option<JavaManifestSelection>> {
+    for ancestor in directory.ancestors() {
+        let path = ancestor.join("jman.toml");
+        if !path.is_file() {
+            continue;
+        }
+        let document = ManifestFile::read(&path)
+            .with_context(|| format!("could not read {}", path.display()))?;
+        let source = if document.is_project() {
+            JavaSelectionSource::Project
+        } else {
+            JavaSelectionSource::Directory
+        };
+        if let Some(toolchain) = document.toolchain() {
+            return Ok(Some(JavaManifestSelection {
+                path,
+                request: toolchain_request(toolchain),
+                source,
+            }));
         }
     }
     Ok(None)
@@ -3291,37 +3374,28 @@ fn protect_pinned_toolchain(
     } else {
         &target
     };
-    let Some((_manifest_path, manifest)) = nearest_manifest(directory)? else {
+    let Some(selection) = nearest_java_selection(directory)? else {
         return Ok(());
     };
-    let Some(pin) = manifest.toolchain else {
-        return Ok(());
-    };
-    let pin_major = pin.jdk.parse::<u16>().ok();
     if candidates.iter().any(|jdk| {
-        jman_build::toolchain::normalize_vendor(&pin.vendor) == jdk.vendor
-            && (pin.jdk == jdk.version || pin_major == Some(jdk.major))
+        selection.request.vendor == jdk.vendor
+            && java_versions_overlap(&selection.request.version, &jdk.version).unwrap_or(false)
     }) {
         bail!(
-            "{} pins {} JDK {}; use --force to remove it anyway",
-            manifest.project.name,
-            pin.vendor,
-            pin.jdk
+            "{} selects {} JDK {}; use --force to remove it anyway",
+            selection.path.display(),
+            selection.request.vendor,
+            selection.request.version
         );
     }
     Ok(())
 }
 
-fn manifest_toolchain_request(
-    manifest: &Manifest,
-) -> Option<jman_build::toolchain::ToolchainRequest> {
-    manifest
-        .toolchain
-        .as_ref()
-        .map(|toolchain| jman_build::toolchain::ToolchainRequest {
-            version: toolchain.jdk.clone(),
-            vendor: jman_build::toolchain::normalize_vendor(&toolchain.vendor),
-        })
+fn toolchain_request(toolchain: &ManifestToolchain) -> jman_build::toolchain::ToolchainRequest {
+    jman_build::toolchain::ToolchainRequest {
+        version: toolchain.jdk.clone(),
+        vendor: jman_build::toolchain::normalize_vendor(&toolchain.vendor),
+    }
 }
 
 fn default_cache_dir() -> PathBuf {
@@ -3357,10 +3431,25 @@ async fn scaffold_project(arguments: &Init, target: &Path, ui: &Ui) -> Result<()
     for module in &arguments.modules {
         validate_scaffold_name("module", module)?;
     }
+    let existing_toolchain = if target.join("jman.toml").is_file() {
+        match ManifestFile::read(&target.join("jman.toml"))
+            .with_context(|| format!("could not read {}", target.join("jman.toml").display()))?
+        {
+            ManifestFile::Toolchain(manifest) => Some(manifest.toolchain),
+            ManifestFile::Project(_) => None,
+        }
+    } else {
+        None
+    };
+    let upgrading_toolchain_manifest = existing_toolchain.is_some();
     if target.exists() {
-        let mut entries = std::fs::read_dir(target)
-            .with_context(|| format!("could not inspect {}", target.display()))?;
-        if entries.next().transpose()?.is_some() {
+        let entries = std::fs::read_dir(target)
+            .with_context(|| format!("could not inspect {}", target.display()))?
+            .collect::<std::io::Result<Vec<_>>>()?;
+        let only_toolchain_manifest = existing_toolchain.is_some()
+            && entries.len() == 1
+            && entries[0].file_name() == OsStr::new("jman.toml");
+        if !entries.is_empty() && !only_toolchain_manifest {
             bail!(
                 "refusing to initialize non-empty directory {}",
                 target.display()
@@ -3368,7 +3457,7 @@ async fn scaffold_project(arguments: &Init, target: &Path, ui: &Ui) -> Result<()
         }
     }
     let activity = ui.activity(format!("Creating project {}", target.display()));
-    let root_manifest = scaffold_manifest(
+    let mut root_manifest = scaffold_manifest(
         &arguments.group,
         name,
         &arguments.version,
@@ -3391,6 +3480,18 @@ async fn scaffold_project(arguments: &Init, target: &Path, ui: &Ui) -> Result<()
             }))
         },
     )?;
+    if let Some(toolchain) = existing_toolchain {
+        if jman_config::java_feature_version(&toolchain.jdk)
+            .is_some_and(|major| major < arguments.java)
+        {
+            bail!(
+                "selected JDK {} is older than the requested Java release {}; choose a compatible JDK first",
+                toolchain.jdk,
+                arguments.java
+            );
+        }
+        root_manifest.toolchain = Some(toolchain);
+    }
     let mut projects = vec![(target.to_owned(), root_manifest)];
     for module in &arguments.modules {
         projects.push((
@@ -3452,6 +3553,9 @@ async fn scaffold_project(arguments: &Init, target: &Path, ui: &Ui) -> Result<()
         ".jman/\n*.class\n*.log\n".to_owned(),
     ));
     for (path, _) in &files {
+        if upgrading_toolchain_manifest && path == &target.join("jman.toml") {
+            continue;
+        }
         ensure_absent(path)?;
     }
     for (path, contents) in files {
@@ -3754,7 +3858,7 @@ async fn import_maven(pom_path: &Path, ui: &Ui) -> Result<()> {
         .source
         .parent()
         .context("Maven reactor root POM has no parent directory")?;
-    let manifests = projects
+    let mut manifests = projects
         .iter()
         .map(|project| {
             manifest_from_maven(&project.effective, maven_authoritative).and_then(|mut manifest| {
@@ -3787,9 +3891,25 @@ async fn import_maven(pom_path: &Path, ui: &Ui) -> Result<()> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    let mut upgraded_toolchain_manifests = BTreeSet::new();
+    for (_, directory, manifest) in &mut manifests {
+        let path = directory.join("jman.toml");
+        if !path.is_file() {
+            continue;
+        }
+        if let ManifestFile::Toolchain(toolchain_manifest) = ManifestFile::read(&path)
+            .with_context(|| format!("could not read {}", path.display()))?
+        {
+            manifest.toolchain = Some(toolchain_manifest.toolchain);
+            upgraded_toolchain_manifests.insert(path);
+        }
+    }
     let workspace_hash = hash_generated_manifests(root_directory, &manifests)?;
     for (_, directory, _) in &manifests {
-        ensure_absent(&directory.join("jman.toml"))?;
+        let manifest_path = directory.join("jman.toml");
+        if !upgraded_toolchain_manifests.contains(&manifest_path) {
+            ensure_absent(&manifest_path)?;
+        }
         ensure_absent(&directory.join("jman.lock"))?;
     }
     let repositories = manifests

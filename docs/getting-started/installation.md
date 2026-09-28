@@ -158,9 +158,9 @@ java --version
 On Linux, `command -v java` normally reports
 `~/.local/share/jman/shims/java`; on macOS it normally reports
 `~/Library/Application Support/jman/shims/java`. `JMAN_DATA_DIR` changes that
-root. Inside a project, `jman java which` may report a project selection instead
-of the global default; project configuration intentionally has higher
-precedence.
+root. Inside a directory with a toolchain-only or full `jman.toml`, `jman java
+which` reports that local selection instead of the global default; the nearest
+directory configuration intentionally has higher precedence.
 
 Temurin is the default download distribution. Pass `--vendor <name>` when
 installing another distribution, for example `zulu` or `corretto`; later

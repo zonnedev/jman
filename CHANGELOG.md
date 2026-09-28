@@ -5,6 +5,19 @@ Versioning while it remains pre-1.0.
 
 ## [Unreleased]
 
+### Added
+
+- `jman java install` now installs and selects a JDK in one operation, creating
+  a toolchain-only `jman.toml` for plain directories, Maven projects, and
+  Gradle projects while preserving the same file as the full native project
+  manifest when `[project]` is present.
+
+### Changed
+
+- `jman init` and Maven import upgrade toolchain-only manifests in place, and
+  build-system detection distinguishes local Java selection from a native JMAN
+  project by manifest content.
+
 ## [0.8.3] - 2026-09-27
 
 ### Changed

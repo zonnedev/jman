@@ -100,41 +100,59 @@ To switch to another JDK that is already installed:
 jman java use 21 --vendor corretto --global
 ```
 
-`java use` never downloads. This keeps selection predictable; use `java
-install ... --global` when one command should both install and select.
+`java use` never downloads. This keeps switching predictable; `java install`
+always selects the installed JDK as part of the operation, either for the
+current directory or globally with `--global`.
 
 When `--vendor` is omitted from `java use`, `java exec VERSION`, or `java
-remove`, JMAN resolves the vendor in this order: a matching project selection,
-a matching global selection, then a unique matching installed vendor. If more
-than one installed vendor remains, JMAN reports the choices and asks for an
-explicit `--vendor`. `java install` is intentionally different: it downloads
-Temurin by default unless a vendor is specified.
+remove`, JMAN resolves the vendor in this order: a matching directory or
+project selection, a matching global selection, then a unique matching
+installed vendor. If more than one installed vendor remains, JMAN reports the
+choices and asks for an explicit `--vendor`. `java install` is intentionally
+different: it downloads Temurin by default unless a vendor is specified.
 
-## Override Java for one project
+## Select Java for a directory or project
 
-From a JMAN project:
+From any directory:
 
 ```bash
 jman java install 25 --vendor zulu
-jman java use 25 --vendor zulu
 jman java which
 ```
 
-Without `--global`, `java use` writes the version and vendor to the nearest
-project's `jman.toml`. A project selection wins over the user-wide selection.
-Nested directories discover the nearest manifest automatically, so the same
-selection is used by JMAN builds, shell shims, and editor processes.
+Without `--global`, `java install` installs the matching JDK and writes its
+version and vendor to the nearest `jman.toml`. If no manifest exists, JMAN
+creates this lightweight file in the selected directory:
 
-Consequently, changing the global selection does not override a project pin.
-To change the current project, omit `--global`:
+```toml
+manifest-version = 1
+
+[toolchain]
+jdk = "25"
+vendor = "zulu"
+```
+
+This is the same `jman.toml` used by native JMAN projects, with `[project]`
+simply omitted. Maven and Gradle projects keep their original build system;
+JMAN recognizes the file as a Java selection by its contents. Running `jman
+init` later upgrades the lightweight file into a complete project manifest and
+preserves the selected toolchain.
+
+A directory or project selection wins over the user-wide selection. Nested
+directories discover the nearest selected toolchain automatically, so shell
+shims and editor processes agree. Native JMAN builds also use the selection.
+Build commands require a full manifest with `[project]`.
+
+Consequently, changing the global selection does not override a directory
+selection. To switch to another JDK that is already installed, use:
 
 ```bash
 jman java use 25 --vendor zulu
 ```
 
-To return a project to the global fallback, remove its `[toolchain]` section
-from `jman.toml`. There is no hidden shell-level override in between these two
-selection scopes.
+To return a directory or project to the global fallback, remove its
+`[toolchain]` section. If it was a toolchain-only file, remove `jman.toml`
+itself. There is no hidden shell-level override between these two scopes.
 
 `jman java which` explains the effective JDK by default, including its exact
 version, installation path, and whether it came from `jman.toml` or the global
@@ -161,7 +179,7 @@ jman java exec 21 -- jman test
 jman java exec 25 --vendor zulu -- jman test
 ```
 
-Both runs leave global and project selection untouched.
+Both runs leave global and local selection untouched.
 
 ## Remove installations safely
 

@@ -1,8 +1,28 @@
 # `jman.toml` reference
 
-`jman.toml` is the only project file intended for manual editing. Keys use
-kebab-case, dependency maps are sorted when JMAN rewrites them, and unknown
-schema versions are rejected rather than guessed.
+`jman.toml` is the single source of truth for a directory's Java selection and
+for native JMAN projects. Keys use kebab-case, dependency maps are sorted when
+JMAN rewrites them, and unknown schema versions are rejected rather than
+guessed.
+
+## Toolchain-only example
+
+A directory, Maven project, or Gradle project can select Java without becoming
+a native JMAN project:
+
+```toml
+manifest-version = 1
+
+[toolchain]
+jdk = "25"
+vendor = "zulu"
+```
+
+`jman java install 25 --vendor zulu` creates this form when no `jman.toml`
+exists. `jman java use` updates it with an already installed JDK. Maven and
+Gradle detection ignores the toolchain-only form, while shell shims, `java
+which`, `java exec`, and editor processes inherit it. `jman init` upgrades it
+in place and preserves `[toolchain]`.
 
 ## Application example
 
@@ -46,9 +66,12 @@ id = "central"
 url = "https://repo.maven.apache.org/maven2"
 ```
 
-Only `manifest-version` and `[project]` are mandatory. The example deliberately
-shows common application settings; the focused sections below cover local
-modules, test policy, publishing, auditing, and advanced Maven metadata.
+For a native project, `manifest-version` and `[project]` are mandatory. A
+toolchain-only manifest instead supports only `manifest-version` and
+`[toolchain]`; project sections such as dependencies are rejected until
+`[project]` is added. The example deliberately shows common application
+settings; the focused sections below cover local modules, test policy,
+publishing, auditing, and advanced Maven metadata.
 
 ## Workspace example
 
@@ -92,7 +115,8 @@ Run `jman sync` at the root after adding or moving a module.
 : Required integer. The current public manifest schema is `1`.
 
 `[project]`
-: Required identity, compilation target, packaging, modules, and entry point.
+: Required for a native JMAN project; omitted by a toolchain-only manifest.
+  Defines identity, compilation target, packaging, modules, and entry point.
 
 `[toolchain]`
 : Optional JDK version and vendor pin.
@@ -130,8 +154,9 @@ vendor = "temurin"
 ```
 
 `jdk` accepts a feature release or exact version. `vendor` defaults to
-`temurin`. Prefer `jman java use` so the selection is validated against an
-installed JDK. This project selection overrides the user's global Java.
+`temurin`. Prefer `jman java install` to install and select in one operation,
+or `jman java use` to switch to an existing installation. The nearest
+directory or project selection overrides the user's global Java.
 
 ## Dependencies
 
