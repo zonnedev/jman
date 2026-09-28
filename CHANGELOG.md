@@ -5,6 +5,8 @@ Versioning while it remains pre-1.0.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-28
+
 ### Added
 
 - `jman script` now lists and executes manifest-defined project automation,
