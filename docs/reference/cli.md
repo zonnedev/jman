@@ -364,11 +364,12 @@ jman java remove VERSION [--vendor VENDOR] [--all] [--dry-run]
 ```
 
 `--all` removes every installed match for the requested major. Pin-safety is
-checked against the nearest `jman.toml` at `--path`; `--force` overrides a
-directory or project pin. A globally selected JDK must be replaced before it
-can be removed. Without `--vendor`, JMAN uses a matching local selection, then
-a matching global selection, then a unique installed vendor; ambiguous matches
-require an explicit vendor.
+checked against the effective `jman.toml`, `.sdkmanrc`, or `.java-version`
+selection at `--path`; `--force` overrides a directory or project pin. A
+globally selected JDK must be replaced before it can be removed. Without
+`--vendor`, JMAN uses a matching local selection, then a matching global
+selection, then a unique installed vendor; ambiguous matches require an
+explicit vendor.
 
 ```bash
 jman java remove 21 --dry-run
@@ -401,8 +402,8 @@ jman java which [PATH] [--format human|json|home|shell]
 ```
 
 Print the effective managed JDK and its selection source. The nearest
-directory or project selection wins over the global selection. `home` prints
-only the JDK directory;
+selection is resolved using `jman.toml`, `.sdkmanrc`, `.java-version`, then
+the global configuration. `home` prints only the JDK directory;
 `shell` prints a POSIX `JAVA_HOME` export.
 
 ```bash

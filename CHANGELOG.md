@@ -7,6 +7,10 @@ Versioning while it remains pre-1.0.
 
 ### Added
 
+- Project-local Java selection now supports SDKMAN `.sdkmanrc` and jenv
+  `.java-version` files across CLI commands, shell shims, removal protection,
+  and Gradle language-server imports. JMAN toolchain declarations retain
+  precedence over both compatibility formats.
 - `jman init` now generates JJFS-formatted production and JUnit test sources
   for applications, libraries, and workspace modules, declares JUnit Platform
   Console Standalone in test scope, and resolves the initial lockfiles so new

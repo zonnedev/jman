@@ -4234,7 +4234,7 @@ fn workspace_folder_uris(folders: &Value) -> Vec<String> {
 fn java_file_operation_filter() -> Value {
     json!({
         "scheme":"file",
-        "pattern":{"glob":"**/*.{java,jman.toml,jman.lock,xml,gradle,gradle.kts}"}
+        "pattern":{"glob":"**/{*.java,jman.toml,jman.lock,*.xml,*.gradle,*.gradle.kts,.sdkmanrc,.java-version}"}
     })
 }
 
@@ -5042,6 +5042,8 @@ fn is_build_model_file(uri: &str) -> bool {
         name,
         "jman.toml"
             | "jman.lock"
+            | ".sdkmanrc"
+            | ".java-version"
             | "pom.xml"
             | "settings.xml"
             | "build.gradle"
@@ -5261,12 +5263,13 @@ mod tests {
             "jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles",
             "params":{"changes":[
                 {"uri":"file:///workspace/pom.xml","type":2},
+                {"uri":"file:///workspace/.sdkmanrc","type":2},
                 {"uri":"file:///workspace/README.md","type":2}
             ]}
         }));
         assert_eq!(reply(&changed)["method"], "jman.java/buildSyncStatus");
         assert_eq!(reply(&changed)["params"]["state"], "required");
-        assert_eq!(reply(&changed)["params"]["pendingChanges"], 1);
+        assert_eq!(reply(&changed)["params"]["pendingChanges"], 2);
         assert!(calls.lock().unwrap().is_empty());
 
         let synchronized = server.dispatch(json!({
@@ -5281,9 +5284,17 @@ mod tests {
             message["method"] == "jman.java/buildSyncStatus"
                 && message["params"]["state"] == "ready"
         }));
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
         assert_eq!(
-            *calls.lock().unwrap(),
-            vec![vec!["file:///workspace/pom.xml".to_owned()]]
+            calls[0]
+                .iter()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([
+                "file:///workspace/.sdkmanrc".to_owned(),
+                "file:///workspace/pom.xml".to_owned()
+            ])
         );
     }
 

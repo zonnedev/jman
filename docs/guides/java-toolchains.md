@@ -143,6 +143,32 @@ directories discover the nearest selected toolchain automatically, so shell
 shims and editor processes agree. Native JMAN builds also use the selection.
 Build commands require a full manifest with `[project]`.
 
+JMAN also reads existing SDKMAN and jenv project files:
+
+```properties
+# .sdkmanrc
+java=21.0.8-tem
+```
+
+```text
+# .java-version
+zulu64-25.0.2
+```
+
+SDKMAN distribution suffixes such as `tem`, `zulu`, `amzn`, `librca`, `ms`,
+and `open` are translated into JMAN's vendor model. A plain `.java-version`
+such as `21` or `21.0.8` has no vendor; JMAN uses a matching global vendor or
+the only matching installed vendor, and reports ambiguity instead of guessing.
+Legacy jenv values such as `1.8.0_402` are accepted as Java 8 selections.
+
+Format precedence is deterministic: a `[toolchain]` in any applicable
+`jman.toml` wins, followed by the nearest `.sdkmanrc`, the nearest
+`.java-version`, and finally the global JMAN selection. Within each format,
+ancestor discovery chooses the nearest file. `jman java which` reports the
+source file that won. Gradle language-server imports also honor these files;
+explicit Gradle daemon/runtime configuration remains authoritative for the
+Gradle process.
+
 Consequently, changing the global selection does not override a directory
 selection. To switch to another JDK that is already installed, use:
 
@@ -155,8 +181,9 @@ To return a directory or project to the global fallback, remove its
 itself. There is no hidden shell-level override between these two scopes.
 
 `jman java which` explains the effective JDK by default, including its exact
-version, installation path, and whether it came from `jman.toml` or the global
-configuration. Machine-oriented forms are also available:
+version, installation path, and whether it came from `jman.toml`, `.sdkmanrc`,
+`.java-version`, or the global configuration. Machine-oriented forms are also
+available:
 
 ```bash
 jman java which --format json

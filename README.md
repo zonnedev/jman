@@ -77,8 +77,10 @@ Without `--global`, installation creates or updates the nearest `jman.toml`.
 In a plain directory it creates a lightweight file containing only
 `manifest-version` and `[toolchain]`; in a JMAN project it updates the same
 project manifest. Maven and Gradle remain the build system because JMAN
-distinguishes the two forms by content. Selection precedence is the nearest
-`[toolchain]`, then the exact global selection. Use `jman java list
+distinguishes the two forms by content. Existing `.sdkmanrc` and jenv
+`.java-version` files are also understood. Selection precedence is
+`jman.toml`, `.sdkmanrc`, `.java-version`, then the exact global selection.
+Use `jman java list
 --installed` for a network-free view of installed JDKs. Commands that operate
 on an installed JDK infer its vendor from the directory selection, global
 selection, or a unique installed match; `--vendor` is only required when the

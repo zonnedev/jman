@@ -3173,6 +3173,106 @@ vendor = "temurin"
 
 #[cfg(unix)]
 #[test]
+fn sdkman_and_jenv_files_share_project_selection_with_jman_precedence() {
+    let root = tempfile::tempdir().expect("isolated Java home");
+    let cache = root.path().join("cache");
+    let data = root.path().join("data");
+    let config = root.path().join("config");
+    let project = root.path().join("project");
+    let nested = project.join("services/orders");
+    fs::create_dir_all(&nested).expect("nested project directory");
+    let zulu_21 = fake_managed_jdk_for_vendor(&data, "zulu", "21.0.8+9", 21, "zulu-21");
+    let temurin_17 = fake_managed_jdk(&data, "17.0.12+7", 17, "temurin-17");
+    let corretto_25 = fake_managed_jdk_for_vendor(&data, "corretto", "25.0.2+8", 25, "corretto-25");
+    fs::write(project.join(".sdkmanrc"), "java=21.0.8-zulu\n").expect("SDKMAN selection");
+    fs::write(nested.join(".java-version"), "17.0.12\n").expect("jenv selection");
+
+    let sdkman = isolated_jman(&cache, &data, &config)
+        .args([
+            "java",
+            "which",
+            nested.to_str().expect("nested path"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("inspect SDKMAN selection");
+    assert!(
+        sdkman.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sdkman.stderr)
+    );
+    let sdkman: serde_json::Value =
+        serde_json::from_slice(&sdkman.stdout).expect("SDKMAN selection JSON");
+    assert_eq!(sdkman["vendor"], "zulu");
+    assert_eq!(sdkman["version"], "21.0.8+9");
+    assert_eq!(sdkman["source"], "sdkmanrc");
+    assert_eq!(sdkman["home"], zulu_21.to_string_lossy().as_ref());
+    assert_eq!(
+        sdkman["sourcePath"],
+        project.join(".sdkmanrc").to_string_lossy().as_ref()
+    );
+
+    fs::write(
+        project.join("jman.toml"),
+        r#"manifest-version = 1
+
+[toolchain]
+jdk = "25"
+vendor = "corretto"
+"#,
+    )
+    .expect("JMAN selection");
+    let jman = isolated_jman(&cache, &data, &config)
+        .args([
+            "java",
+            "which",
+            nested.to_str().expect("nested path"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("inspect JMAN precedence");
+    assert!(jman.status.success());
+    let jman: serde_json::Value =
+        serde_json::from_slice(&jman.stdout).expect("JMAN selection JSON");
+    assert_eq!(jman["vendor"], "corretto");
+    assert_eq!(jman["source"], "directory");
+    assert_eq!(jman["home"], corretto_25.to_string_lossy().as_ref());
+
+    fs::remove_file(project.join("jman.toml")).expect("remove JMAN selection");
+    fs::remove_file(project.join(".sdkmanrc")).expect("remove SDKMAN selection");
+    let jenv = isolated_jman(&cache, &data, &config)
+        .args([
+            "java",
+            "which",
+            nested.to_str().expect("nested path"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("inspect jenv selection");
+    assert!(jenv.status.success());
+    let jenv: serde_json::Value =
+        serde_json::from_slice(&jenv.stdout).expect("jenv selection JSON");
+    assert_eq!(jenv["vendor"], "temurin");
+    assert_eq!(jenv["version"], "17.0.12+7");
+    assert_eq!(jenv["source"], "java-version");
+    assert_eq!(jenv["home"], temurin_17.to_string_lossy().as_ref());
+
+    fake_managed_jdk_for_vendor(&data, "zulu", "17.0.12+7", 17, "zulu-17");
+    let ambiguous = isolated_jman(&cache, &data, &config)
+        .args(["java", "which", nested.to_str().expect("nested path")])
+        .output()
+        .expect("reject ambiguous jenv vendor");
+    assert!(!ambiguous.status.success());
+    let error = String::from_utf8_lossy(&ambiguous.stderr);
+    assert!(error.contains("multiple vendors"));
+    assert!(error.contains(".java-version"));
+}
+
+#[cfg(unix)]
+#[test]
 fn java_install_selects_the_current_directory_with_a_toolchain_only_jman_toml() {
     let root = tempfile::tempdir().expect("isolated Java home");
     let cache = root.path().join("cache");

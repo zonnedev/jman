@@ -2768,6 +2768,8 @@ fn is_build_file(uri: &str) -> bool {
         name,
         "jman.toml"
             | "jman.lock"
+            | ".sdkmanrc"
+            | ".java-version"
             | "pom.xml"
             | "settings.xml"
             | "build.gradle"

@@ -41,6 +41,8 @@ pub enum ConfigError {
     ToolchainOnly { path: PathBuf },
     #[error("invalid configuration: {0}")]
     Validation(String),
+    #[error("invalid Java selection in {path}: {message}")]
+    JavaSelection { path: PathBuf, message: String },
 }
 
 /// A parsed `jman.toml`, which may select only Java or define a full project.
@@ -48,6 +50,38 @@ pub enum ConfigError {
 pub enum ManifestFile {
     Toolchain(ToolchainManifest),
     Project(Box<Manifest>),
+}
+
+/// Origin of a project-local Java selection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum JavaSelectionSource {
+    JmanProject,
+    JmanDirectory,
+    Sdkmanrc,
+    JavaVersion,
+}
+
+impl JavaSelectionSource {
+    /// Human-readable source label used by diagnostics.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::JmanProject => "JMAN project",
+            Self::JmanDirectory => "JMAN directory",
+            Self::Sdkmanrc => ".sdkmanrc",
+            Self::JavaVersion => ".java-version",
+        }
+    }
+}
+
+/// Project-local Java request discovered from a supported version file.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct JavaSelection {
+    pub path: PathBuf,
+    pub version: String,
+    pub vendor: Option<String>,
+    pub source: JavaSelectionSource,
 }
 
 /// A `jman.toml` that selects Java without declaring a native JMAN project.
@@ -699,14 +733,228 @@ pub fn java_feature_version(version: &str) -> Option<u16> {
     if digit_count == 0 {
         return None;
     }
+    let major = version[..digit_count]
+        .parse::<u16>()
+        .ok()
+        .filter(|major| *major > 0)?;
     let suffix = &version[digit_count..];
+    if let Some(update) = suffix.strip_prefix('u') {
+        return (major == 8 && update.as_bytes().first().is_some_and(u8::is_ascii_digit))
+            .then_some(major);
+    }
     if !suffix.is_empty() && !matches!(suffix.as_bytes()[0], b'.' | b'+' | b'-') {
         return None;
     }
-    version[..digit_count]
-        .parse::<u16>()
-        .ok()
-        .filter(|major| *major > 0)
+    Some(major)
+}
+
+/// Find the effective project-local Java selection.
+///
+/// JMAN configuration has format-level precedence, followed by `.sdkmanrc`
+/// and then `.java-version`. Within one format, the nearest ancestor wins.
+///
+/// # Errors
+///
+/// Returns an error when a discovered selection file is unreadable or its
+/// Java value is invalid.
+pub fn find_java_selection(directory: &Path) -> Result<Option<JavaSelection>, ConfigError> {
+    for ancestor in directory.ancestors() {
+        let path = ancestor.join("jman.toml");
+        if !path.is_file() {
+            continue;
+        }
+        let document = ManifestFile::read(&path)?;
+        if let Some(toolchain) = document.toolchain() {
+            return Ok(Some(JavaSelection {
+                path,
+                version: toolchain.jdk.clone(),
+                vendor: Some(toolchain.vendor.clone()),
+                source: if document.is_project() {
+                    JavaSelectionSource::JmanProject
+                } else {
+                    JavaSelectionSource::JmanDirectory
+                },
+            }));
+        }
+    }
+    for ancestor in directory.ancestors() {
+        let path = ancestor.join(".sdkmanrc");
+        if !path.is_file() {
+            continue;
+        }
+        let contents = read_java_selection_file(&path)?;
+        if let Some(value) = sdkman_java_value(&contents) {
+            let (version, vendor) = parse_sdkman_java(value, &path)?;
+            return Ok(Some(JavaSelection {
+                path,
+                version,
+                vendor: Some(vendor),
+                source: JavaSelectionSource::Sdkmanrc,
+            }));
+        }
+    }
+    for ancestor in directory.ancestors() {
+        let path = ancestor.join(".java-version");
+        if !path.is_file() {
+            continue;
+        }
+        let contents = read_java_selection_file(&path)?;
+        let value = contents
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty() && !line.starts_with('#'))
+            .ok_or_else(|| java_selection_error(&path, "the file is empty"))?;
+        let (version, vendor) = parse_jenv_java(value, &path)?;
+        return Ok(Some(JavaSelection {
+            path,
+            version,
+            vendor,
+            source: JavaSelectionSource::JavaVersion,
+        }));
+    }
+    Ok(None)
+}
+
+fn read_java_selection_file(path: &Path) -> Result<String, ConfigError> {
+    fs::read_to_string(path).map_err(|source| ConfigError::Read {
+        path: path.to_owned(),
+        source,
+    })
+}
+
+fn sdkman_java_value(contents: &str) -> Option<&str> {
+    contents.lines().rev().find_map(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return None;
+        }
+        let (key, value) = line.split_once('=')?;
+        (key.trim() == "java").then(|| value.trim())
+    })
+}
+
+fn parse_sdkman_java(value: &str, path: &Path) -> Result<(String, String), ConfigError> {
+    let value = selection_token(value, path)?;
+    let (version, vendor) = value.rsplit_once('-').ok_or_else(|| {
+        java_selection_error(
+            path,
+            "SDKMAN Java candidates must include a distribution suffix, such as `21.0.8-tem`",
+        )
+    })?;
+    let version = normalize_compatibility_version(version);
+    validate_compatibility_version(&version, path)?;
+    let vendor = normalize_compatibility_vendor(vendor)
+        .unwrap_or_else(|| vendor.trim().to_ascii_lowercase().replace('_', "-"));
+    validate_compatibility_vendor(&vendor, path)?;
+    Ok((version, vendor))
+}
+
+fn parse_jenv_java(value: &str, path: &Path) -> Result<(String, Option<String>), ConfigError> {
+    let value = selection_token(value, path)?;
+    let mut version = value;
+    let mut vendor = None;
+    if let Some((prefix, remainder)) = value.split_once('-') {
+        if let Some(normalized) = normalize_compatibility_vendor(prefix) {
+            version = remainder;
+            vendor = Some(normalized);
+        }
+    }
+    if vendor.is_none() {
+        if let Some((remainder, suffix)) = value.rsplit_once('-') {
+            if let Some(normalized) = normalize_compatibility_vendor(suffix) {
+                version = remainder;
+                vendor = Some(normalized);
+            }
+        }
+    }
+    let version = normalize_compatibility_version(version);
+    validate_compatibility_version(&version, path)?;
+    Ok((version, vendor))
+}
+
+fn selection_token<'a>(value: &'a str, path: &Path) -> Result<&'a str, ConfigError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(java_selection_error(path, "the Java version is empty"));
+    }
+    if value.split_whitespace().count() != 1 {
+        return Err(java_selection_error(
+            path,
+            "the Java version must be one token",
+        ));
+    }
+    Ok(value)
+}
+
+fn normalize_compatibility_version(version: &str) -> String {
+    let Some(legacy) = version.strip_prefix("1.") else {
+        return version.to_owned();
+    };
+    let major_length = legacy.bytes().take_while(u8::is_ascii_digit).count();
+    if major_length == 0 {
+        return version.to_owned();
+    }
+    let major = &legacy[..major_length];
+    let suffix = &legacy[major_length..];
+    if suffix.is_empty() {
+        return major.to_owned();
+    }
+    let update = suffix
+        .strip_prefix(".0_")
+        .or_else(|| suffix.strip_prefix(".0."));
+    update.map_or_else(|| major.to_owned(), |update| format!("{major}u{update}"))
+}
+
+fn validate_compatibility_version(version: &str, path: &Path) -> Result<(), ConfigError> {
+    java_feature_version(version).ok_or_else(|| {
+        java_selection_error(path, format!("unsupported Java version `{version}`"))
+    })?;
+    Ok(())
+}
+
+fn normalize_compatibility_vendor(vendor: &str) -> Option<String> {
+    let vendor = vendor.trim().to_ascii_lowercase().replace('_', "-");
+    let normalized = match vendor.as_str() {
+        "adopt" | "adoptopenjdk" | "adpt" | "tem" | "temurin" | "temurin64" => "temurin",
+        "amazon" | "amzn" | "cor" | "corretto" | "corretto64" => "corretto",
+        "graalce" | "graalvm-community" => "graalvm-community",
+        "graal" | "graalvm" | "graalvm64" => "graalvm",
+        "lib" | "liberica" | "librca" => "liberica",
+        "ms" | "microsoft" => "microsoft",
+        "open" | "openjdk" | "openjdk64" | "oracle-open-jdk" => "openjdk",
+        "oracle" | "oracle64" => "oracle",
+        "sap" | "sap-machine" | "sapmachine" | "sapmchn" => "sapmachine",
+        "sem" | "semeru" => "semeru",
+        "kona" => "kona",
+        "nik" => "nik",
+        "zulu" | "zulu64" => "zulu",
+        _ => return None,
+    };
+    Some(normalized.to_owned())
+}
+
+fn validate_compatibility_vendor(vendor: &str, path: &Path) -> Result<(), ConfigError> {
+    if !vendor.is_empty()
+        && vendor
+            .bytes()
+            .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || value == b'-')
+        && !vendor.starts_with('-')
+        && !vendor.ends_with('-')
+    {
+        Ok(())
+    } else {
+        Err(java_selection_error(
+            path,
+            format!("unsupported Java distribution `{vendor}`"),
+        ))
+    }
+}
+
+fn java_selection_error(path: &Path, message: impl Into<String>) -> ConfigError {
+    ConfigError::JavaSelection {
+        path: path.to_owned(),
+        message: message.into(),
+    }
 }
 
 fn validate_publishing(publishing: &Publishing) -> Result<(), ConfigError> {
@@ -1010,6 +1258,85 @@ vendor = "zulu"
             ManifestFile::read(&path),
             Err(ConfigError::Parse { .. })
         ));
+    }
+
+    #[test]
+    fn java_selection_files_follow_format_precedence_and_ancestor_discovery() {
+        let root = tempfile::tempdir().expect("temporary directory");
+        let nested = root.path().join("services/orders");
+        fs::create_dir_all(&nested).expect("nested directory");
+        fs::write(nested.join(".java-version"), "temurin64-17.0.12\n").expect("jenv selection");
+        fs::write(root.path().join(".sdkmanrc"), "java=21.0.8-zulu\n").expect("SDKMAN selection");
+        fs::write(
+            root.path().join("jman.toml"),
+            r#"manifest-version = 1
+
+[toolchain]
+jdk = "25"
+vendor = "corretto"
+"#,
+        )
+        .expect("JMAN selection");
+
+        let selection = find_java_selection(&nested)
+            .expect("selection")
+            .expect("JMAN selection");
+        assert_eq!(selection.version, "25");
+        assert_eq!(selection.vendor.as_deref(), Some("corretto"));
+        assert_eq!(selection.source, JavaSelectionSource::JmanDirectory);
+
+        fs::remove_file(root.path().join("jman.toml")).expect("remove JMAN selection");
+        let selection = find_java_selection(&nested)
+            .expect("selection")
+            .expect("SDKMAN selection");
+        assert_eq!(selection.version, "21.0.8");
+        assert_eq!(selection.vendor.as_deref(), Some("zulu"));
+        assert_eq!(selection.source, JavaSelectionSource::Sdkmanrc);
+
+        fs::remove_file(root.path().join(".sdkmanrc")).expect("remove SDKMAN selection");
+        let selection = find_java_selection(&nested)
+            .expect("selection")
+            .expect("jenv selection");
+        assert_eq!(selection.version, "17.0.12");
+        assert_eq!(selection.vendor.as_deref(), Some("temurin"));
+        assert_eq!(selection.source, JavaSelectionSource::JavaVersion);
+        assert_eq!(selection.path, nested.join(".java-version"));
+    }
+
+    #[test]
+    fn java_selection_files_normalize_legacy_and_vendor_aliases() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        fs::write(directory.path().join(".java-version"), "1.8.0_402\n")
+            .expect("legacy jenv selection");
+        let selection = find_java_selection(directory.path())
+            .expect("selection")
+            .expect("jenv selection");
+        assert_eq!(selection.version, "8u402");
+        assert_eq!(selection.vendor, None);
+
+        fs::remove_file(directory.path().join(".java-version")).expect("remove jenv selection");
+        fs::write(
+            directory.path().join(".sdkmanrc"),
+            "# project candidates\njava=17.0.12-librca\n",
+        )
+        .expect("SDKMAN selection");
+        let selection = find_java_selection(directory.path())
+            .expect("selection")
+            .expect("SDKMAN selection");
+        assert_eq!(selection.version, "17.0.12");
+        assert_eq!(selection.vendor.as_deref(), Some("liberica"));
+    }
+
+    #[test]
+    fn malformed_java_selection_reports_its_source_file() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join(".sdkmanrc");
+        fs::write(&path, "java=not-a-candidate\n").expect("invalid selection");
+
+        let error = find_java_selection(directory.path()).expect_err("invalid selection");
+
+        assert!(error.to_string().contains(&path.display().to_string()));
+        assert!(error.to_string().contains("unsupported Java version"));
     }
 
     #[test]

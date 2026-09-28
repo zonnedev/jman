@@ -120,7 +120,26 @@ fn select_gradle_runtime_with(
         return runtime_from_home(&home, "org.gradle.java.home", gradle_version).map(Some);
     }
 
-    let requested_major = project_gradle_java_major(root)?;
+    let gradle_requested_major = project_gradle_java_major(root)?;
+    let project_selection =
+        jman_config::find_java_selection(root).map_err(|error| error.to_string())?;
+    let selection_requested_major = project_selection
+        .as_ref()
+        .map(|selection| {
+            jman_config::java_feature_version(&selection.version).ok_or_else(|| {
+                format!(
+                    "invalid Java version `{}` in {}",
+                    selection.version,
+                    selection.path.display()
+                )
+            })
+        })
+        .transpose()?;
+    let requested_major = gradle_requested_major.or(selection_requested_major);
+    let selection_source = gradle_requested_major
+        .is_none()
+        .then_some(project_selection.as_ref())
+        .flatten();
     if gradle_version.is_none() && requested_major.is_none() {
         return Ok(None);
     }
@@ -156,6 +175,11 @@ fn select_gradle_runtime_with(
             ));
         }
         candidates.retain(|candidate| candidate.major == major);
+        if let Some(selection) = selection_source {
+            candidates.retain(|candidate| {
+                compatibility_version_matches(&selection.version, &candidate.version)
+            });
+        }
     } else if let Some(version) = gradle_version {
         candidates.retain(|candidate| gradle_supports_java(version, candidate.major));
     }
@@ -210,7 +234,7 @@ fn select_gradle_runtime_with(
         java_home: candidate.home,
         java_version: candidate.version,
         java_major: candidate.major,
-        source: candidate.source,
+        source: selection_source.map_or(candidate.source, |selection| selection.source.label()),
     }))
 }
 
@@ -428,6 +452,29 @@ fn java_version_key(version: &str) -> Vec<u32> {
         .filter(|component| !component.is_empty())
         .filter_map(|component| component.parse().ok())
         .collect()
+}
+
+fn compatibility_version_matches(requested: &str, installed: &str) -> bool {
+    let Some(requested_major) = jman_config::java_feature_version(requested) else {
+        return false;
+    };
+    if java_major(installed) != Some(requested_major) {
+        return false;
+    }
+    if requested
+        .bytes()
+        .all(|character| character.is_ascii_digit())
+        || requested == installed
+    {
+        return true;
+    }
+    installed.strip_prefix(requested).is_some_and(|suffix| {
+        suffix.is_empty()
+            || suffix
+                .as_bytes()
+                .first()
+                .is_some_and(|separator| matches!(separator, b'.' | b'+' | b'-'))
+    })
 }
 
 fn deduplicate_candidates(candidates: &mut Vec<JavaCandidate>) {
@@ -661,6 +708,32 @@ mod tests {
 
         assert_eq!(selected.java_home, managed);
         assert_eq!(selected.source, "JMAN-managed");
+    }
+
+    #[test]
+    fn sdkmanrc_selects_its_project_java_instead_of_a_newer_runtime() {
+        let root = fixture();
+        wrapper(root.path(), "9.1.0");
+        let environment = environment(root.path());
+        let selected_java = jdk(
+            &environment.data_dir.join("jdks"),
+            "zulu-21.0.8",
+            "21.0.8+9",
+        );
+        jdk(
+            &environment.data_dir.join("jdks"),
+            "temurin-25.0.4",
+            "25.0.4+7",
+        );
+        fs::write(root.path().join(".sdkmanrc"), "java=21.0.8-zulu\n").expect("SDKMAN selection");
+
+        let selected = select_gradle_runtime_with(root.path(), &environment)
+            .expect("selection")
+            .expect("runtime");
+
+        assert_eq!(selected.java_home, selected_java);
+        assert_eq!(selected.java_major, 21);
+        assert_eq!(selected.source, ".sdkmanrc");
     }
 
     #[cfg(unix)]

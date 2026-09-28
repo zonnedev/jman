@@ -2432,10 +2432,12 @@ async fn select_local_java(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 enum JavaSelectionSource {
     Project,
     Directory,
+    Sdkmanrc,
+    JavaVersion,
     Global,
 }
 
@@ -2444,6 +2446,8 @@ impl JavaSelectionSource {
         match self {
             Self::Project => "project",
             Self::Directory => "directory",
+            Self::Sdkmanrc => ".sdkmanrc",
+            Self::JavaVersion => ".java-version",
             Self::Global => "global configuration",
         }
     }
@@ -2469,6 +2473,103 @@ async fn installed_java(
             "{} JDK {} is not installed; run `jman java install {} --vendor {}`",
             request.vendor, request.version, request.version, request.vendor
         )
+    })
+}
+
+async fn installed_java_for_selection(
+    manager: &jman_build::toolchain::ToolchainManager,
+    selection: &JavaManifestSelection,
+) -> Result<jman_build::toolchain::ManagedJdk> {
+    use jman_build::toolchain::{normalize_vendor, ToolchainRequest};
+
+    if matches!(
+        selection.source,
+        JavaSelectionSource::Project | JavaSelectionSource::Directory
+    ) {
+        let vendor = selection
+            .vendor
+            .as_deref()
+            .context("JMAN Java selections require a vendor")?;
+        return installed_java(
+            manager,
+            &ToolchainRequest {
+                version: selection.version.clone(),
+                vendor: normalize_vendor(vendor),
+            },
+        )
+        .await;
+    }
+
+    let mut candidates = manager
+        .list()
+        .await?
+        .into_iter()
+        .filter(|jdk| compatibility_version_matches(&selection.version, &jdk.version))
+        .filter(|jdk| {
+            selection
+                .vendor
+                .as_ref()
+                .is_none_or(|vendor| jdk.vendor == *vendor)
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        let major = jman_config::java_feature_version(&selection.version)
+            .context("project Java selection has no feature version")?;
+        let vendor = selection
+            .vendor
+            .as_ref()
+            .map_or_else(String::new, |vendor| format!(" --vendor {vendor}"));
+        bail!(
+            "{} selects Java {}, but no matching JDK is installed; run `jman java install {major}{vendor}`",
+            selection.path.display(),
+            selection.version
+        );
+    }
+    if selection.vendor.is_none() {
+        if let Some(global) = jman_build::toolchain::global_java_selection()? {
+            if compatibility_version_matches(&selection.version, &global.jdk) {
+                if let Some(index) = candidates
+                    .iter()
+                    .rposition(|jdk| jdk.vendor == normalize_vendor(&global.vendor))
+                {
+                    return Ok(candidates.remove(index));
+                }
+            }
+        }
+    }
+    let vendors = candidates
+        .iter()
+        .map(|jdk| jdk.vendor.as_str())
+        .collect::<BTreeSet<_>>();
+    if vendors.len() > 1 {
+        bail!(
+            "{} selects Java {} without a distribution, and matching JDKs are installed from multiple vendors ({}); add a vendor to the file or select one with `jman java use`",
+            selection.path.display(),
+            selection.version,
+            vendors.into_iter().collect::<Vec<_>>().join(", ")
+        );
+    }
+    candidates
+        .pop()
+        .context("matching project JDK disappeared during selection")
+}
+
+fn compatibility_version_matches(requested: &str, installed: &str) -> bool {
+    let Some(requested_major) = jman_config::java_feature_version(requested) else {
+        return false;
+    };
+    if jman_config::java_feature_version(installed) != Some(requested_major) {
+        return false;
+    }
+    if is_java_feature_version(requested) || requested == installed {
+        return true;
+    }
+    installed.strip_prefix(requested).is_some_and(|suffix| {
+        suffix.is_empty()
+            || suffix
+                .as_bytes()
+                .first()
+                .is_some_and(|separator| matches!(separator, b'.' | b'+' | b'-'))
     })
 }
 
@@ -2500,15 +2601,12 @@ async fn resolve_installed_java(
         &target
     };
     if let Some(selection) = nearest_java_selection(directory)? {
-        if java_versions_overlap(version, &selection.request.version)? {
-            return installed_java(
-                manager,
-                &ToolchainRequest {
-                    version: version.to_owned(),
-                    vendor: selection.request.vendor,
-                },
-            )
-            .await;
+        if java_versions_overlap(version, &selection.version)? {
+            let contextual = JavaManifestSelection {
+                version: version.to_owned(),
+                ..selection
+            };
+            return installed_java_for_selection(manager, &contextual).await;
         }
     }
 
@@ -2587,7 +2685,7 @@ async fn effective_java(
         &target
     };
     if let Some(selection) = nearest_java_selection(directory)? {
-        let jdk = installed_java(manager, &selection.request).await?;
+        let jdk = installed_java_for_selection(manager, &selection).await?;
         return Ok(EffectiveJava {
             vendor: jdk.vendor,
             version: jdk.version,
@@ -2632,32 +2730,29 @@ fn nearest_manifest_file(directory: &Path) -> Result<Option<(PathBuf, ManifestFi
 
 struct JavaManifestSelection {
     path: PathBuf,
-    request: jman_build::toolchain::ToolchainRequest,
+    version: String,
+    vendor: Option<String>,
     source: JavaSelectionSource,
 }
 
 fn nearest_java_selection(directory: &Path) -> Result<Option<JavaManifestSelection>> {
-    for ancestor in directory.ancestors() {
-        let path = ancestor.join("jman.toml");
-        if !path.is_file() {
-            continue;
-        }
-        let document = ManifestFile::read(&path)
-            .with_context(|| format!("could not read {}", path.display()))?;
-        let source = if document.is_project() {
-            JavaSelectionSource::Project
-        } else {
-            JavaSelectionSource::Directory
-        };
-        if let Some(toolchain) = document.toolchain() {
-            return Ok(Some(JavaManifestSelection {
-                path,
-                request: toolchain_request(toolchain),
-                source,
-            }));
-        }
-    }
-    Ok(None)
+    let Some(selection) = jman_config::find_java_selection(directory)? else {
+        return Ok(None);
+    };
+    let source = match selection.source {
+        jman_config::JavaSelectionSource::JmanProject => JavaSelectionSource::Project,
+        jman_config::JavaSelectionSource::JmanDirectory => JavaSelectionSource::Directory,
+        jman_config::JavaSelectionSource::Sdkmanrc => JavaSelectionSource::Sdkmanrc,
+        jman_config::JavaSelectionSource::JavaVersion => JavaSelectionSource::JavaVersion,
+    };
+    Ok(Some(JavaManifestSelection {
+        path: selection.path,
+        version: selection.version,
+        vendor: selection
+            .vendor
+            .map(|vendor| jman_build::toolchain::normalize_vendor(&vendor)),
+        source,
+    }))
 }
 
 fn print_effective_java(selection: &EffectiveJava, format: JavaWhichFormat) -> Result<()> {
@@ -3384,24 +3479,23 @@ fn protect_pinned_toolchain(
         return Ok(());
     };
     if candidates.iter().any(|jdk| {
-        selection.request.vendor == jdk.vendor
-            && java_versions_overlap(&selection.request.version, &jdk.version).unwrap_or(false)
+        selection
+            .vendor
+            .as_ref()
+            .is_none_or(|vendor| *vendor == jdk.vendor)
+            && compatibility_version_matches(&selection.version, &jdk.version)
     }) {
         bail!(
-            "{} selects {} JDK {}; use --force to remove it anyway",
+            "{} selects {}JDK {}; use --force to remove it anyway",
             selection.path.display(),
-            selection.request.vendor,
-            selection.request.version
+            selection
+                .vendor
+                .as_ref()
+                .map_or_else(String::new, |vendor| format!("{vendor} ")),
+            selection.version
         );
     }
     Ok(())
-}
-
-fn toolchain_request(toolchain: &ManifestToolchain) -> jman_build::toolchain::ToolchainRequest {
-    jman_build::toolchain::ToolchainRequest {
-        version: toolchain.jdk.clone(),
-        vendor: jman_build::toolchain::normalize_vendor(&toolchain.vendor),
-    }
 }
 
 fn default_cache_dir() -> PathBuf {
