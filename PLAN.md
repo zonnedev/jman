@@ -265,12 +265,12 @@ Milestone 1.5 acceptance:
 - [x] Design a versioned incremental fingerprint containing sources, compiler
       options, toolchain identity, dependency ABI/content inputs, and resources.
 - [x] Implement atomic output directories and correct no-op rebuild behavior.
-- [x] Implement `jman check` and `jman build` with concise and diagnostic output.
+- [x] Implement `jman compile` and `jman build` with concise and diagnostic output.
 - [x] Add multi-module, invalid-source, cache-hit, invalidation, and
       cross-platform command-construction tests.
 - [x] Verify all workspace checks and manual clean/incremental builds.
 
-Completed `jman check` vertical slice:
+Completed `jman compile` vertical slice:
 
 - [x] Add shared `jman doctor` toolchain diagnostics using `JAVA_HOME` with PATH
       fallback and requested-release validation.
@@ -292,7 +292,7 @@ Completed `jman check` vertical slice:
 - [x] Copy main resources deterministically with defined class/resource
       precedence.
 - [x] Implement `jman build` over the bounded module DAG without duplicating work
-      already completed by `jman check`.
+      already completed by `jman compile`.
 - [x] Add a real annotation-processor fixture plus generated-source, resource,
       no-op, failure-recovery, and multi-module build regressions.
 - [x] Re-run Micronaut and Spring Boot compilation and dependency conformance,

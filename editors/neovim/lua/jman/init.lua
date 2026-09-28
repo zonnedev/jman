@@ -29,20 +29,20 @@ local gradle_root_markers = { "settings.gradle", "settings.gradle.kts", "gradlew
 
 local operation_arguments = {
 	jman = {
-		check = { "check" },
+		compile = { "compile" },
 		build = { "build" },
 		test = { "test" },
 		coverage = { "test", "--coverage" },
 		run = { "run" },
 	},
 	gradle = {
-		check = { "check" },
+		compile = { "classes" },
 		build = { "build" },
 		test = { "test" },
 		run = { "run" },
 	},
 	maven = {
-		check = { "test", "-DskipTests" },
+		compile = { "compile" },
 		build = { "package" },
 		test = { "test" },
 	},
@@ -529,8 +529,8 @@ function M.sync()
 	end)
 end
 
-function M.check()
-	workspace_operation("check")
+function M.compile()
+	workspace_operation("compile")
 end
 function M.build()
 	workspace_operation("build")
@@ -773,7 +773,7 @@ local function create_commands()
 	local commands = {
 		JmanStatus = M.show_status,
 		JmanSync = M.sync,
-		JmanCheck = M.check,
+		JmanCompile = M.compile,
 		JmanBuild = M.build,
 		JmanRun = M.run,
 		JmanTest = M.test,
@@ -890,7 +890,7 @@ local function configure_keymaps()
 	end
 	local maps = {
 		{ "<leader>js", M.sync, "JMAN Sync" },
-		{ "<leader>jc", M.check, "JMAN Check" },
+		{ "<leader>jc", M.compile, "JMAN Compile" },
 		{ "<leader>jb", M.build, "JMAN Build" },
 		{ "<leader>jr", M.run, "JMAN Run" },
 		{ "<leader>jt", M.test_nearest, "JMAN Test Nearest" },

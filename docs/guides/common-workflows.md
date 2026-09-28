@@ -53,7 +53,7 @@ repository cannot trigger them.
 ```bash
 jman init customer-api --lib --group dev.example --version 1.0.0 --java 21
 cd customer-api
-jman check
+jman compile
 jman build --sources --javadoc
 jman publish --dry-run
 ```
@@ -80,7 +80,7 @@ removing/replacing its test engine. Both declarations are written to
 
 ```bash
 jman add org.projectlombok:lombok@1.18.34 --scope processor
-jman check
+jman compile
 ```
 
 Processor scope creates an `[annotation-processors]` declaration. It does not
@@ -154,7 +154,7 @@ jman test
 Then verify the cached path:
 
 ```bash
-jman check --offline
+jman compile --offline
 jman test --offline
 jman build --offline --all
 ```
@@ -207,7 +207,7 @@ produce one canonical result.
 ```bash
 jman sync --offline
 jman fmt --check
-jman check --offline
+jman compile --offline
 jman test --offline --coverage
 jman audit --offline --deny high
 jman build --offline --all

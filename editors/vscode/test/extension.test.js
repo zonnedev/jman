@@ -478,6 +478,9 @@ async function main() {
   );
   assert.equal(extension.parseTestEventLine("ordinary test output"), undefined);
   assert.deepEqual(extension.operationArguments("jman", "build"), ["build"]);
+  assert.deepEqual(extension.operationArguments("jman", "compile"), ["compile"]);
+  assert.deepEqual(extension.operationArguments("gradle", "compile"), ["classes"]);
+  assert.deepEqual(extension.operationArguments("maven", "compile"), ["compile"]);
   assert.deepEqual(extension.operationArguments("gradle", "build"), ["build"]);
   assert.deepEqual(extension.operationArguments("maven", "build"), ["package"]);
   assert.deepEqual(extension.operationArguments("maven", "test"), ["test"]);
@@ -574,7 +577,7 @@ async function main() {
   assert(commands.has("jmanJava.showStatus"));
   assert(commands.has("jmanJava.restart"));
   assert(commands.has("jmanJava.syncWorkspace"));
-  assert(commands.has("jmanJava.check"));
+  assert(commands.has("jmanJava.compile"));
   assert(commands.has("jmanJava.build"));
   assert(commands.has("jmanJava.run"));
   assert(commands.has("jmanJava.test"));

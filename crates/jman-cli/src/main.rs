@@ -74,8 +74,8 @@ enum Command {
     Tree(ProjectPath),
     /// Explain why a dependency is present.
     Why(Why),
-    /// Type-check and compile main Java sources.
-    Check(Check),
+    /// Compile main Java sources without packaging artifacts.
+    Compile(Compile),
     /// Format Java sources with JMAN's canonical style.
     Fmt(FmtCommand),
     /// List or execute project scripts declared in jman.toml.
@@ -325,7 +325,7 @@ struct Why {
 }
 
 #[derive(Debug, Args)]
-struct Check {
+struct Compile {
     /// Project directory.
     #[arg(default_value = ".")]
     path: PathBuf,
@@ -805,7 +805,7 @@ async fn run(cli: Cli, ui: &Ui) -> Result<()> {
         Command::Audit(arguments) => audit_dependencies(&arguments, ui).await,
         Command::Tree(arguments) => dependency_tree(&arguments.path),
         Command::Why(arguments) => dependency_why(&arguments),
-        Command::Check(arguments) => compile_project(&arguments, ui, "Checking", "Checked").await,
+        Command::Compile(arguments) => compile_project(&arguments, ui).await,
         Command::Fmt(arguments) => format_project(&arguments, ui),
         Command::Script(arguments) => script_command(&arguments, ui).await,
         Command::Build(arguments) => build_project(&arguments, ui).await,
@@ -1369,7 +1369,7 @@ async fn test_project(arguments: &TestCommand, ui: &Ui) -> Result<()> {
     }
     let cache_dir = default_cache_dir();
     let activity = ui.activity(format!("Compiling {}", workspace_root.display()));
-    jman_build::check_workspace(&workspace_root, &cache_dir, jobs, arguments.offline)
+    jman_build::compile_workspace(&workspace_root, &cache_dir, jobs, arguments.offline)
         .await
         .context("Java compilation failed")?;
     activity.finish("Main sources compiled");
@@ -2147,7 +2147,7 @@ async fn run_project(arguments: &RunCommand, ui: &Ui) -> Result<()> {
         bail!("--jobs must be at least 1");
     }
     let activity = ui.activity(format!("Preparing {}", workspace_root.display()));
-    jman_build::check_workspace(
+    jman_build::compile_workspace(
         &workspace_root,
         &default_cache_dir(),
         jobs,
@@ -2465,15 +2465,13 @@ fn central_credentials(optional: bool) -> Result<String> {
     }
 }
 
-async fn compile_project(
-    arguments: &Check,
-    ui: &Ui,
-    active_verb: &str,
-    completed_verb: &str,
-) -> Result<()> {
+async fn compile_project(arguments: &Compile, ui: &Ui) -> Result<()> {
     let target = absolute_path(&arguments.path)?;
     if !target.join("jman.toml").is_file() {
-        bail!("cannot check {}: jman.toml was not found", target.display());
+        bail!(
+            "cannot compile {}: jman.toml was not found",
+            target.display()
+        );
     }
     let workspace_root = find_workspace_root(&target);
     let jobs = arguments
@@ -2482,8 +2480,8 @@ async fn compile_project(
     if jobs == 0 {
         bail!("--jobs must be at least 1");
     }
-    let activity = ui.activity(format!("{active_verb} {}", workspace_root.display()));
-    let result = jman_build::check_workspace(
+    let activity = ui.activity(format!("Compiling {}", workspace_root.display()));
+    let result = jman_build::compile_workspace(
         &workspace_root,
         &default_cache_dir(),
         jobs,
@@ -2511,12 +2509,12 @@ async fn compile_project(
     }
     activity.finish(if rebuilt == 0 {
         format!(
-            "{completed_verb} {} modules and {sources} source files (unchanged)",
+            "Compiled {} modules and {sources} source files (unchanged)",
             result.modules.len()
         )
     } else {
         format!(
-            "{completed_verb} {} modules and {sources} source files ({rebuilt} compiled)",
+            "Compiled {} modules and {sources} source files ({rebuilt} compiled)",
             result.modules.len()
         )
     });

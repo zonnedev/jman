@@ -38,7 +38,7 @@ focused tests, CI, JDK switching, packaging, and publishing from
 ```console
 jman sync             # resolve declarations and update jman.lock
 jman fmt --check      # verify canonical Java source formatting
-jman check            # compile the workspace without packaging
+jman compile          # compile the workspace without packaging
 jman test             # stream the JUnit result tree as tests finish
 jman build --all      # create thin, fat, source, and Javadoc archives
 jman run -- --help    # run the configured main class with application args

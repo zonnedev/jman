@@ -26,9 +26,9 @@ function executionCommand(provider, jmanCommand, root) {
 
 function operationArguments(buildSystem, operation) {
   const operations = {
-    jman: { check: ["check"], build: ["build"], test: ["test"], run: ["run"] },
-    gradle: { check: ["check"], build: ["build"], test: ["test"], run: ["run"] },
-    maven: { check: ["test", "-DskipTests"], build: ["package"], test: ["test"] },
+    jman: { compile: ["compile"], build: ["build"], test: ["test"], run: ["run"] },
+    gradle: { compile: ["classes"], build: ["build"], test: ["test"], run: ["run"] },
+    maven: { compile: ["compile"], build: ["package"], test: ["test"] },
   };
   return operations[buildSystem]?.[operation];
 }
@@ -666,8 +666,8 @@ async function activate(context) {
       status.text = "$(check) JMAN Java";
       status.tooltip = "JMAN Java is ready";
     }),
-    vscode.commands.registerCommand("jmanJava.check", () =>
-      executeWorkspaceOperation("check")),
+    vscode.commands.registerCommand("jmanJava.compile", () =>
+      executeWorkspaceOperation("compile")),
     vscode.commands.registerCommand("jmanJava.build", () =>
       executeWorkspaceOperation("build")),
     vscode.commands.registerCommand("jmanJava.run", () =>

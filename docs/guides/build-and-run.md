@@ -25,12 +25,12 @@ or managed JDK.
 ## Compile without packaging
 
 ```bash
-jman check
-jman check --jobs 4
-jman check --offline
+jman compile
+jman compile --jobs 4
+jman compile --offline
 ```
 
-`check` compiles production sources for every module in dependency order. It is
+`compile` compiles production sources for every module in dependency order. It is
 the quickest command for validating the main codebase and is suitable for an
 early CI gate. Annotation processors declared in `jman.toml` run as ordinary
 processors; generated types participate in compilation.

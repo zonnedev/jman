@@ -22,6 +22,12 @@ Versioning while it remains pre-1.0.
 - `jman init --repository-url` can scaffold and resolve a project against an
   explicit Maven-compatible repository.
 
+### Changed
+
+- `jman check` is now `jman compile`, accurately describing that the command
+  performs full production-source compilation while deliberately skipping JAR
+  packaging. Editor commands and integrations use the same terminology.
+
 ## [0.8.4] - 2026-09-28
 
 ### Added

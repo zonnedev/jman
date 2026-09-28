@@ -73,7 +73,7 @@ COMMANDS                                                         *jman-commands*
 
 :JmanStatus             Show project, index, cache, sync, and runtime status.
 :JmanSync               Synchronize the active project model.
-:JmanCheck              Check the project with its active build system.
+:JmanCompile            Compile the project with its active build system.
 :JmanBuild              Build the project with its active build system.
 :JmanRun                Run the project when supported by the build system.
 :JmanTest               Run all tests.
@@ -96,7 +96,7 @@ server so classes, methods, wrappers, and external build syntax remain correct.
 KEYMAPS                                                           *jman-keymaps*
 
 <Leader>js    Synchronize project
-<Leader>jc    Check project
+<Leader>jc    Compile project
 <Leader>jb    Build project
 <Leader>jr    Run project
 <Leader>jt    Test nearest

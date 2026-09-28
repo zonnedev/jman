@@ -96,7 +96,7 @@ Run commands from the workspace root:
 
 ```bash
 jman sync
-jman check
+jman compile
 jman test
 jman run
 ```

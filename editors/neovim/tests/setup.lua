@@ -34,7 +34,7 @@ assert(format_autocmds[1].event == "BufWritePre", "Format on save must run befor
 for _, command in ipairs({
 	"JmanStatus",
 	"JmanSync",
-	"JmanCheck",
+	"JmanCompile",
 	"JmanBuild",
 	"JmanRun",
 	"JmanTest",

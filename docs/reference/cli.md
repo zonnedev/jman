@@ -173,20 +173,20 @@ jman why GROUP:ARTIFACT [--path PATH]
 jman why com.fasterxml.jackson.core:jackson-core
 ```
 
-## jman check
+## jman compile
 
-Type-check and compile production Java sources.
+Compile production Java sources without packaging artifacts.
 
 ```text
-jman check [PATH] [--jobs COUNT] [--offline]
+jman compile [PATH] [--jobs COUNT] [--offline]
 ```
 
 `--offline` prevents download of a missing managed JDK. Dependencies must
 already match the lockfile and cache.
 
 ```bash
-jman check --jobs 4
-jman check modules/api --offline
+jman compile --jobs 4
+jman compile modules/api --offline
 ```
 
 ## jman fmt

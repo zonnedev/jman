@@ -1667,7 +1667,7 @@ vendor = "corretto"
         manifest.scripts.insert(
             "broken".to_owned(),
             Script::Structured(ScriptDefinition {
-                command: vec!["jman".to_owned(), "check".to_owned()],
+                command: vec!["jman".to_owned(), "compile".to_owned()],
                 steps: vec!["missing".to_owned()],
                 ..ScriptDefinition::default()
             }),

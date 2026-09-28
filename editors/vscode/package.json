@@ -55,7 +55,7 @@
     "onLanguage:java",
     "onCommand:jmanJava.showStatus",
     "onCommand:jmanJava.syncWorkspace",
-    "onCommand:jmanJava.check",
+    "onCommand:jmanJava.compile",
     "onCommand:jmanJava.build",
     "onCommand:jmanJava.run",
     "onCommand:jmanJava.test",
@@ -81,8 +81,8 @@
         "title": "JMAN Java: Sync Workspace"
       },
       {
-        "command": "jmanJava.check",
-        "title": "JMAN Java: Check Project"
+        "command": "jmanJava.compile",
+        "title": "JMAN Java: Compile Project"
       },
       {
         "command": "jmanJava.build",

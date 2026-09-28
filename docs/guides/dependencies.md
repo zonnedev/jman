@@ -86,7 +86,7 @@ After a successful online resolution:
 
 ```bash
 jman sync --offline
-jman check --offline
+jman compile --offline
 jman test --offline
 ```
 

@@ -48,6 +48,8 @@ compiler-args = ["-parameters", "-Xlint:all"]
 
 [scripts]
 dev = "jman run -- --spring.profiles.active=dev"
+format-check = "jman fmt --check"
+test = "jman test"
 
 [scripts.verify]
 description = "Run all project checks"
@@ -231,6 +233,7 @@ The concise form is a command evaluated by the platform shell:
 [scripts]
 dev = "jman run -- --spring.profiles.active=dev"
 format-check = "jman fmt --check"
+unit-test = "jman test --source-set unit"
 database = "docker compose up -d postgres"
 ```
 
@@ -365,6 +368,6 @@ manual edits require a following `jman sync`.
 ## After editing
 
 Run `jman sync`, review both manifest and lockfile changes, then validate with
-`jman check` or `jman test`. JMAN rejects invalid coordinates, unsafe vendor
+`jman compile` or `jman test`. JMAN rejects invalid coordinates, unsafe vendor
 identifiers, unsupported schema versions, and inconsistent workspace metadata
 before building.

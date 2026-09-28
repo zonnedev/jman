@@ -94,7 +94,7 @@ runtime selection independent from JMAN's bundled native frontend.
 | --- | --- |
 | **JMAN Java: Show Status** | Show server, workspace, index, cache, and synchronization state. |
 | **JMAN Java: Sync Workspace** | Reload the selected project model. |
-| **JMAN Java: Check Project** | Compile and check the workspace. |
+| **JMAN Java: Compile Project** | Compile production sources without packaging. |
 | **JMAN Java: Build Project** | Build reproducible project outputs. |
 | **JMAN Java: Run Application** | Run the configured application. |
 | **JMAN Java: Run All Tests** | Run the complete test suite. |

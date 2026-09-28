@@ -72,7 +72,7 @@ pub struct ModuleResult {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CheckResult {
+pub struct CompileResult {
     pub toolchain: Toolchain,
     pub modules: Vec<ModuleResult>,
 }
@@ -457,22 +457,22 @@ pub(crate) async fn probe_javac(
 ///
 /// Returns an error for invalid workspace graphs, missing lock/cache inputs,
 /// unavailable toolchains, filesystem failures, or Java compilation diagnostics.
-pub async fn check_workspace(
+pub async fn compile_workspace(
     root: &Path,
     cache_dir: &Path,
     jobs: usize,
     offline: bool,
-) -> Result<CheckResult, BuildError> {
-    check_workspace_with_rebuild(root, cache_dir, jobs, offline, false).await
+) -> Result<CompileResult, BuildError> {
+    compile_workspace_with_rebuild(root, cache_dir, jobs, offline, false).await
 }
 
-async fn check_workspace_with_rebuild(
+async fn compile_workspace_with_rebuild(
     root: &Path,
     cache_dir: &Path,
     jobs: usize,
     offline: bool,
     rebuild: bool,
-) -> Result<CheckResult, BuildError> {
+) -> Result<CompileResult, BuildError> {
     let modules = discover_modules(root).await?;
     let required_release = modules
         .iter()
@@ -551,7 +551,7 @@ async fn check_workspace_with_rebuild(
         }
     }
 
-    Ok(CheckResult {
+    Ok(CompileResult {
         toolchain,
         modules: results.into_values().collect(),
     })
@@ -581,7 +581,7 @@ pub async fn package_workspace(
             "`--fat` requires at least one module with `project.main-class`".to_owned(),
         ));
     }
-    let build = check_workspace_with_rebuild(root, cache_dir, jobs, offline, rebuild).await?;
+    let build = compile_workspace_with_rebuild(root, cache_dir, jobs, offline, rebuild).await?;
     if modules.len() != build.modules.len() {
         return Err(BuildError::Invalid(
             "workspace changed while artifacts were being built".to_owned(),
@@ -695,7 +695,7 @@ pub async fn run_workspace(
             )
         }));
     };
-    let build = check_workspace(root, cache_dir, jobs, offline).await?;
+    let build = compile_workspace(root, cache_dir, jobs, offline).await?;
     let mut classpath = vec![build.modules[*index].output.clone()];
     classpath.extend(
         transitive_dependencies(*index, &modules)
@@ -746,7 +746,7 @@ pub async fn test_workspace(
     let modules = discover_modules(root).await?;
     validate_test_modules(&modules, &options.modules)?;
     let selection = junit_selection(&options.patterns)?;
-    let build = check_workspace(root, cache_dir, jobs, offline).await?;
+    let build = compile_workspace(root, cache_dir, jobs, offline).await?;
     let executable = if cfg!(windows) { "java.exe" } else { "java" };
     let java = build.toolchain.javac.parent().map_or_else(
         || PathBuf::from(executable),
@@ -821,7 +821,7 @@ async fn run_test_module(
     index: usize,
     module: &Module,
     modules: &[Module],
-    build: &CheckResult,
+    build: &CompileResult,
     cache_dir: &Path,
     java: &Path,
     selection: &JunitSelection,
@@ -1098,7 +1098,7 @@ fn coverage_tool_paths() -> Result<(PathBuf, PathBuf), BuildError> {
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn generate_coverage_report(
     modules: &[Module],
-    build: &CheckResult,
+    build: &CompileResult,
     results: &[TestModuleResult],
     java: &Path,
     runtime: &CoverageRuntime,

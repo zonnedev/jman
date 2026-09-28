@@ -38,6 +38,8 @@ Project-specific automation can live beside the build model without a plugin:
 ```toml
 [scripts]
 dev = "jman run -- --spring.profiles.active=dev"
+format-check = "jman fmt --check"
+test = "jman test"
 
 [scripts.verify]
 description = "Run the project checks"

@@ -37,6 +37,9 @@ assert(
 	"Maven wrapper must be preferred"
 )
 assert(jman._test.operation_arguments.maven.build[1] == "package", "Maven builds must use package")
+assert(jman._test.operation_arguments.jman.compile[1] == "compile", "JMAN compile command changed")
+assert(jman._test.operation_arguments.gradle.compile[1] == "classes", "Gradle compile must use classes")
+assert(jman._test.operation_arguments.maven.compile[1] == "compile", "Maven compile command changed")
 assert(jman._test.operation_arguments.maven.run == nil, "Unsupported Maven run must stay disabled")
 assert(
 	vim.deep_equal(jman._test.operation_arguments.jman.coverage, { "test", "--coverage" }),

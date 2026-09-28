@@ -51,6 +51,25 @@ fn test_command_exposes_native_module_and_test_selectors() {
 }
 
 #[test]
+fn compile_command_replaces_the_ambiguous_check_name() {
+    let compile = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .args(["compile", "--help"])
+        .output()
+        .expect("read compile help");
+    assert!(compile.status.success());
+    let help = String::from_utf8(compile.stdout).expect("UTF-8 help");
+    assert!(help.contains("Compile main Java sources without packaging artifacts"));
+    assert!(help.contains("--offline"));
+
+    let old_name = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .args(["check", "--help"])
+        .output()
+        .expect("reject old check command");
+    assert!(!old_name.status.success());
+    assert!(String::from_utf8_lossy(&old_name.stderr).contains("unrecognized subcommand 'check'"));
+}
+
+#[test]
 fn publish_command_exposes_safe_repository_controls() {
     let output = Command::new(env!("CARGO_BIN_EXE_jman"))
         .args(["publish", "--help"])
@@ -2214,7 +2233,7 @@ fn native_dependency_commands_work_without_maven_poms() {
 }
 
 #[test]
-fn check_compiles_caches_and_preserves_last_good_output() {
+fn compile_compiles_caches_and_preserves_last_good_output() {
     let project = tempfile::tempdir().expect("temporary project");
     let cache = tempfile::tempdir().expect("temporary cache");
     fs::create_dir_all(project.path().join("src/main/java/com/example")).expect("source tree");
@@ -2259,11 +2278,11 @@ java-release = 17
             .env("JMAN_CACHE_DIR", cache.path())
             .args([
                 "--no-progress",
-                "check",
+                "compile",
                 project.to_str().expect("UTF-8 path"),
             ])
             .output()
-            .expect("run check")
+            .expect("run compile")
     };
 
     let first = run(project.path());
@@ -2305,7 +2324,7 @@ java-release = 17
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn check_rebuilds_downstream_modules_after_upstream_change() {
+fn compile_rebuilds_downstream_modules_after_upstream_change() {
     let project = tempfile::tempdir().expect("temporary project");
     let cache = tempfile::tempdir().expect("temporary cache");
     let lock = r#"lock-version = 3
@@ -2393,20 +2412,20 @@ packaging = "jar"
         "package com.example; public final class App { int value() { return Core.value(); } }",
     )
     .expect("app source");
-    let check = || {
+    let compile = || {
         Command::new(env!("CARGO_BIN_EXE_jman"))
             .env("JMAN_CACHE_DIR", cache.path())
             .args([
                 "--no-progress",
                 "-v",
-                "check",
+                "compile",
                 project.path().to_str().expect("UTF-8 path"),
             ])
             .output()
-            .expect("check workspace")
+            .expect("compile workspace")
     };
 
-    let first = check();
+    let first = compile();
     assert!(
         first.status.success(),
         "{}",
@@ -2422,7 +2441,7 @@ packaging = "jar"
         "package com.example; public final class Core { public static int value() { return 2; } }",
     )
     .expect("change core");
-    let second = check();
+    let second = compile();
     assert!(second.status.success());
     let stderr = String::from_utf8_lossy(&second.stderr);
     assert!(stderr.contains("core: 1 source files (compiled)"));
@@ -2755,7 +2774,7 @@ processors = ["sha256:{digest}"]
             .expect("build project")
     };
 
-    let first = compile("check");
+    let first = compile("compile");
     assert!(
         first.status.success(),
         "{}",

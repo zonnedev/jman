@@ -73,10 +73,10 @@ jman tree
 jman why org.junit.platform:junit-platform-console-standalone
 ```
 
-## 3. Check and package
+## 3. Compile and package
 
 ```bash
-jman check
+jman compile
 jman build --all
 ```
 
@@ -99,7 +99,7 @@ Once dependencies and the JDK are cached, confirm the project works without
 network access:
 
 ```bash
-jman check --offline
+jman compile --offline
 jman test --offline
 jman build --offline
 ```

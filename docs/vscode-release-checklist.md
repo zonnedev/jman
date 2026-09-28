@@ -46,7 +46,7 @@ Launch VS Code with the same two directory arguments and verify:
 5. Diagnostics, completion, hover, definition, references, formatting, code
    actions, symbols, semantic highlighting, and inlay hints respond correctly.
 6. Test Explorer discovers classes and methods and can run and cancel tests.
-7. Check, build, run, test, sync, restart, rebuild-index, and clear-cache
+7. Compile, build, run, test, sync, restart, rebuild-index, and clear-cache
    commands report actionable success or failure messages.
 8. **View → Output → JMAN Java** contains no unexpected startup or protocol
    errors.

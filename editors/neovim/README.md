@@ -76,7 +76,7 @@ compatible build JDK selected by the language server.
 | --- | --- |
 | `:JmanStatus` | Show indexing, semantic, sync, cache, and build-runtime status |
 | `:JmanSync` | Synchronize the native or external project model |
-| `:JmanCheck` | Check with JMAN, Gradle, or Maven |
+| `:JmanCompile` | Compile with JMAN, Gradle, or Maven |
 | `:JmanBuild` | Build with JMAN, Gradle, or Maven |
 | `:JmanRun` | Run with JMAN or Gradle when supported |
 | `:JmanTest` | Run all tests with the active build system |
@@ -104,7 +104,7 @@ their live human-readable test tree in the terminal.
 | Mapping | Action |
 | --- | --- |
 | `<leader>js` | Synchronize |
-| `<leader>jc` | Check |
+| `<leader>jc` | Compile |
 | `<leader>jb` | Build |
 | `<leader>jr` | Run |
 | `<leader>jt` | Test nearest |

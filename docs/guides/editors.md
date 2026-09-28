@@ -59,7 +59,7 @@ Keep `jman.java.buildJavaHome` out of shared settings when it is a
 machine-specific absolute path. Configure it in user settings instead.
 
 Use VS Code's Test Explorer for individual tests and coverage, or commands such
-as **Sync Workspace**, **Check Project**, **Build Project**, **Run Application**,
+as **Sync Workspace**, **Compile Project**, **Build Project**, **Run Application**,
 **Rebuild Project Index**, and **Clear Workspace Cache**.
 
 The complete extension command/setting table is in its

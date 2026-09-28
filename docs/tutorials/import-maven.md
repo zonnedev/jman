@@ -55,7 +55,7 @@ JMAN behavior explicitly in the manifest.
 
 ```bash
 jman sync
-jman check
+jman compile
 jman test
 jman build
 ```
