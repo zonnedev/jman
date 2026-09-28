@@ -33,6 +33,21 @@ $ jman test
 JUnit Platform on the test classpath, and resolves the initial lockfile. The
 new project is ready to run and test immediately.
 
+Project-specific automation can live beside the build model without a plugin:
+
+```toml
+[scripts]
+dev = "jman run -- --spring.profiles.active=dev"
+
+[scripts.verify]
+description = "Run the project checks"
+steps = ["format-check", "test"]
+```
+
+Run it explicitly with `jman script dev`, or use `jman script` to discover
+the available tasks. Scripts inherit the selected project JDK and are never
+run automatically when a repository is opened or imported.
+
 JMAN uses a readable `jman.toml` manifest and a deterministic `jman.lock`. Its
 normal build path does not invoke Maven or Gradle, but existing Maven projects
 can be imported and the language server understands JMAN, Maven, and Gradle
@@ -108,6 +123,7 @@ and troubleshooting.
 | Build | Checks, thin and executable fat JARs, source JARs, Javadocs, annotation processors |
 | Format | [JJFS 1](docs/reference/jjfs-v1.md), native javac-aware formatting, canonical imports, API-first member ordering, CI checks |
 | Test | Live JUnit tree, selectors, unit/integration source sets, parallel modules, coverage |
+| Automation | Manifest-defined shell commands, portable commands, and composed project scripts |
 | Supply chain | Upgrade discovery, transactional updates, OSV audits, signed publishing |
 | Java | Multi-vendor JDK catalog, verified installation, global/directory selection, project-aware shims |
 | Editors | Native Java LSP, VS Code Test Explorer, Neovim commands and CodeLens |

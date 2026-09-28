@@ -46,6 +46,13 @@ vendor = "temurin"
 encoding = "UTF-8"
 compiler-args = ["-parameters", "-Xlint:all"]
 
+[scripts]
+dev = "jman run -- --spring.profiles.active=dev"
+
+[scripts.verify]
+description = "Run all project checks"
+steps = ["format-check", "test"]
+
 [dependencies.compile]
 "com.fasterxml.jackson.core:jackson-databind" = "2.17.2"
 
@@ -126,6 +133,9 @@ Run `jman sync` at the root after adding or moving a module.
 
 `[build]`, `[test]`, `[publishing]`, `[audit]`
 : Optional workflow configuration.
+
+`[scripts]`
+: Explicitly invoked project commands and composed tasks.
 
 `[[repositories]]`
 : Ordered additional artifact repositories.
@@ -212,6 +222,54 @@ compiler-args = ["-parameters"]
 
 Encoding defaults to `UTF-8`. Compiler arguments are passed to `javac` for the
 module; keep portable language targeting in `java-release`.
+
+## `[scripts]`
+
+The concise form is a command evaluated by the platform shell:
+
+```toml
+[scripts]
+dev = "jman run -- --spring.profiles.active=dev"
+format-check = "jman fmt --check"
+database = "docker compose up -d postgres"
+```
+
+The structured form executes an argument array directly, without shell
+parsing:
+
+```toml
+[scripts.database]
+description = "Start the development database"
+command = ["docker", "compose", "up", "-d", "postgres"]
+working-directory = "deployment"
+environment = { POSTGRES_DB = "orders" }
+```
+
+`working-directory` is relative to the manifest and must remain inside the
+project. `environment` overlays the invoking process environment. JMAN adds
+`JMAN_PROJECT_ROOT`, `JMAN_MANIFEST_PATH`, and `JMAN_SCRIPT_NAME`; when a
+project or global JDK is selected it also sets `JAVA_HOME`, `JMAN_JAVA_HOME`,
+and prepends the selected JDK's `bin` directory to `PATH`.
+
+Use `steps` instead of `command` to compose existing scripts sequentially:
+
+```toml
+[scripts.verify]
+description = "Run the standard project checks"
+steps = ["format-check", "unit-test"]
+environment = { CI = "true" }
+```
+
+A structured script must define exactly one of `command` or `steps`. Steps
+must name declared scripts; cycles are rejected during execution. Parent
+environment and working-directory settings flow into their steps, while a
+child may override them. Extra CLI arguments are accepted by command scripts
+but rejected for composed scripts because there is no unambiguous destination.
+
+Run `jman script`, `jman script --format json`, or `jman script NAME` to list
+and execute declarations. Shell initialization completes current project
+script names dynamically. JMAN never invokes scripts implicitly during
+project loading, synchronization, builds, tests, or editor startup.
 
 ## `[test.coverage]`
 

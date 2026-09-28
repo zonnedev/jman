@@ -41,6 +41,23 @@ the manifest, checksums, and archive identity agree.
 | `DOCKER_HOST` | Docker endpoint inherited by tests and Testcontainers. |
 | `CONTAINER_HOST` | Alternative container endpoint inherited by tests. |
 
+## Project-script execution
+
+`jman script` defines these variables for every started command. They describe
+the resolved execution context and override same-named values inherited from
+the invoking shell.
+
+| Variable | Purpose |
+| --- | --- |
+| `JMAN_PROJECT_ROOT` | Canonical directory containing the selected `jman.toml`. |
+| `JMAN_MANIFEST_PATH` | Canonical path to that project manifest. |
+| `JMAN_SCRIPT_NAME` | Name of the leaf script currently executing. |
+| `JMAN_JAVA_HOME` | Selected managed JDK home when a project or global Java selection exists. |
+
+When `JMAN_JAVA_HOME` is defined, JMAN sets `JAVA_HOME` to the same directory
+and prepends its `bin` directory to `PATH`. Manifest `environment` entries may
+define application variables, but cannot replace the four JMAN context values.
+
 ## Publishing credentials
 
 | Variable | Purpose |

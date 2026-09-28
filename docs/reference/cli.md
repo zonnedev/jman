@@ -210,6 +210,39 @@ jman fmt --check src/main/java
 jman fmt src/main/java/dev/example/Application.java
 ```
 
+## jman script
+
+List or explicitly execute project scripts from the nearest native
+`jman.toml`.
+
+```text
+jman script [NAME] [--path PATH] [--dry-run] [-- ARGUMENTS...]
+jman script [--list] [--path PATH] [--format human|json]
+```
+
+Omitting `NAME` lists the available scripts. `--list` makes that intent
+explicit. `--dry-run` expands composed scripts and prints the commands without
+starting processes. Arguments after `--` are appended safely to shell and
+structured command scripts; composed `steps` do not accept arguments.
+
+```bash
+jman script
+jman script dev
+jman script dev -- --server.port=9090
+jman script verify --dry-run
+jman script --format json
+```
+
+Commands run from the manifest directory unless the script declares a
+`working-directory`. They inherit the effective JMAN Java selection through
+`JAVA_HOME`, `JMAN_JAVA_HOME`, and `PATH`. JMAN also defines
+`JMAN_PROJECT_ROOT`, `JMAN_MANIFEST_PATH`, and `JMAN_SCRIPT_NAME`.
+
+Scripts are executable project code. JMAN runs them only after an explicit
+`jman script NAME` command; project import, synchronization, builds, editors,
+and the language server never invoke them automatically. See the
+[`[scripts]` manifest reference](manifest.md#scripts).
+
 ## jman build
 
 Compile and package modules.

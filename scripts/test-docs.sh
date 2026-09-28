@@ -75,7 +75,7 @@ done
 
 manifest_sections=(
   project toolchain dependencies annotation-processors path-dependencies
-  repositories build test.coverage publishing audit maven
+  repositories build scripts test.coverage publishing audit maven
 )
 for section in "${manifest_sections[@]}"; do
   if ! grep -Fq "${section}" docs/reference/manifest.md; then

@@ -67,6 +67,20 @@ Unsupported build-plugin declarations are diagnosed during import instead of
 being silently translated. Compiler arguments, processors, main classes, and
 toolchains must be expressed in `jman.toml` after import.
 
+## Project automation
+
+Native JMAN projects may declare explicitly invoked automation in `[scripts]`.
+The supported contract includes platform-shell commands, direct argument-array
+commands, sequential composition, project-relative working directories,
+environment overlays, selected-JDK activation, dry runs, and cycle detection.
+Script output and process exit status remain authoritative.
+
+Scripts are trusted repository code and are never lifecycle hooks. Import,
+sync, build, test, editor startup, and language-server initialization do not
+execute them. Automatic hooks, downloaded plugin code, a binary plugin ABI,
+parallel task graphs, and script-result caching are outside the current
+contract.
+
 ## Measurable release criteria
 
 Every release candidate must satisfy all of the following from a clean tree:

@@ -7,6 +7,10 @@ Versioning while it remains pre-1.0.
 
 ### Added
 
+- `jman script` now lists and executes manifest-defined project automation,
+  supporting shell commands, portable argument arrays, ordered composition,
+  environment and working-directory overlays, dry runs, JSON discovery,
+  selected-JDK activation, cycle detection, and dynamic shell completion.
 - Project-local Java selection now supports SDKMAN `.sdkmanrc` and jenv
   `.java-version` files across CLI commands, shell shims, removal protection,
   and Gradle language-server imports. JMAN toolchain declarations retain

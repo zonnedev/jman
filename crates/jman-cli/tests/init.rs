@@ -3273,6 +3273,207 @@ vendor = "corretto"
 
 #[cfg(unix)]
 #[test]
+#[allow(clippy::too_many_lines)]
+fn project_scripts_list_compose_forward_arguments_and_preserve_execution_context() {
+    let project = tempfile::tempdir().expect("script project");
+    let nested = project.path().join("service");
+    fs::create_dir(&nested).expect("script working directory");
+    fs::write(
+        project.path().join("jman.toml"),
+        r#"manifest-version = 1
+
+[project]
+group = "com.example"
+name = "scripts"
+version = "1.0.0"
+java-release = 21
+
+[scripts]
+forward = "printf '%s' > forwarded.txt"
+fail = "exit 7"
+
+[scripts.capture]
+description = "Capture the project execution context"
+command = ["sh", "-c", "printf '%s|%s|%s|%s|%s' \"$JMAN_SCRIPT_NAME\" \"$JMAN_PROJECT_ROOT\" \"$JMAN_MANIFEST_PATH\" \"$PROFILE\" \"$PARENT\" > context.txt"]
+working-directory = "service"
+environment = { PROFILE = "test", JMAN_SCRIPT_NAME = "cannot-override" }
+
+[scripts.direct]
+description = "Execute without a shell"
+command = ["sh", "-c", "printf direct > direct.txt"]
+
+[scripts.verify]
+description = "Run every verification step"
+steps = ["capture", "direct"]
+environment = { PARENT = "inherited" }
+
+[scripts.cycle-a]
+steps = ["cycle-b"]
+
+[scripts.cycle-b]
+steps = ["cycle-a"]
+"#,
+    )
+    .expect("script manifest");
+
+    let listed = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .current_dir(project.path())
+        .args(["script", "--list"])
+        .output()
+        .expect("list scripts");
+    assert!(listed.status.success());
+    let listing = String::from_utf8(listed.stdout).expect("UTF-8 listing");
+    assert!(listing.contains("PROJECT SCRIPTS"));
+    assert!(listing.contains("Capture the project execution context"));
+    assert!(!nested.join("context.txt").exists());
+
+    let json = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .current_dir(&nested)
+        .args(["script", "--format", "json"])
+        .output()
+        .expect("list scripts as JSON");
+    assert!(json.status.success());
+    let entries: serde_json::Value = serde_json::from_slice(&json.stdout).expect("script JSON");
+    assert!(entries
+        .as_array()
+        .expect("script list")
+        .iter()
+        .any(|entry| entry["name"] == "verify" && entry["kind"] == "steps"));
+
+    let names = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .current_dir(project.path())
+        .args(["script", "--names"])
+        .output()
+        .expect("list script names");
+    assert!(names.status.success());
+    assert!(String::from_utf8_lossy(&names.stdout)
+        .lines()
+        .any(|name| name == "verify"));
+
+    let forwarded = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .current_dir(project.path())
+        .args(["--quiet", "script", "forward", "--", "hello world"])
+        .output()
+        .expect("forward script arguments");
+    assert!(forwarded.status.success());
+    assert_eq!(
+        fs::read_to_string(project.path().join("forwarded.txt")).expect("forwarded arguments"),
+        "hello world"
+    );
+
+    let composed = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .current_dir(project.path())
+        .args(["--quiet", "script", "verify"])
+        .output()
+        .expect("run composed script");
+    assert!(
+        composed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&composed.stderr)
+    );
+    let context = fs::read_to_string(nested.join("context.txt")).expect("script context");
+    assert_eq!(
+        context,
+        format!(
+            "capture|{}|{}|test|inherited",
+            project.path().canonicalize().unwrap().display(),
+            project
+                .path()
+                .canonicalize()
+                .unwrap()
+                .join("jman.toml")
+                .display()
+        )
+    );
+    assert_eq!(
+        fs::read_to_string(project.path().join("direct.txt")).expect("direct script output"),
+        "direct"
+    );
+
+    fs::remove_file(nested.join("context.txt")).expect("remove execution marker");
+    fs::remove_file(project.path().join("direct.txt")).expect("remove execution marker");
+    let dry_run = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .current_dir(project.path())
+        .args(["script", "verify", "--dry-run"])
+        .output()
+        .expect("dry-run scripts");
+    assert!(dry_run.status.success());
+    let plan = String::from_utf8_lossy(&dry_run.stdout);
+    assert!(plan.contains("capture: sh"));
+    assert!(plan.contains("direct: sh"));
+    assert!(!nested.join("context.txt").exists());
+    assert!(!project.path().join("direct.txt").exists());
+
+    let failed = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .current_dir(project.path())
+        .args(["--quiet", "script", "fail"])
+        .output()
+        .expect("run failing script");
+    assert!(!failed.status.success());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("exited with"));
+
+    let cycle = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .current_dir(project.path())
+        .args(["--quiet", "script", "cycle-a"])
+        .output()
+        .expect("detect script cycle");
+    assert!(!cycle.status.success());
+    assert!(String::from_utf8_lossy(&cycle.stderr).contains("cycle-a -> cycle-b -> cycle-a"));
+}
+
+#[cfg(unix)]
+#[test]
+fn project_scripts_activate_the_selected_managed_java() {
+    let root = tempfile::tempdir().expect("isolated script runtime");
+    let cache = root.path().join("cache");
+    let data = root.path().join("data");
+    let config = root.path().join("config");
+    let project = root.path().join("project");
+    fs::create_dir(&project).expect("script project");
+    let java_home = fake_managed_jdk(&data, "21.0.8+9", 21, "script-java");
+    fs::write(
+        project.join("jman.toml"),
+        r#"manifest-version = 1
+
+[project]
+group = "com.example"
+name = "scripts"
+version = "1.0.0"
+java-release = 21
+
+[toolchain]
+jdk = "21"
+vendor = "temurin"
+
+[scripts.java-environment]
+command = ["sh", "-c", "printf '%s|%s|' \"$JAVA_HOME\" \"$JMAN_JAVA_HOME\"; java"]
+"#,
+    )
+    .expect("script manifest");
+
+    let output = isolated_jman(&cache, &data, &config)
+        .current_dir(&project)
+        .args(["--quiet", "script", "java-environment"])
+        .output()
+        .expect("run script with selected Java");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!(
+            "{}|{}|script-java|{}\n",
+            java_home.display(),
+            java_home.display(),
+            java_home.display()
+        )
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn java_install_selects_the_current_directory_with_a_toolchain_only_jman_toml() {
     let root = tempfile::tempdir().expect("isolated Java home");
     let cache = root.path().join("cache");
@@ -3484,6 +3685,7 @@ fn java_use_requires_an_install_and_shell_initializers_include_completions() {
         assert!(output.status.success());
         let text = String::from_utf8(output.stdout).expect("shell initialization");
         assert!(text.contains("jman java which"));
+        assert!(text.contains("jman script --names"));
         assert!(text.contains("shims"));
         if shell == "bash" {
             assert!(text.contains("--installed"));

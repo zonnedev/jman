@@ -20,6 +20,34 @@ jman run -- --server.port=8081
 
 Arguments after `--` belong to the application, not JMAN.
 
+## Capture repeated project commands
+
+Declare lightweight automation in `jman.toml`:
+
+```toml
+[scripts]
+dev = "jman run -- --spring.profiles.active=dev"
+format-check = "jman fmt --check"
+unit-test = "jman test --source-set unit"
+
+[scripts.verify]
+description = "Run the standard local checks"
+steps = ["format-check", "unit-test"]
+```
+
+Discover and run it with:
+
+```bash
+jman script
+jman script dev -- --server.port=9090
+jman script verify
+jman script verify --dry-run
+```
+
+Scripts execute from the project root with the selected Java installation.
+They run only when requested explicitly, so opening or importing an unfamiliar
+repository cannot trigger them.
+
 ## Create a reusable library
 
 ```bash

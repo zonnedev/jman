@@ -109,6 +109,20 @@ See [security auditing](../security-auditing.md) and
 | Scoped command execution with selected `JAVA_HOME` | Supported |
 | Automatic background JDK installation | Intentionally not performed |
 
+## Project scripts
+
+| Feature | Status |
+| --- | --- |
+| Manifest-defined shell commands | Supported |
+| Shell-free argument-array commands | Supported |
+| Ordered composition with cycle detection | Supported |
+| Per-script environment and working directory | Supported |
+| Selected project JDK activation | Supported |
+| Argument forwarding and dry runs | Supported |
+| Human and JSON discovery | Supported |
+| Dynamic Bash, Zsh, and Fish name completion | Supported |
+| Automatic lifecycle hooks | Intentionally not performed |
+
 The current catalog provider is Foojay Disco. Temurin is the default vendor,
 not the only available vendor. See [Java toolchains](../guides/java-toolchains.md).
 

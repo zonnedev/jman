@@ -1099,6 +1099,7 @@ mod tests {
                 }),
             }),
             audit: None,
+            scripts: BTreeMap::new(),
             repositories: Vec::new(),
             dependencies: Dependencies::default(),
             annotation_processors: BTreeMap::new(),

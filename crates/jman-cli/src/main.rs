@@ -15,8 +15,8 @@ use futures::{stream, StreamExt, TryStreamExt};
 use jman_config::{
     Build, CoverageFormat, Dependencies, LockedClasspaths, LockedPackage, LockedToolchain,
     Lockfile, Manifest, ManifestFile, MavenCompatibility, MavenDependencyMetadata,
-    MavenManagedDependency, Project, Repository, Toolchain as ManifestToolchain, ToolchainManifest,
-    LOCK_VERSION, MANIFEST_VERSION,
+    MavenManagedDependency, Project, Repository, Script, ScriptDefinition,
+    Toolchain as ManifestToolchain, ToolchainManifest, LOCK_VERSION, MANIFEST_VERSION,
 };
 use jman_resolver::{
     plugin_coordinates, AnnotationProcessor, Coordinate, Dependency, DependencyResolver,
@@ -78,6 +78,8 @@ enum Command {
     Check(Check),
     /// Format Java sources with JMAN's canonical style.
     Fmt(FmtCommand),
+    /// List or execute project scripts declared in jman.toml.
+    Script(ScriptCommand),
     /// Build standard and optional module artifacts.
     Build(BuildCommand),
     /// Publish Maven-compatible artifacts locally or to a remote repository.
@@ -114,6 +116,30 @@ struct FmtCommand {
     /// Check formatting without changing files.
     #[arg(long)]
     check: bool,
+}
+
+#[derive(Debug, Args)]
+struct ScriptCommand {
+    /// Script to execute; omit it to list the available scripts.
+    name: Option<String>,
+    /// Directory used to discover the nearest jman.toml.
+    #[arg(long, default_value = ".")]
+    path: PathBuf,
+    /// List available scripts without executing one.
+    #[arg(long, conflicts_with = "name")]
+    list: bool,
+    /// Print only script names, one per line (used by shell completion).
+    #[arg(long, hide = true, conflicts_with_all = ["name", "list", "format"])]
+    names: bool,
+    /// Show commands without executing them.
+    #[arg(long, requires = "name")]
+    dry_run: bool,
+    /// Listing output format.
+    #[arg(long, value_enum, default_value_t = ReportFormat::Human)]
+    format: ReportFormat,
+    /// Arguments appended to a command script.
+    #[arg(last = true)]
+    arguments: Vec<OsString>,
 }
 
 #[derive(Debug, Args)]
@@ -755,6 +781,10 @@ async fn main() {
         }) | Command::Audit(AuditCommand {
             format: ReportFormat::Json,
             ..
+        }) | Command::Script(ScriptCommand {
+            name: None,
+            format: ReportFormat::Json,
+            ..
         })
     );
     let ui = Ui::new(cli.quiet, cli.verbose, cli.no_progress, structured);
@@ -777,6 +807,7 @@ async fn run(cli: Cli, ui: &Ui) -> Result<()> {
         Command::Why(arguments) => dependency_why(&arguments),
         Command::Check(arguments) => compile_project(&arguments, ui, "Checking", "Checked").await,
         Command::Fmt(arguments) => format_project(&arguments, ui),
+        Command::Script(arguments) => script_command(&arguments, ui).await,
         Command::Build(arguments) => build_project(&arguments, ui).await,
         Command::Publish(arguments) => publish_project(&arguments, ui).await,
         Command::Run(arguments) => run_project(&arguments, ui).await,
@@ -794,6 +825,347 @@ fn lsp_command(_arguments: &Lsp) -> Result<()> {
         bail!("Java language server exited with status {status}");
     }
     Ok(())
+}
+
+#[derive(Serialize)]
+struct ScriptListEntry<'a> {
+    name: &'a str,
+    description: Option<&'a str>,
+    kind: &'static str,
+}
+
+#[derive(Clone)]
+struct ScriptExecutionContext {
+    working_directory: PathBuf,
+    environment: BTreeMap<String, String>,
+}
+
+struct ScriptExecutor<'a> {
+    root: &'a Path,
+    manifest_path: &'a Path,
+    scripts: &'a BTreeMap<String, Script>,
+    java_home: Option<&'a Path>,
+    dry_run: bool,
+    ui: &'a Ui,
+}
+
+async fn script_command(arguments: &ScriptCommand, ui: &Ui) -> Result<()> {
+    let target = absolute_path(&arguments.path)?;
+    let directory = if target.is_file() {
+        target
+            .parent()
+            .context("script discovery path has no parent directory")?
+    } else {
+        &target
+    };
+    let (manifest_path, manifest) = nearest_manifest_file(directory)?.with_context(|| {
+        format!(
+            "cannot find jman.toml from {}; project scripts require a native JMAN project",
+            directory.display()
+        )
+    })?;
+    let ManifestFile::Project(manifest) = manifest else {
+        bail!(
+            "{} selects only Java; add [project] before declaring scripts",
+            manifest_path.display()
+        );
+    };
+    let root = std::fs::canonicalize(
+        manifest_path
+            .parent()
+            .context("jman.toml has no parent directory")?,
+    )
+    .with_context(|| {
+        format!(
+            "cannot resolve project root for {}",
+            manifest_path.display()
+        )
+    })?;
+    let manifest_path = root.join("jman.toml");
+
+    if arguments.names {
+        for name in manifest.scripts.keys() {
+            println!("{name}");
+        }
+        return Ok(());
+    }
+    if arguments.name.is_none() || arguments.list {
+        if !arguments.arguments.is_empty() {
+            bail!("script arguments require a script name");
+        }
+        return list_scripts(&manifest.scripts, arguments.format);
+    }
+    if arguments.format == ReportFormat::Json {
+        bail!("--format applies only when listing scripts");
+    }
+    let name = arguments.name.as_deref().context("missing script name")?;
+    if !manifest.scripts.contains_key(name) {
+        let available = manifest
+            .scripts
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let suffix = if available.is_empty() {
+            "no scripts are declared".to_owned()
+        } else {
+            format!("available scripts: {}", available.join(", "))
+        };
+        bail!("script `{name}` is not defined; {suffix}");
+    }
+
+    let java = if arguments.dry_run {
+        None
+    } else {
+        selected_script_java(&root).await?
+    };
+    let executor = ScriptExecutor {
+        root: &root,
+        manifest_path: &manifest_path,
+        scripts: &manifest.scripts,
+        java_home: java.as_ref().map(|selection| selection.home.as_path()),
+        dry_run: arguments.dry_run,
+        ui,
+    };
+    let context = ScriptExecutionContext {
+        working_directory: root.clone(),
+        environment: BTreeMap::new(),
+    };
+    executor.execute(name, &arguments.arguments, &context, &mut Vec::new())
+}
+
+fn list_scripts(scripts: &BTreeMap<String, Script>, format: ReportFormat) -> Result<()> {
+    let entries = scripts
+        .iter()
+        .map(|(name, script)| ScriptListEntry {
+            name,
+            description: script_description(script),
+            kind: match script {
+                Script::Shell(_) => "shell",
+                Script::Structured(definition) if definition.steps.is_empty() => "command",
+                Script::Structured(_) => "steps",
+            },
+        })
+        .collect::<Vec<_>>();
+    if format == ReportFormat::Json {
+        println!("{}", serde_json::to_string_pretty(&entries)?);
+        return Ok(());
+    }
+    if entries.is_empty() {
+        println!("No project scripts are declared.");
+        return Ok(());
+    }
+    let width = entries
+        .iter()
+        .map(|entry| entry.name.len())
+        .max()
+        .unwrap_or_default();
+    println!("PROJECT SCRIPTS\n");
+    for entry in entries {
+        let description = entry.description.unwrap_or(entry.kind);
+        println!("  {:width$}  {description}", entry.name, width = width);
+    }
+    Ok(())
+}
+
+fn script_description(script: &Script) -> Option<&str> {
+    match script {
+        Script::Shell(_) => None,
+        Script::Structured(definition) => definition.description.as_deref(),
+    }
+}
+
+async fn selected_script_java(root: &Path) -> Result<Option<EffectiveJava>> {
+    let has_project_selection = nearest_java_selection(root)?.is_some();
+    let has_global_selection = jman_build::toolchain::global_java_selection()?.is_some();
+    if !has_project_selection && !has_global_selection {
+        return Ok(None);
+    }
+    let manager = jman_build::toolchain::ToolchainManager::new(&default_cache_dir())?;
+    effective_java(&manager, root).await.map(Some)
+}
+
+impl ScriptExecutor<'_> {
+    fn execute(
+        &self,
+        name: &str,
+        arguments: &[OsString],
+        inherited: &ScriptExecutionContext,
+        stack: &mut Vec<String>,
+    ) -> Result<()> {
+        if let Some(start) = stack.iter().position(|active| active == name) {
+            let mut cycle = stack[start..].to_vec();
+            cycle.push(name.to_owned());
+            bail!("project script cycle detected: {}", cycle.join(" -> "));
+        }
+        let script = self
+            .scripts
+            .get(name)
+            .with_context(|| format!("script `{name}` is not defined"))?;
+        stack.push(name.to_owned());
+        let result = match script {
+            Script::Shell(command) => self.execute_shell(name, command, arguments, inherited),
+            Script::Structured(definition) if !definition.steps.is_empty() => {
+                if !arguments.is_empty() {
+                    bail!("script `{name}` is composed of steps and does not accept arguments");
+                }
+                let context = self.layer_context(name, definition, inherited)?;
+                for step in &definition.steps {
+                    self.execute(step, &[], &context, stack)?;
+                }
+                Ok(())
+            }
+            Script::Structured(definition) => {
+                let context = self.layer_context(name, definition, inherited)?;
+                self.execute_direct(name, &definition.command, arguments, &context)
+            }
+        };
+        stack.pop();
+        result
+    }
+
+    fn layer_context(
+        &self,
+        name: &str,
+        definition: &ScriptDefinition,
+        inherited: &ScriptExecutionContext,
+    ) -> Result<ScriptExecutionContext> {
+        let working_directory = if let Some(directory) = &definition.working_directory {
+            let directory =
+                std::fs::canonicalize(self.root.join(directory)).with_context(|| {
+                    format!(
+                        "script `{name}` working directory {} does not exist",
+                        directory.display()
+                    )
+                })?;
+            if !directory.starts_with(self.root) || !directory.is_dir() {
+                bail!(
+                    "script `{name}` working directory {} is outside the project or is not a directory",
+                    directory.display()
+                );
+            }
+            directory
+        } else {
+            inherited.working_directory.clone()
+        };
+        let mut environment = inherited.environment.clone();
+        environment.extend(definition.environment.clone());
+        Ok(ScriptExecutionContext {
+            working_directory,
+            environment,
+        })
+    }
+
+    fn execute_shell(
+        &self,
+        name: &str,
+        source: &str,
+        arguments: &[OsString],
+        context: &ScriptExecutionContext,
+    ) -> Result<()> {
+        if self.dry_run {
+            println!("{name}: {}", display_script_command(source, arguments));
+            return Ok(());
+        }
+        self.ui.line(format!("→ {name}"));
+        let mut command = platform_shell_command(name, source, arguments);
+        self.run_process(name, &mut command, context)
+    }
+
+    fn execute_direct(
+        &self,
+        name: &str,
+        command: &[String],
+        arguments: &[OsString],
+        context: &ScriptExecutionContext,
+    ) -> Result<()> {
+        let (program, configured_arguments) = command
+            .split_first()
+            .with_context(|| format!("script `{name}` has no executable"))?;
+        if self.dry_run {
+            let values = configured_arguments
+                .iter()
+                .map(OsString::from)
+                .chain(arguments.iter().cloned())
+                .collect::<Vec<_>>();
+            println!("{name}: {}", display_script_command(program, &values));
+            return Ok(());
+        }
+        self.ui.line(format!("→ {name}"));
+        let mut process = std::process::Command::new(program);
+        process.args(configured_arguments).args(arguments);
+        self.run_process(name, &mut process, context)
+    }
+
+    fn run_process(
+        &self,
+        name: &str,
+        command: &mut std::process::Command,
+        context: &ScriptExecutionContext,
+    ) -> Result<()> {
+        command
+            .current_dir(&context.working_directory)
+            .envs(&context.environment)
+            .env("JMAN_PROJECT_ROOT", self.root)
+            .env("JMAN_MANIFEST_PATH", self.manifest_path)
+            .env("JMAN_SCRIPT_NAME", name);
+        if let Some(java_home) = self.java_home {
+            command
+                .env("JAVA_HOME", java_home)
+                .env("JMAN_JAVA_HOME", java_home);
+            let mut paths = vec![java_home.join("bin")];
+            if let Some(existing) = std::env::var_os("PATH") {
+                paths.extend(std::env::split_paths(&existing));
+            }
+            command.env(
+                "PATH",
+                std::env::join_paths(paths).context("could not construct script PATH")?,
+            );
+        }
+        let status = command
+            .status()
+            .with_context(|| format!("could not start project script `{name}`"))?;
+        if !status.success() {
+            bail!("project script `{name}` exited with {status}");
+        }
+        self.ui.success(format!("{name} complete"));
+        Ok(())
+    }
+}
+
+fn display_script_command(command: &str, arguments: &[OsString]) -> String {
+    let mut display = command.to_owned();
+    for argument in arguments {
+        display.push(' ');
+        display.push_str(&posix_shell_quote(&argument.to_string_lossy()));
+    }
+    display
+}
+
+#[cfg(unix)]
+fn platform_shell_command(
+    name: &str,
+    source: &str,
+    arguments: &[OsString],
+) -> std::process::Command {
+    let mut command = std::process::Command::new("sh");
+    command
+        .arg("-c")
+        .arg(format!("{source} \"$@\""))
+        .arg(name)
+        .args(arguments);
+    command
+}
+
+#[cfg(windows)]
+fn platform_shell_command(
+    _name: &str,
+    source: &str,
+    arguments: &[OsString],
+) -> std::process::Command {
+    let source = display_script_command(source, arguments);
+    let mut command = std::process::Command::new("cmd");
+    command.args(["/d", "/s", "/c"]).arg(source);
+    command
 }
 
 fn format_project(arguments: &FmtCommand, ui: &Ui) -> Result<()> {
@@ -3109,9 +3481,50 @@ fn shell_init_script(shell: ShellKind) -> Result<String> {
         ShellKind::Zsh => generate(shells::Zsh, &mut command, "jman", &mut completion),
         ShellKind::Fish => generate(shells::Fish, &mut command, "jman", &mut completion),
     }
-    script.push_str(
-        &String::from_utf8(completion).context("generated shell completion was not UTF-8")?,
-    );
+    let mut completion =
+        String::from_utf8(completion).context("generated shell completion was not UTF-8")?;
+    match shell {
+        ShellKind::Bash => {
+            completion = completion.replacen(
+                "_jman() {",
+                "__jman_static_completion() {",
+                1,
+            );
+            completion.push_str(
+                "\n_jman() {\n\
+                 \x20 if [[ \"${COMP_WORDS[1]:-}\" == script && \"${COMP_CWORD}\" -eq 2 ]]; then\n\
+                 \x20   COMPREPLY=( $(compgen -W \"$(command jman script --names 2>/dev/null)\" -- \"${COMP_WORDS[COMP_CWORD]}\") )\n\
+                 \x20 else\n\
+                 \x20   __jman_static_completion \"$@\"\n\
+                 \x20 fi\n\
+                 }\n\
+                 complete -F _jman -o bashdefault -o default jman\n",
+            );
+        }
+        ShellKind::Zsh => {
+            completion = completion.replacen(
+                "_jman() {",
+                "__jman_static_completion() {",
+                1,
+            );
+            completion.push_str(
+                "\n_jman() {\n\
+                 \x20 if (( CURRENT == 3 )) && [[ \"${words[2]}\" == script ]]; then\n\
+                 \x20   local -a jman_scripts\n\
+                 \x20   jman_scripts=(\"${(@f)$(command jman script --names 2>/dev/null)}\")\n\
+                 \x20   _describe 'project script' jman_scripts\n\
+                 \x20 else\n\
+                 \x20   __jman_static_completion \"$@\"\n\
+                 \x20 fi\n\
+                 }\n\
+                 compdef _jman jman\n",
+            );
+        }
+        ShellKind::Fish => completion.push_str(
+            "\ncomplete -c jman \\\n+             \x20 -n '__fish_seen_subcommand_from script; and test (count (commandline -opc)) -eq 2' \\\n+             \x20 -f -a '(command jman script --names 2>/dev/null)'\n",
+        ),
+    }
+    script.push_str(&completion);
     Ok(script)
 }
 
@@ -3748,6 +4161,7 @@ fn scaffold_manifest(
         test: None,
         publishing: None,
         audit: None,
+        scripts: BTreeMap::new(),
         repositories: Vec::new(),
         dependencies,
         annotation_processors: BTreeMap::new(),
@@ -6041,6 +6455,7 @@ fn manifest_from_maven(effective: &EffectivePom, maven_authoritative: bool) -> R
         }),
         publishing: None,
         audit: None,
+        scripts: BTreeMap::new(),
         repositories: effective
             .repositories
             .iter()

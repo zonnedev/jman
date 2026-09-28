@@ -42,6 +42,7 @@ jman check            # compile the workspace without packaging
 jman test             # stream the JUnit result tree as tests finish
 jman build --all      # create thin, fat, source, and Javadoc archives
 jman run -- --help    # run the configured main class with application args
+jman script           # discover project-specific automation
 ```
 
 JMAN chooses the JDK pinned by the project, resolves a deterministic classpath,

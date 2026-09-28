@@ -109,6 +109,8 @@ pub struct Manifest {
     pub publishing: Option<Publishing>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audit: Option<Audit>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub scripts: BTreeMap<String, Script>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repositories: Vec<Repository>,
     #[serde(default, skip_serializing_if = "Dependencies::is_empty")]
@@ -117,6 +119,32 @@ pub struct Manifest {
     pub annotation_processors: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub path_dependencies: BTreeMap<String, String>,
+}
+
+/// An explicitly invoked project script.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum Script {
+    /// A command evaluated by the platform shell.
+    Shell(String),
+    /// A portable command or an ordered composition of other scripts.
+    Structured(ScriptDefinition),
+}
+
+/// Structured project-script configuration.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct ScriptDefinition {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub command: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_directory: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub environment: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -494,6 +522,7 @@ impl Manifest {
         if let Some(coverage) = self.test.as_ref().and_then(|test| test.coverage.as_ref()) {
             validate_coverage(coverage)?;
         }
+        validate_scripts(&self.scripts)?;
         Ok(())
     }
 
@@ -724,6 +753,84 @@ fn validate_jdk_vendor(vendor: &str) -> Result<(), ConfigError> {
             "JDK vendor `{vendor}` must be a lowercase identifier"
         )))
     }
+}
+
+fn validate_scripts(scripts: &BTreeMap<String, Script>) -> Result<(), ConfigError> {
+    for (name, script) in scripts {
+        if name.is_empty()
+            || name
+                .chars()
+                .any(|character| character.is_control() || character.is_whitespace())
+        {
+            return Err(ConfigError::Validation(format!(
+                "script name `{name}` must be non-empty and contain no whitespace"
+            )));
+        }
+        match script {
+            Script::Shell(command) if command.trim().is_empty() => {
+                return Err(ConfigError::Validation(format!(
+                    "script `{name}` command cannot be empty"
+                )));
+            }
+            Script::Shell(_) => {}
+            Script::Structured(script) => {
+                if script.command.is_empty() == script.steps.is_empty() {
+                    return Err(ConfigError::Validation(format!(
+                        "script `{name}` must define exactly one of `command` or `steps`"
+                    )));
+                }
+                if script.command.first().is_some_and(String::is_empty) {
+                    return Err(ConfigError::Validation(format!(
+                        "script `{name}` executable cannot be empty"
+                    )));
+                }
+                if script.steps.iter().any(String::is_empty) {
+                    return Err(ConfigError::Validation(format!(
+                        "script `{name}` contains an empty step"
+                    )));
+                }
+                if script
+                    .description
+                    .as_ref()
+                    .is_some_and(|description| description.trim().is_empty())
+                {
+                    return Err(ConfigError::Validation(format!(
+                        "script `{name}` description cannot be empty"
+                    )));
+                }
+                if script.working_directory.as_ref().is_some_and(|directory| {
+                    directory.is_absolute()
+                        || directory
+                            .components()
+                            .any(|component| matches!(component, std::path::Component::ParentDir))
+                }) {
+                    return Err(ConfigError::Validation(format!(
+                        "script `{name}` working-directory must stay within the project"
+                    )));
+                }
+                if let Some(variable) = script.environment.keys().find(|variable| {
+                    variable.is_empty() || variable.contains('=') || variable.contains('\0')
+                }) {
+                    return Err(ConfigError::Validation(format!(
+                        "script `{name}` has invalid environment variable `{variable}`"
+                    )));
+                }
+            }
+        }
+    }
+    for (name, script) in scripts {
+        let Script::Structured(script) = script else {
+            continue;
+        };
+        for step in &script.steps {
+            if !scripts.contains_key(step) {
+                return Err(ConfigError::Validation(format!(
+                    "script `{name}` references undefined step `{step}`"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Return the Java feature version from a major or exact JDK version.
@@ -1175,6 +1282,7 @@ mod tests {
                 }),
             }),
             audit: None,
+            scripts: BTreeMap::new(),
             repositories: vec![Repository {
                 id: "central".to_owned(),
                 url: "https://repo.maven.apache.org/maven2".to_owned(),
@@ -1470,6 +1578,7 @@ vendor = "corretto"
             test: None,
             publishing: None,
             audit: None,
+            scripts: BTreeMap::new(),
             repositories: Vec::new(),
             dependencies: Dependencies::default(),
             annotation_processors: BTreeMap::new(),
@@ -1513,5 +1622,73 @@ vendor = "corretto"
             .expect_err("reject threshold")
             .to_string()
             .contains("between 0 and 100"));
+    }
+
+    #[test]
+    fn project_scripts_round_trip_in_shell_command_and_composed_forms() {
+        let mut manifest = minimal_manifest();
+        manifest.scripts = BTreeMap::from([
+            (
+                "dev".to_owned(),
+                Script::Shell("jman run -- --server.port=8080".to_owned()),
+            ),
+            (
+                "test".to_owned(),
+                Script::Structured(ScriptDefinition {
+                    description: Some("Run unit tests".to_owned()),
+                    command: vec!["jman".to_owned(), "test".to_owned()],
+                    working_directory: Some(PathBuf::from("service")),
+                    environment: BTreeMap::from([("PROFILE".to_owned(), "test".to_owned())]),
+                    ..ScriptDefinition::default()
+                }),
+            ),
+            (
+                "verify".to_owned(),
+                Script::Structured(ScriptDefinition {
+                    steps: vec!["test".to_owned(), "dev".to_owned()],
+                    ..ScriptDefinition::default()
+                }),
+            ),
+        ]);
+
+        let serialized = manifest.to_toml().expect("serialize scripts");
+        assert!(serialized.contains("dev = \"jman run -- --server.port=8080\""));
+        assert!(serialized.contains("[scripts.test]"));
+        assert!(serialized.contains("steps = ["));
+        assert_eq!(
+            toml::from_str::<Manifest>(&serialized).expect("parse scripts"),
+            manifest
+        );
+    }
+
+    #[test]
+    fn project_scripts_reject_ambiguous_commands_and_undefined_steps() {
+        let mut manifest = minimal_manifest();
+        manifest.scripts.insert(
+            "broken".to_owned(),
+            Script::Structured(ScriptDefinition {
+                command: vec!["jman".to_owned(), "check".to_owned()],
+                steps: vec!["missing".to_owned()],
+                ..ScriptDefinition::default()
+            }),
+        );
+        assert!(manifest
+            .validate()
+            .expect_err("reject command and steps")
+            .to_string()
+            .contains("exactly one"));
+
+        manifest.scripts.insert(
+            "broken".to_owned(),
+            Script::Structured(ScriptDefinition {
+                steps: vec!["missing".to_owned()],
+                ..ScriptDefinition::default()
+            }),
+        );
+        assert!(manifest
+            .validate()
+            .expect_err("reject undefined step")
+            .to_string()
+            .contains("undefined step `missing`"));
     }
 }
