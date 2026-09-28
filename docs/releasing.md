@@ -53,7 +53,8 @@ reviewed commit, run the portable suite before preparing the tag:
 ```bash
 cargo fmt --all -- --check
 make ci
-JMAN_JAVAC_FRONTEND_LIB_DIR=target/native LD_LIBRARY_PATH=target/native \
+JMAN_JAVAC_FRONTEND_LIB_DIR="$PWD/target/native" \
+  ./scripts/with-native-library "$PWD/target/native" \
   cargo clippy --workspace --all-targets --all-features -- -D warnings
 npm audit --prefix editors/vscode --audit-level=high
 ```
@@ -77,19 +78,21 @@ smaller `make ci` suite.
 Then prepare the coordinated release from the same clean worktree:
 
 ```bash
-make prepare-release VERSION=0.8.3
+make prepare-release VERSION=X.Y.Z
 ```
 
 The command synchronizes the Rust workspace, Cargo lockfile, VS Code manifests,
-changelogs, workflow example, and versioned documentation. After validation it
-asks whether to create `chore(release): prepare v0.8.3` and the annotated tag
-`git tag -a v0.8.3 -m "v0.8.3"`. A separate final confirmation can atomically
-push both the current branch and tag to `origin`. Declining either confirmation
-never pushes anything and leaves the prepared state available for review.
+changelogs, workflow examples, and release documentation. After validation it
+asks whether to create `chore(release): prepare vX.Y.Z` and the annotated tag
+`git tag -a vX.Y.Z -m "vX.Y.Z"`. Replace `X.Y.Z` with the intended semantic
+version; a prerelease such as `X.Y.Z-rc.1` is also valid. A separate final
+confirmation can atomically push both the current branch and tag to `origin`.
+Declining either confirmation never pushes anything and leaves the prepared
+state available for review.
 
 Annotated tags are the final release identity. An exact clean tag reports the
 plain version, while development commits report the nearest release plus
-source metadata, such as `0.8.3+dev.3.g8fa23cd12345`. Release jobs fetch full
+source metadata, such as `X.Y.Z+dev.3.g8fa23cd12345`. Release jobs fetch full
 history and reject a packaged binary whose version differs from the tag. See
 the [version identity reference](reference/versioning.md) for the complete
 contract and fallback behavior.
@@ -120,9 +123,10 @@ GitHub stores Sigstore-backed build provenance for the CLI archive, VSIX, and
 installer. After downloading an artifact, verify both controls:
 
 ```bash
-grep '  jman-0.8.3-linux-x86_64.tar.gz$' SHA256SUMS \
+archive=jman-X.Y.Z-linux-x86_64.tar.gz
+grep "  ${archive}$" SHA256SUMS \
   | sha256sum --check -
-gh attestation verify jman-0.8.3-linux-x86_64.tar.gz \
+gh attestation verify "${archive}" \
   --repo zonnedev/jman
 ```
 

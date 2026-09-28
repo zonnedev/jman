@@ -34,9 +34,10 @@ provides the newest candidate in each patch, minor, and major class.
 
 Online checks refresh `group/artifact/maven-metadata.xml` through the
 repositories declared by each module, or Maven Central when none are declared.
-Successful metadata is cached under `$JMAN_CACHE_DIR/repository/` (normally
-`~/.cache/jman/repository/`). If repositories are temporarily unavailable,
-JMAN falls back to the last cached catalog and warns that it may be stale.
+Successful metadata is cached under `$JMAN_CACHE_DIR/repository/` (under the
+platform cache directory when the variable is unset). If repositories are
+temporarily unavailable, JMAN falls back to the last cached catalog and warns
+that it may be stale.
 
 `--offline` never contacts a repository. Dependencies without cached metadata
 are reported as `unavailable`; one unavailable catalog does not hide results

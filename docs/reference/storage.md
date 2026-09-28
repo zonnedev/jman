@@ -20,7 +20,13 @@ schemas rather than producing a potentially different graph.
 
 ## Shared cache
 
-The default root is `~/.cache/jman/`; `JMAN_CACHE_DIR` overrides it.
+`JMAN_CACHE_DIR` overrides the shared cache root. Without it, JMAN uses the
+platform cache directory:
+
+| Platform | Default cache root |
+| --- | --- |
+| Linux | `~/.cache/jman/` (or `$XDG_CACHE_HOME/jman/`) |
+| macOS | `~/Library/Caches/jman/` |
 
 | Directory | Contents |
 | --- | --- |
@@ -45,8 +51,14 @@ Do not commit the shared cache.
 
 ## Durable Java data and configuration
 
-Installed JDKs and command shims are user data, not a cache. On Linux they are
-stored under `~/.local/share/jman/`; `JMAN_DATA_DIR` overrides the root.
+Installed JDKs and command shims are user data, not a cache.
+`JMAN_DATA_DIR` overrides their root; `JMAN_CONFIG_DIR` overrides the
+user-configuration root.
+
+| Platform | Data root | Configuration file |
+| --- | --- | --- |
+| Linux | `~/.local/share/jman/` or `$XDG_DATA_HOME/jman/` | `~/.config/jman/config.toml` or `$XDG_CONFIG_HOME/jman/config.toml` |
+| macOS | `~/Library/Application Support/jman/` | `~/Library/Application Support/jman/config.toml` |
 
 | Path | Contents |
 | --- | --- |
@@ -54,11 +66,10 @@ stored under `~/.local/share/jman/`; `JMAN_DATA_DIR` overrides the root.
 | `current` | Atomic link to the exact globally selected JDK. |
 | `shims/` | Project-aware JDK command links created by `jman java setup`. |
 
-The user-wide selection is stored separately in
-`~/.config/jman/config.toml`; `JMAN_CONFIG_DIR` overrides that configuration
-root. The file records an exact version and vendor. Do not manually edit the
-configuration or the `current` link; use `jman java install ... --global` or
-`jman java use ... --global` so they change together.
+The user-wide selection file records an exact version and vendor. Do not
+manually edit the configuration or the `current` link; use
+`jman java install ... --global` or `jman java use ... --global` so they change
+together.
 
 Cache cleanup is safe for installed JDKs. Removing the data directory is not:
 it deletes the managed installations and shims.

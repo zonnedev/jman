@@ -30,6 +30,14 @@ jman test --tests 'dev.example.OrderServiceTest#createsOrder'
 Both selectors are repeatable. JMAN retains stable JUnit selectors so editor
 reruns target the same class or method rather than matching display text.
 
+Combine selectors to run two precise methods in one module:
+
+```bash
+jman test --module application \
+  --tests 'dev.example.OrderServiceTest#createsOrder' \
+  --tests 'dev.example.OrderServiceTest#rejectsDuplicateOrder'
+```
+
 ## Parallel execution and live reporting
 
 ```bash
@@ -43,6 +51,13 @@ newline-delimited `test-module-started`, `test-case-started`, `test-case`, and
 
 Test durations come from JUnit execution events. Suite durations include
 container lifecycle time that cannot be attributed to an individual method.
+
+For machine consumption, process each JSON line as it arrives:
+
+```bash
+jman test --report json --tests dev.example.OrderServiceTest \
+  | jq -c 'select(.reason == "test-case")'
+```
 
 ## Debug a worker
 
@@ -96,3 +111,10 @@ jman --no-progress test
 Use `--report json` when another process owns presentation or needs individual
 test events. A nonzero exit covers compilation failures, worker failures,
 failed tests, and missed coverage thresholds.
+
+A compact CI gate that keeps human-readable failures is:
+
+```bash
+jman --no-progress fmt --check
+jman --no-progress test --source-set unit --coverage
+```

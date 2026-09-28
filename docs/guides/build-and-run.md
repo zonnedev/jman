@@ -64,6 +64,22 @@ The build report groups artifacts under each module's output directory and
 shows type, size, status, and filename. Use `jman -v build --all` for full
 checksums and individual fat-JAR resource conflict details.
 
+A typical application release check is:
+
+```bash
+jman fmt --check
+jman test
+jman build --rebuild --fat
+java -jar .jman/artifacts/application-1.0.0-fat.jar --server.port=8081
+```
+
+For a library, build the artifacts consumers and repositories expect instead:
+
+```bash
+jman build --sources --javadoc
+jman publish --dry-run
+```
+
 The fat-JAR merger applies generic Java archive rules, not framework-specific
 patches: duplicate classes are rejected, signatures and unsafe input manifests
 are removed, service descriptors and supported registry resources are merged,
@@ -95,6 +111,13 @@ compiled main output plus the resolved runtime classpath, which is why `run`
 can execute a framework application even though its thin JAR alone cannot.
 Use `jman build --fat` when the desired output is a standalone `java -jar`
 artifact.
+
+Run a project from outside its directory by placing the path before the
+separator:
+
+```bash
+jman run services/web -- --server.port=9090
+```
 
 ## Control output and concurrency
 

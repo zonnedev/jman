@@ -41,7 +41,8 @@ scores nor recognized database labels remain `unknown`; JMAN does not invent a
 severity. Withdrawn records are excluded.
 
 Results for the exact sorted dependency graph are cached for one hour under
-`$JMAN_CACHE_DIR/audit/osv/`, normally `~/.cache/jman/audit/osv/`. A normal
+`$JMAN_CACHE_DIR/audit/osv/`, using JMAN's platform cache directory when the
+variable is unset. A normal
 audit uses a fresh cache entry, `--refresh` forces provider revalidation, and a
 provider failure falls back to a valid stale entry with a warning. `--offline`
 never contacts the provider and fails when the exact graph has no cached

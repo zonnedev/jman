@@ -4,7 +4,7 @@
 kebab-case, dependency maps are sorted when JMAN rewrites them, and unknown
 schema versions are rejected rather than guessed.
 
-## Complete example
+## Application example
 
 ```toml
 manifest-version = 1
@@ -46,7 +46,45 @@ id = "central"
 url = "https://repo.maven.apache.org/maven2"
 ```
 
-Only `manifest-version` and `[project]` are mandatory.
+Only `manifest-version` and `[project]` are mandatory. The example deliberately
+shows common application settings; the focused sections below cover local
+modules, test policy, publishing, auditing, and advanced Maven metadata.
+
+## Workspace example
+
+An aggregator lists module directories and connects modules through their own
+manifests:
+
+```toml
+# jman.toml
+manifest-version = 1
+
+[project]
+group = "dev.example"
+name = "orders-platform"
+version = "1.0.0"
+java-release = 21
+packaging = "pom"
+modules = ["orders-api", "orders-application"]
+```
+
+```toml
+# orders-application/jman.toml
+manifest-version = 1
+
+[project]
+group = "dev.example"
+name = "orders-application"
+version = "1.0.0"
+java-release = 21
+packaging = "jar"
+main-class = "dev.example.orders.Application"
+
+[path-dependencies]
+"dev.example:orders-api" = "../orders-api"
+```
+
+Run `jman sync` at the root after adding or moving a module.
 
 ## Top-level schema
 

@@ -36,6 +36,12 @@ jman java list --format json
 JSON retains the complete matching catalog even when the human table would be
 compact.
 
+To compare vendors for one feature release without hiding older builds:
+
+```bash
+jman java list --major 25 --all
+```
+
 ## Choose the user-wide Java
 
 ```bash
@@ -83,9 +89,10 @@ java --version
 ```
 
 `jman java which` shows the JDK JMAN intends to use. `JAVA_HOME` should be that
-JDK's directory, and `command -v java` should resolve to
-`~/.local/share/jman/shims/java` by default. The final command confirms what is
-actually executed.
+JDK's directory. `command -v java` should resolve into JMAN's data-directory
+`shims/` folder: `~/.local/share/jman/shims/java` on Linux or
+`~/Library/Application Support/jman/shims/java` on macOS. The final command
+confirms what is actually executed.
 
 To switch to another JDK that is already installed:
 
@@ -143,9 +150,18 @@ Run an individual command with the effective JDK without changing the parent
 shell:
 
 ```bash
-jman java exec -- java -version
-jman java exec 27 --vendor zulu -- java -version
+jman java exec -- java --version
+jman java exec 27 --vendor zulu -- java --version
 ```
+
+This is useful for a small compatibility matrix:
+
+```bash
+jman java exec 21 -- jman test
+jman java exec 25 --vendor zulu -- jman test
+```
+
+Both runs leave global and project selection untouched.
 
 ## Remove installations safely
 

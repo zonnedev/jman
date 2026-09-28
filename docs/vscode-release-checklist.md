@@ -28,10 +28,11 @@ from normal VS Code settings and extensions:
 
 ```bash
 mkdir -p /tmp/jman-vscode-profile /tmp/jman-vscode-extensions
+vsix="$(find target/vscode -maxdepth 1 -name 'jman-java-*-*.vsix' -print -quit)"
 code \
   --user-data-dir /tmp/jman-vscode-profile \
   --extensions-dir /tmp/jman-vscode-extensions \
-  --install-extension target/vscode/jman-java-0.8.3-<platform>.vsix
+  --install-extension "${vsix}"
 ```
 
 Launch VS Code with the same two directory arguments and verify:

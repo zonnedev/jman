@@ -84,6 +84,7 @@ setup, project overrides, scoped execution, storage, and troubleshooting.
 - [Install JMAN](docs/getting-started/installation.md)
 - [Build your first project](docs/getting-started/first-project.md)
 - [Understand the project layout](docs/getting-started/project-layout.md)
+- [Copy a complete workflow](docs/guides/common-workflows.md)
 - [Browse every feature](docs/reference/features.md)
 - [Look up a command](docs/reference/cli.md)
 - [Configure `jman.toml`](docs/reference/manifest.md)

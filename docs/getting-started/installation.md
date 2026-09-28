@@ -47,7 +47,7 @@ curl -fsSL https://github.com/zonnedev/jman/releases/latest/download/install.sh 
   | JMAN_SETUP_JAVA=1 sh
 ```
 
-Supported installer controls are:
+Common installer controls are:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -57,10 +57,26 @@ Supported installer controls are:
 | `JMAN_INSTALL_ROOT` | `~/.local/share/jman/versions` | Override versioned JMAN installations. |
 | `JMAN_BIN_DIR` | `~/.local/bin` | Override the directory containing the `jman` symlink. |
 
+Organizations mirroring release assets can also set `JMAN_REPOSITORY`,
+`JMAN_RELEASE_BASE_URL`, and `JMAN_LATEST_MANIFEST_URL`. Mirror URLs must use
+HTTPS. `JMAN_ALLOW_INSECURE_URLS=1` exists only for loopback installer tests and
+must not be used to bootstrap a real machine.
+
 Re-running the installer is safe. An existing valid version is reused and the
 `jman` symlink is updated. The installer refuses to overwrite a regular file at
 the link location and refuses archives whose checksum or embedded version does
 not match.
+
+Pin a release in a reproducible workstation or CI bootstrap:
+
+```bash
+curl -fsSL https://github.com/zonnedev/jman/releases/latest/download/install.sh \
+  | JMAN_VERSION=0.8.3 JMAN_SETUP_JAVA=0 sh
+```
+
+`JMAN_VERSION` controls which release is downloaded even though the installer
+itself is obtained from the latest release. Replace the example version with
+the release your environment has approved.
 
 ## Manual installation
 
@@ -139,10 +155,12 @@ command -v java
 java --version
 ```
 
-`command -v java` should report `~/.local/share/jman/shims/java` unless
-`JMAN_DATA_DIR` changes the data location. Inside a project, `jman java which`
-may report a project selection instead of the global default; project
-configuration intentionally has higher precedence.
+On Linux, `command -v java` normally reports
+`~/.local/share/jman/shims/java`; on macOS it normally reports
+`~/Library/Application Support/jman/shims/java`. `JMAN_DATA_DIR` changes that
+root. Inside a project, `jman java which` may report a project selection instead
+of the global default; project configuration intentionally has higher
+precedence.
 
 Temurin is the default download distribution. Pass `--vendor <name>` when
 installing another distribution, for example `zulu` or `corretto`; later
@@ -163,4 +181,5 @@ in-place upgrade. After choosing the version you want to keep, remove older
 version directories manually.
 
 JMAN's artifact and catalog cache is independent of the installation. Its
-default location is `~/.cache/jman`; see [storage](../reference/storage.md).
+platform-specific default and every generated path are documented under
+[storage](../reference/storage.md).

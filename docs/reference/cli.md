@@ -29,6 +29,13 @@ jman init [PATH] [--import] [--lib] [--group GROUP] [--java RELEASE]
 - `--modules` creates a workspace root and comma-separated child modules.
 - `--main-class` overrides the generated `<group>.<name>.Application`.
 
+```bash
+jman init inventory --group dev.example --java 21 \
+  --main-class dev.example.inventory.Application
+jman init domain-model --lib --group dev.example --version 1.0.0
+jman init platform --modules api,application
+```
+
 ## jman sync
 
 Resolve declarations, prepare classpaths, and atomically regenerate lockfiles.
@@ -39,6 +46,11 @@ jman sync [PATH] [--report human|json] [--refresh] [--offline]
 
 `--refresh` reconstructs effective models and lockfiles even when current.
 `--offline` uses only the local dependency cache.
+
+```bash
+jman sync --refresh
+jman sync services/orders --report json
+```
 
 ## jman add
 
@@ -53,12 +65,22 @@ jman add GROUP:ARTIFACT@VERSION
 The default scope is `compile`. Processor scope writes to
 `[annotation-processors]` rather than a runtime dependency section.
 
+```bash
+jman add com.fasterxml.jackson.core:jackson-databind@2.17.2
+jman add org.projectlombok:lombok@1.18.34 --scope processor
+jman add org.junit.jupiter:junit-jupiter@5.10.2 --scope test --path modules/api
+```
+
 ## jman remove
 
 Remove a direct declaration and synchronize.
 
 ```text
 jman remove GROUP:ARTIFACT [--path PATH] [--offline]
+```
+
+```bash
+jman remove org.junit.jupiter:junit-jupiter --path modules/api
 ```
 
 ## jman outdated
@@ -73,6 +95,11 @@ jman outdated [PATH] [--offline] [--include-prerelease]
 
 Stable versions are preferred unless `--include-prerelease` is present.
 
+```bash
+jman outdated
+jman outdated --include-prerelease --format json
+```
+
 ## jman update
 
 Update one or every direct repository dependency and synchronize the workspace
@@ -86,6 +113,11 @@ jman update [GROUP:ARTIFACT] [--path PATH]
 
 The default level is `patch`. `--dry-run` prints the plan without editing
 manifests or lockfiles.
+
+```bash
+jman update --dry-run
+jman update com.fasterxml.jackson.core:jackson-databind --level minor
+```
 
 ## jman audit
 
@@ -102,6 +134,11 @@ jman audit [PATH] [--offline] [--refresh]
 active findings. `--offline` requires a cached result for the exact graph;
 `--refresh` bypasses a still-fresh audit cache entry.
 
+```bash
+jman audit --severity medium
+jman audit --offline --deny high
+```
+
 ## jman tree
 
 Render the complete resolved dependency hierarchy.
@@ -110,12 +147,21 @@ Render the complete resolved dependency hierarchy.
 jman tree [PATH]
 ```
 
+```bash
+jman tree
+jman tree services/orders
+```
+
 ## jman why
 
 Render every shortest path that explains why an artifact is present.
 
 ```text
 jman why GROUP:ARTIFACT [--path PATH]
+```
+
+```bash
+jman why com.fasterxml.jackson.core:jackson-core
 ```
 
 ## jman check
@@ -128,6 +174,11 @@ jman check [PATH] [--jobs COUNT] [--offline]
 
 `--offline` prevents download of a missing managed JDK. Dependencies must
 already match the lockfile and cache.
+
+```bash
+jman check --jobs 4
+jman check modules/api --offline
+```
 
 ## jman fmt
 
@@ -144,6 +195,12 @@ that differ and exits unsuccessfully without writing. See the
 [formatting guide](../guides/formatting.md) for usage and the
 [JJFS 1 specification](jjfs-v1.md) for the canonical style and safety contract.
 
+```bash
+jman fmt
+jman fmt --check src/main/java
+jman fmt src/main/java/dev/example/Application.java
+```
+
 ## jman build
 
 Compile and package modules.
@@ -157,6 +214,11 @@ The default produces thin JARs. Optional flags add executable fat, source, and
 Javadoc JARs; `--all` enables all three.
 `--rebuild` forces compilation and repackaging for this invocation without
 deleting caches, redownloading dependencies, or reinstalling the JDK.
+
+```bash
+jman build --fat
+jman build --rebuild --all
+```
 
 ## jman publish
 
@@ -184,6 +246,12 @@ jman publish [PATH] [--to local|repository|central]
 - `--automatic` asks Central to publish after validation. The wait defaults to
   300 seconds and is controlled by `--timeout-seconds`.
 
+```bash
+jman publish --dry-run
+jman publish --local-repository /tmp/jman-publication-test
+jman publish --to central --automatic --timeout-seconds 900
+```
+
 ## jman run
 
 Compile and run the configured application.
@@ -193,6 +261,11 @@ jman run [PATH] [--jobs COUNT] [--offline] [-- APPLICATION_ARGUMENTS...]
 ```
 
 Arguments after `--` are passed unchanged to the Java main method.
+
+```bash
+jman run
+jman run services/web -- --server.port=8081 --spring.profiles.active=local
+```
 
 ## jman test
 
@@ -213,6 +286,12 @@ jman test [PATH] [--jobs COUNT] [--offline]
 test, format, include, and exclude options may be repeated. The default source
 set and report are `all` and `human`.
 
+```bash
+jman test --source-set unit --module application
+jman test --tests 'dev.example.OrderServiceTest#createsOrder'
+jman test --coverage --coverage-format html --coverage-min-line 80
+```
+
 ## jman doctor
 
 Diagnose the selected JDK, project model, and optional container runtime.
@@ -222,6 +301,11 @@ jman doctor [PATH]
 ```
 
 Run this first when a build behaves differently between machines.
+
+```bash
+jman doctor
+jman doctor services/orders
+```
 
 ## jman java install
 
@@ -237,6 +321,11 @@ installed release as the current user's default after installation. JMAN
 automatically selects the current operating system and processor architecture;
 cross-platform JDK installation is intentionally not exposed.
 
+```bash
+jman java install 21 --global
+jman java install 25 --vendor zulu
+```
+
 ## jman java list
 
 ```text
@@ -249,6 +338,12 @@ The default merges installed and available releases into a compact table.
 the remote catalog. `--all` disables latest-per-vendor
 compaction. `--refresh` revalidates even a fresh cache entry. Local and remote
 results are limited to the current operating system and architecture.
+
+```bash
+jman java list --lts
+jman java list --major 25 --vendor zulu --all
+jman java list --installed --format json
+```
 
 ## jman java remove
 
@@ -264,6 +359,11 @@ pin. A globally selected JDK must be replaced before it can be removed. Without
 selection, then a unique installed vendor; ambiguous matches require an
 explicit vendor.
 
+```bash
+jman java remove 21 --dry-run
+jman java remove 21 --vendor corretto
+```
+
 ## jman java use
 
 ```text
@@ -277,6 +377,11 @@ omitted, JMAN uses a matching project selection, then a matching global
 selection, then a unique installed vendor. Ambiguous matches require an
 explicit vendor. This command never downloads a JDK.
 
+```bash
+jman java use 25 --vendor zulu
+jman java use 21 --global
+```
+
 ## jman java which
 
 ```text
@@ -286,6 +391,11 @@ jman java which [PATH] [--format human|json|home|shell]
 Print the effective managed JDK and its selection source. The nearest project
 pin wins over the global selection. `home` prints only the JDK directory;
 `shell` prints a POSIX `JAVA_HOME` export.
+
+```bash
+jman java which
+jman java which --format home
+```
 
 ## jman java exec
 
@@ -299,6 +409,11 @@ Without `--vendor`, JMAN uses a matching project selection, then a matching
 global selection, then a unique installed vendor; ambiguous matches require an
 explicit vendor.
 
+```bash
+jman java exec -- java --version
+jman java exec 25 --vendor zulu -- javac --version
+```
+
 ## jman java setup
 
 ```text
@@ -309,6 +424,10 @@ Create project-aware shims for every command supplied by the globally selected
 JDK, refresh the `current` link, and print the shell activation instruction.
 A global selection must already exist. Run this before enabling shell
 integration; `shell init` does not create shims.
+
+```bash
+jman java setup --shell zsh
+```
 
 ## jman shell init
 
@@ -324,6 +443,10 @@ matching shell startup file; the command does not edit that file itself and
 does not create the shims. In Zsh, run `rehash` after the first `java setup` in
 an already-running session.
 
+```bash
+eval "$(jman shell init zsh)"
+```
+
 ## jman lsp
 
 ```text
@@ -333,3 +456,7 @@ jman lsp [--stdio]
 Start the bundled Java language server over standard input/output. `--stdio` is
 the default and is accepted explicitly for editor clients. The protocol stream
 owns stdout; clients should display server diagnostics from stderr.
+
+```bash
+jman lsp --stdio
+```

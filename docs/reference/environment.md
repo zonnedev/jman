@@ -17,6 +17,19 @@ not change normal JMAN command behavior after installation.
 | `JMAN_INSTALL_ROOT` | Override the root containing versioned JMAN installations. |
 | `JMAN_BIN_DIR` | Override the directory containing the user-facing `jman` symlink. |
 
+Release mirrors and installer development additionally use:
+
+| Variable | Purpose |
+| --- | --- |
+| `JMAN_REPOSITORY` | Change the GitHub `owner/repository` used to derive default release URLs. |
+| `JMAN_RELEASE_BASE_URL` | Override the base URL containing version-tagged release assets. |
+| `JMAN_LATEST_MANIFEST_URL` | Override the URL used to discover the latest stable version. |
+| `JMAN_ALLOW_INSECURE_URLS` | Permit non-HTTPS URLs only when set to `1`; intended exclusively for loopback tests. |
+
+Prefer `JMAN_REPOSITORY` for a GitHub fork or mirror. When overriding URLs,
+point both discovery and versioned downloads at the same trusted release set so
+the manifest, checksums, and archive identity agree.
+
 ## CLI and build
 
 | Variable | Purpose |

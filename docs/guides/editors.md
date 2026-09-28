@@ -41,12 +41,29 @@ JMAN is registered as the default Java formatter. Use **JMAN Java: Format
 Document with JJFS**, VS Code's standard **Format Document**, or enable
 `editor.formatOnSave` for `[java]` files.
 
+For a repository that wants automatic synchronization and formatting, commit
+this as `.vscode/settings.json`:
+
+```json
+{
+  "jman.java.buildSystem": "auto",
+  "jman.java.buildSync": "automatic",
+  "[java]": {
+    "editor.defaultFormatter": "zonnedev.jman-java",
+    "editor.formatOnSave": true
+  }
+}
+```
+
+Keep `jman.java.buildJavaHome` out of shared settings when it is a
+machine-specific absolute path. Configure it in user settings instead.
+
 Use VS Code's Test Explorer for individual tests and coverage, or commands such
 as **Sync Workspace**, **Check Project**, **Build Project**, **Run Application**,
 **Rebuild Project Index**, and **Clear Workspace Cache**.
 
 The complete extension command/setting table is in its
-[Marketplace README](https://github.com/zonnedev/jman/tree/main/editors/vscode).
+[Marketplace README](https://github.com/zonnedev/jman/tree/master/editors/vscode).
 
 ## Neovim 0.11+
 
@@ -64,13 +81,29 @@ Install the repository with your plugin manager and configure the executable:
 }
 ```
 
+To test an uninstalled checkout with Lazy.nvim, point directly at its Neovim
+plugin directory:
+
+```lua
+{
+  dir = "/path/to/jman/editors/neovim",
+  name = "jman",
+  ft = "java",
+  opts = {
+    cmd = "/path/to/jman/target/debug/jman",
+    build_sync = "prompt",
+    format_on_save = true,
+  },
+}
+```
+
 Then run `:checkhealth jman` and `:JmanStatus`. The plugin exposes commands for
 sync, check, build, run, tests, coverage, JJFS formatting, code actions,
 imports, index rebuild, cache clearing, and server restart. Use `:JmanFormat`
 or `<Leader>jf` for explicit formatting. Standard LSP mappings continue to
 handle definitions, references, symbols, hover, and rename.
 
-See the [Neovim plugin guide](https://github.com/zonnedev/jman/tree/main/editors/neovim)
+See the [Neovim plugin guide](https://github.com/zonnedev/jman/tree/master/editors/neovim)
 or `:help jman.nvim` for all options, commands, keymaps, and statusline support.
 
 ## Project detection and synchronization

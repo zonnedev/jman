@@ -108,6 +108,29 @@ if grep -Eq 'approaches a stable 0[.]3[.]0|contract for JMAN 0[.]1[.]0|0[.]1[.]x
   status=1
 fi
 
+if grep -ERq 'github[.]com/zonnedev/jman/(tree|blob)/main|edit_uri: edit/main/' \
+    README.md docs mkdocs.yml; then
+  printf 'documentation links target main, but the repository branch is master\n' >&2
+  status=1
+fi
+
+installer_variables=(
+  JMAN_VERSION JMAN_JAVA_VERSION JMAN_SETUP_JAVA JMAN_INSTALL_ROOT JMAN_BIN_DIR
+  JMAN_REPOSITORY JMAN_RELEASE_BASE_URL JMAN_LATEST_MANIFEST_URL
+  JMAN_ALLOW_INSECURE_URLS
+)
+for variable in "${installer_variables[@]}"; do
+  if ! grep -Fq "\`${variable}\`" docs/reference/environment.md; then
+    printf 'missing installer environment variable reference: %s\n' "${variable}" >&2
+    status=1
+  fi
+done
+
+if ! grep -Fq 'guides/common-workflows.md' mkdocs.yml; then
+  printf 'common workflow examples are missing from the documentation navigation\n' >&2
+  status=1
+fi
+
 if [[ "${status}" -ne 0 ]]; then
   exit "${status}"
 fi

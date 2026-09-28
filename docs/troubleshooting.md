@@ -51,10 +51,11 @@ Then follow the first matching case:
    `[toolchain]` section overrides the global selection. Run `jman java use 25
    --vendor <vendor>` without `--global` to change that project, or remove its
    `[toolchain]` section to inherit the global selection.
-2. If `command -v java` does not report
-   `~/.local/share/jman/shims/java`, create the shims with `jman java setup`,
-   then evaluate `jman shell init` for the current shell. `shell init` prints
-   activation code; it does not create the shims.
+2. If `command -v java` does not report a `jman/shims/java` path, create the
+   shims with `jman java setup`, then evaluate `jman shell init` for the current
+   shell. The default is `~/.local/share/jman/shims/java` on Linux and
+   `~/Library/Application Support/jman/shims/java` on macOS. `shell init`
+   prints activation code; it does not create the shims.
 3. In an already-running Zsh session, run `rehash` after creating the shims so
    Zsh forgets the previously cached Java path.
 4. If the shim directory is present but loses precedence later, move the JMAN

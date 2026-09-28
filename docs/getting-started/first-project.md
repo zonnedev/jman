@@ -15,11 +15,31 @@ cd greeting
 ```
 
 JMAN creates `jman.toml`, `jman.lock`, and the standard Java source/resource
-directories. Open `src/main/java/dev/example/greeting/Application.java`; the
-generated class is already runnable.
+directories. Replace `src/main/java/dev/example/greeting/Application.java`
+with a small function that can be tested directly:
+
+```java
+package dev.example.greeting;
+
+public final class Application {
+  private Application() {}
+
+  public static void main(String[] args) {
+    var name = args.length == 0 ? "World" : args[0];
+    System.out.println(greeting(name));
+  }
+
+  static String greeting(String name) {
+    return "Hello, " + name + "!";
+  }
+}
+```
+
+Run it with and without an application argument:
 
 ```bash
 jman run
+jman run -- Ada
 ```
 
 ## 2. Add JUnit
@@ -45,15 +65,14 @@ Create `src/test/java/dev/example/greeting/GreetingTest.java`:
 ```java
 package dev.example.greeting;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 final class GreetingTest {
-    @Test
-    void buildsAGreeting() {
-        assertEquals("Hello, Ada!", "Hello, " + "Ada" + "!");
-    }
+  @Test
+  void buildsAGreeting() {
+    Assertions.assertEquals("Hello, Ada!", Application.greeting("Ada"));
+  }
 }
 ```
 

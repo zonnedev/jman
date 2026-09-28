@@ -41,11 +41,11 @@ mkdir -p api/src/main/java/dev/example/api
 package dev.example.api;
 
 public final class Greeting {
-    private Greeting() {}
+  private Greeting() {}
 
-    public static String forName(String name) {
-        return "Hello, " + name + "!";
-    }
+  public static String forName(String name) {
+    return "Hello, " + name + "!";
+  }
 }
 ```
 
@@ -72,9 +72,11 @@ package dev.example.application;
 import dev.example.api.Greeting;
 
 public final class Application {
-    public static void main(String[] args) {
-        System.out.println(Greeting.forName("JMAN"));
-    }
+  private Application() {}
+
+  public static void main(String[] args) {
+    System.out.println(Greeting.forName("JMAN"));
+  }
 }
 ```
 

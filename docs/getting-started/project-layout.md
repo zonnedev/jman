@@ -44,8 +44,9 @@ greeting/
 : Project-local compiled classes, reports, packaged artifacts, and other
   reproducible state. Add `.jman/` to `.gitignore`.
 
-The shared cache defaults to `~/.cache/jman/` and also does not belong in the
-repository. Set `JMAN_CACHE_DIR` to isolate it in CI or development tooling.
+The shared cache also does not belong in the repository. It defaults to
+`~/.cache/jman/` on Linux and `~/Library/Caches/jman/` on macOS. Set
+`JMAN_CACHE_DIR` to isolate it in CI or development tooling.
 
 ## Applications and libraries
 

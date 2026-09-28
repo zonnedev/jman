@@ -49,6 +49,17 @@ tree instead of becoming ambiguous arrow-delimited text.
 Maven nearest-wins mediation chooses one version for a conflict. Dependency
 management and imported BOMs constrain versions before graph resolution.
 
+For example, if `jackson-databind` brings a surprising `jackson-core`, inspect
+both the hierarchy and the shortest selected path:
+
+```bash
+jman tree
+jman why com.fasterxml.jackson.core:jackson-core
+```
+
+The reports describe the locked graph, not merely the direct declarations in
+one manifest.
+
 ## Find and apply updates
 
 ```bash
@@ -90,6 +101,26 @@ imports, scopes, optional dependencies, exclusions, classifiers, types,
 snapshots, relocation, and reactor-local dependencies. See the
 [manifest reference](../reference/manifest.md) for syntax and the
 [product contract](../product-contract.md) for the exact compatibility boundary.
+
+An imported BOM plus one managed dependency can be represented as:
+
+```toml
+[maven]
+bom-imports = ["com.fasterxml.jackson:jackson-bom:2.17.2"]
+
+[dependencies.compile]
+"com.fasterxml.jackson.core:jackson-databind" = "2.17.2"
+```
+
+A local module relationship is explicit and never downloaded:
+
+```toml
+[path-dependencies]
+"dev.example:orders-api" = "../orders-api"
+```
+
+After a manual manifest edit, run `jman sync` and review both `jman.toml` and
+`jman.lock`.
 
 ## Audit the graph
 

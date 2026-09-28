@@ -27,6 +27,12 @@ source archives through local, repository, or Maven Central publication.
 Configure the same Java language server in VS Code or Neovim with the
 [editor integration guide](guides/editors.md).
 
+### Solve a specific task
+
+Copy a complete command sequence for dependency updates, offline builds,
+focused tests, CI, JDK switching, packaging, and publishing from
+[Common workflows](guides/common-workflows.md).
+
 ## The everyday loop
 
 ```console

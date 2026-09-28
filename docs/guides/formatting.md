@@ -37,6 +37,14 @@ jman fmt --check
 The command succeeds when every source is canonical. It lists files that would
 change and exits unsuccessfully otherwise.
 
+Use the same check locally and in CI:
+
+```bash
+jman fmt
+git diff --check
+jman --no-progress fmt --check
+```
+
 ## Canonical style
 
 The format is intentionally not configurable. A repository therefore has one
@@ -50,6 +58,23 @@ Comment framing is normalized and plain prose uses a conservative 100-column
 soft limit; code, lists, URLs, diagrams, directives, and other structured
 content are never reflowed. Literal contents remain authored. Semantic
 rewrites are applied only when javac can prove them safe.
+
+For example, JJFS keeps the receiver on the first line and aligns a fluent
+continuation with two additional spaces:
+
+```java
+var customer = customerRepository.findById(identifier)
+  .map(Customer::activate)
+  .orElseThrow();
+```
+
+It also expands static calls to their owning type and removes the corresponding
+static import:
+
+```java
+Objects.requireNonNull(customer);
+Assertions.assertThat(customer.isActive()).isTrue();
+```
 
 Comments attached before a member move with that member. A comment on the same
 line as a type's opening brace remains attached to the type header. Formatting

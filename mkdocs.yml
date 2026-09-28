@@ -3,7 +3,7 @@ site_description: Native Java builds, dependency management, testing, toolchains
 site_url: https://zonnedev.github.io/jman/
 repo_url: https://github.com/zonnedev/jman
 repo_name: zonnedev/jman
-edit_uri: edit/main/docs/
+edit_uri: edit/master/docs/
 
 theme:
   name: mkdocs
@@ -31,6 +31,7 @@ nav:
       - Test and measure coverage: tutorials/testing-coverage.md
       - Publish a library: tutorials/publish-library.md
   - Guides:
+      - Common workflows: guides/common-workflows.md
       - Build and run: guides/build-and-run.md
       - Format Java source: guides/formatting.md
       - Dependencies: guides/dependencies.md
