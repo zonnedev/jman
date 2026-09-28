@@ -113,6 +113,30 @@ the release your environment has approved.
 Do not move only the `jman` executable out of the extracted directory. JMAN
 locates its bundled runtime files relative to that executable.
 
+## Install from source
+
+From a JMAN checkout on a supported host:
+
+```bash
+make install
+rehash # only needed by an already-running Zsh session
+jman --version
+```
+
+This builds the complete release-grade CLI payload, including the native javac
+frontend and Java helper artifacts, installs it under the same versioned data
+directory used by the remote installer, and atomically updates
+`~/.local/bin/jman`. If a global Java is already selected, the command also
+rebuilds the JDK command shims so `java`, `javac`, and the other tools dispatch
+through the newly installed JMAN version. Re-running the command replaces the
+same development version cleanly, which matters while the worktree remains on
+one Git commit.
+
+The target does not install VS Code or Neovim integrations and does not change
+the globally selected application JDK. The source build can provision its
+pinned GraalVM toolchain beneath `target/`; use the editor-specific packaging
+or configuration workflow separately.
+
 ## Requirements
 
 - Linux on an x86-64 processor with glibc, or Apple Silicon macOS.

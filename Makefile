@@ -25,7 +25,7 @@ $(RUN_TARGETS):
 endif
 endif
 
-.PHONY: build build-jman run gates release-gates ci test test-toolchain-bootstrap test-rust test-java test-jman-runner test-processor-worker maven-importer vineflower jacoco maven-tool compatibility-tools test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs docs serve-docs prepare-release package-vscode release stage-release native test-native clean clear
+.PHONY: build build-jman install run gates release-gates ci test test-toolchain-bootstrap test-rust test-java test-jman-runner test-processor-worker maven-importer vineflower jacoco maven-tool compatibility-tools test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs docs serve-docs prepare-release package-vscode release stage-release native test-native clean clear
 
 build-jman: $(DEBUG_NATIVE_FRONTEND)
 	JMAN_JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
@@ -37,6 +37,9 @@ run: build-jman
 	"$(CURDIR)/target/debug/jman" $(if $(strip $(RUN_ARGUMENTS)),$(RUN_ARGUMENTS),--help)
 
 build: build-jman package
+
+install: release
+	./scripts/install-from-source.sh
 
 gates: test test-native test-coverage test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-vscode-extension test-neovim-plugin test-installer test-docs
 
@@ -171,6 +174,7 @@ test-neovim-plugin:
 
 test-installer:
 	./scripts/test-install.sh
+	./scripts/test-source-install.sh
 
 test-release-automation:
 	./scripts/test-external-fixtures.sh

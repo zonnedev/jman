@@ -11,6 +11,9 @@ Versioning while it remains pre-1.0.
   a toolchain-only `jman.toml` for plain directories, Maven projects, and
   Gradle projects while preserving the same file as the full native project
   manifest when `[project]` is present.
+- `make install` now builds and atomically installs the complete host CLI
+  payload from source, updates the stable user-facing executable link, and
+  refreshes existing Java command shims through that installed version.
 
 ### Changed
 

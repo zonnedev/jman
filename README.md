@@ -147,6 +147,15 @@ VSIX. Outputs are written under `target/release-dist/` and `target/vscode/`.
 The Neovim integration is shipped directly as Lua source and has no separate
 build artifact.
 
+Use `make install` to build the release-grade CLI bundle from the current
+checkout and install it into the normal versioned user layout. It atomically
+updates `~/.local/bin/jman` and refreshes existing Java command shims through
+the newly installed binary, which is the recommended way to test source
+changes through `java`, `javac`, the LSP, and the formatter together. It does
+not install editor extensions or change the globally selected application JDK.
+The build may provision its pinned GraalVM toolchain under `target/` when it is
+not already available.
+
 Use `make ci` for the normal push suite and `make release-gates` for the full
 tag acceptance suite, including pinned real-world projects and the
 Maven/Gradle/JDK compatibility matrix. The test setup bootstraps the

@@ -168,3 +168,9 @@ The release workflow combines the Linux and macOS job outputs before running
 `make stage-release`; local staging requires both platform pairs to be copied
 into `target/release-dist/` and `target/vscode/`. These commands never publish,
 commit, or tag anything.
+
+To install the current checkout for an end-to-end local test, run `make
+install`. It builds the host CLI release payload, replaces the matching
+versioned source installation, updates the user-facing `jman` link, and
+refreshes existing Java command shims. It does not publish, commit, tag, or
+install editor packages.
