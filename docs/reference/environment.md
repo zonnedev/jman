@@ -58,6 +58,28 @@ When `JMAN_JAVA_HOME` is defined, JMAN sets `JAVA_HOME` to the same directory
 and prepends its `bin` directory to `PATH`. Manifest `environment` entries may
 define application variables, but cannot replace the four JMAN context values.
 
+## Build-generator execution
+
+Native generators receive a deliberately small environment. JMAN clears the
+ambient process environment, retains a `PATH` with the selected JDK first, and
+adds these context values:
+
+| Variable | Purpose |
+| --- | --- |
+| `JMAN_PROJECT_ROOT` | Canonical native workspace root. |
+| `JMAN_MODULE_ROOT` | Canonical root of the module owning the generator. |
+| `JMAN_GENERATOR_NAME` | Name beneath `[build.generators]`. |
+| `JMAN_JAVA_HOME` | Selected build JDK home. |
+| `JAVA_HOME` | Same selected build JDK home for Java-based tools. |
+
+Use `inherit-environment` to opt individual ambient variables into a generator
+and `environment` for checked-in values. Both become part of its cache key.
+Generator arguments may read only declared or inherited values through
+`${env.NAME}`. The variables in the table and `PATH` are reserved and cannot be
+overridden by the manifest. See the
+[generator guide](../guides/generators.md) for the full execution and trust
+contract.
+
 ## Publishing credentials
 
 | Variable | Purpose |

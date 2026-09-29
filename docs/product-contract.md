@@ -81,6 +81,22 @@ execute them. Automatic hooks, downloaded plugin code, a binary plugin ABI,
 parallel task graphs, and script-result caching are outside the current
 contract.
 
+## Build generators
+
+Native JMAN modules may declare content-addressed direct commands that produce
+JMAN-owned Java source and resource roots for the main, test, and
+integration-test source sets. The supported contract includes module-relative
+glob inputs, `${...}` argument expressions, named typed outputs, generator
+dependencies with cycle detection, selected-JDK activation, declared and
+explicitly inherited environment, executable and input hashing, verified cache
+hits, stale-file removal, and atomic last-good output replacement.
+
+Generators run only for explicit `generate`, `compile`, `run`, `test`, `build`,
+or `publish` commands. Synchronization, formatting, project discovery, and
+editor startup never execute them. Generated class files, custom artifacts,
+post-package hooks, cross-module generator edges, remote generator caches, and
+automatic external-tool installation are outside the current contract.
+
 ## Measurable release criteria
 
 Every release candidate must satisfy all of the following from a clean tree:

@@ -13,8 +13,8 @@ use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, shells};
 use futures::{stream, StreamExt, TryStreamExt};
 use jman_config::{
-    Build, CoverageFormat, Dependencies, LockedClasspaths, LockedPackage, LockedToolchain,
-    Lockfile, Manifest, ManifestFile, MavenCompatibility, MavenDependencyMetadata,
+    Build, CoverageFormat, Dependencies, GeneratorSourceSet, LockedClasspaths, LockedPackage,
+    LockedToolchain, Lockfile, Manifest, ManifestFile, MavenCompatibility, MavenDependencyMetadata,
     MavenManagedDependency, Project, Repository, Script, ScriptDefinition,
     Toolchain as ManifestToolchain, ToolchainManifest, LOCK_VERSION, MANIFEST_VERSION,
 };
@@ -76,6 +76,8 @@ enum Command {
     Why(Why),
     /// Compile main Java sources without packaging artifacts.
     Compile(Compile),
+    /// Generate declared Java sources and resources without compiling.
+    Generate(GenerateCommand),
     /// Format Java sources with JMAN's canonical style.
     Fmt(FmtCommand),
     /// List or execute project scripts declared in jman.toml.
@@ -338,6 +340,28 @@ struct Compile {
 }
 
 #[derive(Debug, Args)]
+struct GenerateCommand {
+    /// Project directory.
+    #[arg(default_value = ".")]
+    path: PathBuf,
+    /// Run only the named generator. May be repeated.
+    #[arg(long = "generator")]
+    generators: Vec<String>,
+    /// Generate outputs for one source set.
+    #[arg(long, value_enum, default_value_t = GenerateSourceSetArgument::All)]
+    source_set: GenerateSourceSetArgument,
+    /// Maximum number of modules generated concurrently.
+    #[arg(short, long)]
+    jobs: Option<usize>,
+    /// Do not download a missing managed JDK.
+    #[arg(long)]
+    offline: bool,
+    /// Run generators even when their inputs and outputs are unchanged.
+    #[arg(long)]
+    rebuild: bool,
+}
+
+#[derive(Debug, Args)]
 #[allow(clippy::struct_excessive_bools)]
 struct BuildCommand {
     /// Project directory.
@@ -428,6 +452,9 @@ struct RunCommand {
     /// Maximum number of modules compiled concurrently.
     #[arg(short, long)]
     jobs: Option<usize>,
+    /// Run the application entry point in the named module.
+    #[arg(long)]
+    module: Option<String>,
     /// Do not download a missing managed JDK.
     #[arg(long)]
     offline: bool,
@@ -715,6 +742,15 @@ enum TestSourceSetArgument {
     Integration,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+enum GenerateSourceSetArgument {
+    #[default]
+    All,
+    Main,
+    Test,
+    IntegrationTest,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, ValueEnum)]
 enum CoverageFormatArgument {
     Summary,
@@ -806,6 +842,7 @@ async fn run(cli: Cli, ui: &Ui) -> Result<()> {
         Command::Tree(arguments) => dependency_tree(&arguments.path),
         Command::Why(arguments) => dependency_why(&arguments),
         Command::Compile(arguments) => compile_project(&arguments, ui).await,
+        Command::Generate(arguments) => generate_project(&arguments, ui).await,
         Command::Fmt(arguments) => format_project(&arguments, ui),
         Command::Script(arguments) => script_command(&arguments, ui).await,
         Command::Build(arguments) => build_project(&arguments, ui).await,
@@ -2162,6 +2199,7 @@ async fn run_project(arguments: &RunCommand, ui: &Ui) -> Result<()> {
         &default_cache_dir(),
         jobs,
         arguments.offline,
+        arguments.module.as_deref(),
         &arguments.arguments,
     )
     .await
@@ -2463,6 +2501,74 @@ fn central_credentials(optional: bool) -> Result<String> {
             "Maven Central credentials are missing; set JMAN_CENTRAL_TOKEN or both JMAN_CENTRAL_USERNAME and JMAN_CENTRAL_PASSWORD"
         ),
     }
+}
+
+async fn generate_project(arguments: &GenerateCommand, ui: &Ui) -> Result<()> {
+    let target = absolute_path(&arguments.path)?;
+    if !target.join("jman.toml").is_file() {
+        bail!(
+            "cannot generate sources for {}: jman.toml was not found",
+            target.display()
+        );
+    }
+    let workspace_root = find_workspace_root(&target);
+    let jobs = arguments
+        .jobs
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from));
+    if jobs == 0 {
+        bail!("--jobs must be at least 1");
+    }
+    let source_sets = match arguments.source_set {
+        GenerateSourceSetArgument::All => BTreeSet::from([
+            GeneratorSourceSet::Main,
+            GeneratorSourceSet::Test,
+            GeneratorSourceSet::IntegrationTest,
+        ]),
+        GenerateSourceSetArgument::Main => BTreeSet::from([GeneratorSourceSet::Main]),
+        GenerateSourceSetArgument::Test => BTreeSet::from([GeneratorSourceSet::Test]),
+        GenerateSourceSetArgument::IntegrationTest => {
+            BTreeSet::from([GeneratorSourceSet::IntegrationTest])
+        }
+    };
+    let selected = arguments
+        .generators
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let activity = ui.activity(format!(
+        "Generating sources for {}",
+        workspace_root.display()
+    ));
+    let results = jman_build::generate_workspace(
+        &workspace_root,
+        &default_cache_dir(),
+        jobs,
+        arguments.offline,
+        &selected,
+        &source_sets,
+        arguments.rebuild,
+    )
+    .await
+    .context("source generation failed")?;
+    for result in &results {
+        ui.detail(format!(
+            "{}:{}: {} inputs, {} outputs ({})",
+            result.module,
+            result.generator,
+            result.inputs,
+            result.outputs,
+            if result.cached { "cached" } else { "generated" }
+        ));
+    }
+    let generated = results.iter().filter(|result| !result.cached).count();
+    activity.finish_clean(format!(
+        "Generated {} task{} ({} executed, {} cached)",
+        results.len(),
+        if results.len() == 1 { "" } else { "s" },
+        generated,
+        results.len().saturating_sub(generated)
+    ));
+    Ok(())
 }
 
 async fn compile_project(arguments: &Compile, ui: &Ui) -> Result<()> {
@@ -4155,6 +4261,7 @@ fn scaffold_manifest(
         build: Some(Build {
             encoding: "UTF-8".to_owned(),
             compiler_args: Vec::new(),
+            generators: BTreeMap::new(),
         }),
         test: None,
         publishing: None,
@@ -6450,6 +6557,7 @@ fn manifest_from_maven(effective: &EffectivePom, maven_authoritative: bool) -> R
                 .cloned()
                 .unwrap_or_else(|| "UTF-8".to_owned()),
             compiler_args: effective.compiler_args.clone(),
+            generators: BTreeMap::new(),
         }),
         publishing: None,
         audit: None,
@@ -6995,6 +7103,39 @@ mod tests {
             panic!("expected java list command");
         };
         assert!(all.scope.all);
+    }
+
+    #[test]
+    fn generate_accepts_generator_source_set_and_rebuild_controls() {
+        let cli = Cli::try_parse_from([
+            "jman",
+            "generate",
+            "workspace",
+            "--generator",
+            "protobuf",
+            "--generator",
+            "openapi",
+            "--source-set",
+            "integration-test",
+            "--jobs",
+            "3",
+            "--offline",
+            "--rebuild",
+        ])
+        .expect("generator arguments");
+
+        let Command::Generate(arguments) = cli.command else {
+            panic!("expected generate command");
+        };
+        assert_eq!(arguments.path, PathBuf::from("workspace"));
+        assert_eq!(arguments.generators, ["protobuf", "openapi"]);
+        assert_eq!(
+            arguments.source_set,
+            GenerateSourceSetArgument::IntegrationTest
+        );
+        assert_eq!(arguments.jobs, Some(3));
+        assert!(arguments.offline);
+        assert!(arguments.rebuild);
     }
 
     #[test]

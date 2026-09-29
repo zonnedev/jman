@@ -1,0 +1,26 @@
+manifest-version = 1
+
+[project]
+group = "dev.example"
+name = "protobuf-example"
+version = "1.0.0"
+java-release = 21
+packaging = "jar"
+main-class = "dev.example.protobuf.Application"
+
+[build.generators.protobuf]
+command = ["protoc"]
+arguments = [
+  "--proto_path=${module.root}/src/main/proto",
+  "--java_out=${output.java}",
+  "${input}",
+]
+inputs = ["src/main/proto/**/*.proto"]
+
+[build.generators.protobuf.outputs.java]
+kind = "java-sources"
+source-set = "main"
+
+[dependencies.compile]
+"com.google.protobuf:protobuf-java" = "4.36.1"
+

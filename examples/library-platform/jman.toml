@@ -1,0 +1,36 @@
+manifest-version = 1
+
+[project]
+group = "dev.zonnedev.jman.example"
+name = "library-platform"
+version = "1.0.0"
+java-release = 25
+packaging = "pom"
+modules = [
+  "domain",
+  "application",
+  "api-contracts",
+  "http-api",
+  "grpc-api",
+  "client",
+]
+
+[toolchain]
+jdk = "25"
+vendor = "temurin"
+
+[scripts]
+generate = "jman generate"
+unit = "jman test --source-set unit"
+integration = "jman test --source-set integration"
+test = "jman test"
+build-all = "jman build --all"
+run-http = "jman run --module library-http-api"
+run-grpc = "jman run --module library-grpc-api"
+
+[scripts.verify]
+description = "Generate contracts, format-check, test every source set, and package every module"
+steps = ["generate", "format-check", "test", "build-all"]
+
+[scripts.format-check]
+command = ["jman", "fmt", "--check"]

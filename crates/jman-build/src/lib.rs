@@ -16,7 +16,7 @@ use std::{
 
 use fs2::FileExt;
 use futures::{stream, StreamExt, TryStreamExt};
-use jman_config::{Lockfile, Manifest};
+use jman_config::{Generator, GeneratorOutputKind, GeneratorSourceSet, Lockfile, Manifest};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -32,6 +32,7 @@ pub mod toolchain;
 const STATE_VERSION: &str = "jman-build-v2";
 const PACKAGE_STATE_VERSION: &str = "jman-package-v1";
 static PACKAGE_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static GENERATOR_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Error)]
 pub enum BuildError {
@@ -69,6 +70,46 @@ pub struct ModuleResult {
     pub rebuilt: bool,
     pub output: PathBuf,
     pub generated_sources: PathBuf,
+    pub generator_source_roots: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GeneratorResult {
+    pub module: String,
+    pub generator: String,
+    pub inputs: usize,
+    pub outputs: usize,
+    pub cached: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct GeneratedInputs {
+    java_sources: BTreeMap<GeneratorSourceSet, Vec<PathBuf>>,
+    resources: BTreeMap<GeneratorSourceSet, Vec<PathBuf>>,
+}
+
+impl GeneratedInputs {
+    fn add(&mut self, source_set: GeneratorSourceSet, kind: GeneratorOutputKind, path: PathBuf) {
+        let roots = match kind {
+            GeneratorOutputKind::JavaSources => &mut self.java_sources,
+            GeneratorOutputKind::Resources => &mut self.resources,
+        };
+        roots.entry(source_set).or_default().push(path);
+    }
+
+    fn roots(&self, kind: GeneratorOutputKind, source_set: GeneratorSourceSet) -> &[PathBuf] {
+        let roots = match kind {
+            GeneratorOutputKind::JavaSources => &self.java_sources,
+            GeneratorOutputKind::Resources => &self.resources,
+        };
+        roots.get(&source_set).map_or(&[], Vec::as_slice)
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct GeneratorCacheRecord {
+    key: String,
+    outputs: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -466,6 +507,104 @@ pub async fn compile_workspace(
     compile_workspace_with_rebuild(root, cache_dir, jobs, offline, false).await
 }
 
+/// Run configured source and resource generators without compiling the workspace.
+///
+/// # Errors
+///
+/// Returns an error for invalid generator graphs, missing tools or inputs,
+/// failed commands, unavailable JDKs, and unsafe output paths.
+pub async fn generate_workspace(
+    root: &Path,
+    cache_dir: &Path,
+    jobs: usize,
+    offline: bool,
+    selected: &BTreeSet<String>,
+    source_sets: &BTreeSet<GeneratorSourceSet>,
+    rebuild: bool,
+) -> Result<Vec<GeneratorResult>, BuildError> {
+    let modules = discover_modules(root).await?;
+    let available = modules
+        .iter()
+        .flat_map(|module| {
+            module
+                .manifest
+                .build
+                .as_ref()
+                .into_iter()
+                .flat_map(|build| build.generators.keys().cloned())
+        })
+        .collect::<BTreeSet<_>>();
+    if let Some(missing) = selected.iter().find(|name| !available.contains(*name)) {
+        return Err(BuildError::Invalid(format!(
+            "generator `{missing}` is not declared in this workspace"
+        )));
+    }
+    let required_release = modules
+        .iter()
+        .map(|module| module.manifest.project.java_release)
+        .max()
+        .unwrap_or(17);
+    let requests = modules
+        .iter()
+        .filter_map(|module| module.manifest.toolchain.as_ref())
+        .map(|toolchain| (toolchain.jdk.clone(), toolchain.vendor.clone()))
+        .collect::<BTreeSet<_>>();
+    if requests.len() > 1 {
+        return Err(BuildError::Invalid(format!(
+            "workspace modules request conflicting JDK toolchains: {}",
+            requests
+                .iter()
+                .map(|(version, vendor)| format!("{vendor}:{version}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
+    let toolchain = if let Some((version, vendor)) = requests.into_iter().next() {
+        toolchain::resolve(
+            &toolchain::ToolchainRequest { version, vendor },
+            cache_dir,
+            true,
+            offline,
+        )
+        .await?
+    } else {
+        toolchain::resolve_default(required_release, cache_dir).await?
+    };
+    let workspace_root = modules
+        .first()
+        .map(|module| module.directory.clone())
+        .ok_or_else(|| BuildError::Invalid("workspace contains no modules".to_owned()))?;
+    let selected = (!selected.is_empty()).then_some(selected);
+    let mut results = stream::iter(modules.iter().map(|module| {
+        let toolchain = toolchain.clone();
+        let workspace_root = workspace_root.clone();
+        async move {
+            run_module_generators(
+                module,
+                &workspace_root,
+                &toolchain,
+                source_sets,
+                selected,
+                rebuild,
+            )
+            .await
+            .map(|(_, results)| results)
+        }
+    }))
+    .buffer_unordered(jobs.max(1))
+    .try_collect::<Vec<_>>()
+    .await?
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    results.sort_by(|left, right| {
+        left.module
+            .cmp(&right.module)
+            .then_with(|| left.generator.cmp(&right.generator))
+    });
+    Ok(results)
+}
+
 async fn compile_workspace_with_rebuild(
     root: &Path,
     cache_dir: &Path,
@@ -505,6 +644,10 @@ async fn compile_workspace_with_rebuild(
     } else {
         toolchain::resolve_default(required_release, cache_dir).await?
     };
+    let workspace_root = modules
+        .first()
+        .map(|module| module.directory.clone())
+        .ok_or_else(|| BuildError::Invalid("workspace contains no modules".to_owned()))?;
     let layers = topological_layers(&modules)?;
     let semaphore = Arc::new(Semaphore::new(jobs.max(1)));
     let mut results = BTreeMap::new();
@@ -515,6 +658,7 @@ async fn compile_workspace_with_rebuild(
             let module = modules[index].clone();
             let toolchain = toolchain.clone();
             let cache_dir = cache_dir.to_owned();
+            let workspace_root = workspace_root.clone();
             let semaphore = Arc::clone(&semaphore);
             let upstream = module
                 .dependencies
@@ -537,9 +681,16 @@ async fn compile_workspace_with_rebuild(
                 let _permit = semaphore.acquire_owned().await.map_err(|_| {
                     BuildError::Invalid("compilation scheduler closed unexpectedly".to_owned())
                 })?;
-                compile_module(&module, &toolchain, &cache_dir, &upstream, rebuild)
-                    .await
-                    .map(|(result, fingerprint)| (index, result, fingerprint))
+                compile_module(
+                    &module,
+                    &workspace_root,
+                    &toolchain,
+                    &cache_dir,
+                    &upstream,
+                    rebuild,
+                )
+                .await
+                .map(|(result, fingerprint)| (index, result, fingerprint))
             }
         }))
         .buffer_unordered(jobs.max(1))
@@ -666,6 +817,7 @@ pub async fn run_workspace(
     cache_dir: &Path,
     jobs: usize,
     offline: bool,
+    selected_module: Option<&str>,
     arguments: &[String],
 ) -> Result<RunResult, BuildError> {
     let modules = discover_modules(root).await?;
@@ -681,24 +833,42 @@ pub async fn run_workspace(
                 .map(|main_class| (index, module, main_class))
         })
         .collect::<Vec<_>>();
-    let [(index, application, main_class)] = applications.as_slice() else {
-        return Err(BuildError::Invalid(if applications.is_empty() {
-            "no application module found; set `project.main-class` in jman.toml".to_owned()
-        } else {
-            format!(
-                "multiple application modules found: {}; run from a selected module is not supported yet",
-                applications
+    let (index, application, main_class) = if let Some(selected) = selected_module {
+        applications
+            .iter()
+            .find(|(_, module, _)| module.manifest.project.name == selected)
+            .copied()
+            .ok_or_else(|| {
+                let available = applications
                     .iter()
                     .map(|(_, module, _)| module.manifest.project.name.as_str())
                     .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        }));
+                    .join(", ");
+                BuildError::Invalid(format!(
+                    "application module `{selected}` was not found; available applications: {available}"
+                ))
+            })?
+    } else {
+        let [(index, application, main_class)] = applications.as_slice() else {
+            return Err(BuildError::Invalid(if applications.is_empty() {
+                "no application module found; set `project.main-class` in jman.toml".to_owned()
+            } else {
+                format!(
+                    "multiple application modules found: {}; select one with `jman run --module NAME`",
+                    applications
+                        .iter()
+                        .map(|(_, module, _)| module.manifest.project.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }));
+        };
+        (*index, *application, *main_class)
     };
     let build = compile_workspace(root, cache_dir, jobs, offline).await?;
-    let mut classpath = vec![build.modules[*index].output.clone()];
+    let mut classpath = vec![build.modules[index].output.clone()];
     classpath.extend(
-        transitive_dependencies(*index, &modules)
+        transitive_dependencies(index, &modules)
             .into_iter()
             .map(|dependency| build.modules[dependency].output.clone()),
     );
@@ -720,7 +890,7 @@ pub async fn run_workspace(
         .map_err(|source| BuildError::Javac { path: java, source })?;
     Ok(RunResult {
         module: application.manifest.project.name.clone(),
-        main_class: (*main_class).clone(),
+        main_class: main_class.clone(),
         status,
     })
 }
@@ -757,11 +927,16 @@ pub async fn test_workspace(
     } else {
         None
     };
+    let workspace_root = modules
+        .first()
+        .map(|module| module.directory.clone())
+        .ok_or_else(|| BuildError::Invalid("workspace contains no modules".to_owned()))?;
     let mut results = stream::iter(modules.iter().enumerate())
         .map(|(index, module)| {
             run_test_module(
                 index,
                 module,
+                &workspace_root,
                 &modules,
                 &build,
                 cache_dir,
@@ -820,6 +995,7 @@ struct CoverageRuntime {
 async fn run_test_module(
     index: usize,
     module: &Module,
+    workspace_root: &Path,
     modules: &[Module],
     build: &CompileResult,
     cache_dir: &Path,
@@ -839,11 +1015,34 @@ async fn run_test_module(
         TestSourceSet::Unit => &["src/test/java"],
         TestSourceSet::Integration => &["src/integrationTest/java"],
     };
+    let requested_generator_sets = match options.source_set {
+        TestSourceSet::All => BTreeSet::from([
+            GeneratorSourceSet::Test,
+            GeneratorSourceSet::IntegrationTest,
+        ]),
+        TestSourceSet::Unit => BTreeSet::from([GeneratorSourceSet::Test]),
+        TestSourceSet::Integration => BTreeSet::from([GeneratorSourceSet::IntegrationTest]),
+    };
+    let (generated, _) = run_module_generators(
+        module,
+        workspace_root,
+        &build.toolchain,
+        &requested_generator_sets,
+        None,
+        false,
+    )
+    .await?;
     let mut sources = Vec::new();
     for source_root in source_roots {
         sources.extend(java_sources(&module.directory.join(source_root)).await?);
     }
+    for source_set in &requested_generator_sets {
+        for root in generated.roots(GeneratorOutputKind::JavaSources, *source_set) {
+            sources.extend(java_sources(root).await?);
+        }
+    }
     sources.sort();
+    sources.dedup();
     if sources.is_empty() {
         return Ok(None);
     }
@@ -868,6 +1067,14 @@ async fn run_test_module(
         if resources.is_dir() {
             runtime.push(resources);
         }
+    }
+    for source_set in &requested_generator_sets {
+        runtime.extend(
+            generated
+                .roots(GeneratorOutputKind::Resources, *source_set)
+                .iter()
+                .cloned(),
+        );
     }
     runtime.extend(classpath);
     let port = env::var("JMAN_TEST_PORT").unwrap_or_else(|_| "0".to_owned());
@@ -1932,6 +2139,769 @@ async fn compile_test_sources(
     Ok((output, true))
 }
 
+async fn run_module_generators(
+    module: &Module,
+    workspace_root: &Path,
+    toolchain: &Toolchain,
+    source_sets: &BTreeSet<GeneratorSourceSet>,
+    selected: Option<&BTreeSet<String>>,
+    rebuild: bool,
+) -> Result<(GeneratedInputs, Vec<GeneratorResult>), BuildError> {
+    let generators = module
+        .manifest
+        .build
+        .as_ref()
+        .map(|build| &build.generators)
+        .filter(|generators| !generators.is_empty());
+    let Some(generators) = generators else {
+        return Ok((GeneratedInputs::default(), Vec::new()));
+    };
+
+    let mut required = generators
+        .iter()
+        .filter(|(name, generator)| {
+            selected.is_none_or(|selected| selected.contains(*name))
+                && generator
+                    .outputs
+                    .values()
+                    .any(|output| source_sets.contains(&output.source_set))
+        })
+        .map(|(name, _)| name.clone())
+        .collect::<BTreeSet<_>>();
+    let mut pending = required.iter().cloned().collect::<Vec<_>>();
+    while let Some(name) = pending.pop() {
+        let generator = generators.get(&name).ok_or_else(|| {
+            BuildError::Invalid(format!(
+                "unknown generator `{name}` in module {}",
+                module.manifest.project.name
+            ))
+        })?;
+        for dependency in &generator.depends_on {
+            if required.insert(dependency.clone()) {
+                pending.push(dependency.clone());
+            }
+        }
+    }
+
+    let mut results = Vec::new();
+    let mut complete = BTreeSet::new();
+    while complete.len() < required.len() {
+        let ready = required
+            .iter()
+            .filter(|name| !complete.contains(*name))
+            .filter(|name| {
+                generators[*name]
+                    .depends_on
+                    .iter()
+                    .all(|dependency| complete.contains(dependency))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if ready.is_empty() {
+            return Err(BuildError::Invalid(format!(
+                "generator dependency cycle in module {}",
+                module.manifest.project.name
+            )));
+        }
+        for name in ready {
+            results.push(
+                run_generator(
+                    module,
+                    workspace_root,
+                    toolchain,
+                    &name,
+                    &generators[&name],
+                    rebuild,
+                )
+                .await?,
+            );
+            complete.insert(name);
+        }
+    }
+
+    let mut generated = GeneratedInputs::default();
+    for (name, generator) in generators {
+        if !complete.contains(name) {
+            continue;
+        }
+        for (output_name, output) in &generator.outputs {
+            generated.add(
+                output.source_set,
+                output.kind,
+                generator_output_root(&module.directory, name, output_name),
+            );
+        }
+    }
+    Ok((generated, results))
+}
+
+#[allow(clippy::too_many_lines)]
+async fn run_generator(
+    module: &Module,
+    workspace_root: &Path,
+    toolchain: &Toolchain,
+    name: &str,
+    generator: &Generator,
+    rebuild: bool,
+) -> Result<GeneratorResult, BuildError> {
+    let state_directory = module.directory.join(".jman/generator-state");
+    fs::create_dir_all(&state_directory)
+        .await
+        .map_err(|source| io_error(&state_directory, source))?;
+    let lock_path = state_directory.join(format!("{name}.lock"));
+    let generator_lock = tokio::task::spawn_blocking(move || {
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|source| io_error(&lock_path, source))?;
+        lock.lock_exclusive()
+            .map_err(|source| io_error(&lock_path, source))?;
+        Ok::<_, BuildError>(lock)
+    })
+    .await
+    .map_err(|error| BuildError::Invalid(format!("generator lock task failed: {error}")))??;
+    let inputs = generator_inputs(&module.directory, generator).await?;
+    if inputs.is_empty() && !generator.allow_empty_inputs {
+        return Err(BuildError::Invalid(format!(
+            "generator `{name}` in module {} matched no inputs",
+            module.manifest.project.name
+        )));
+    }
+    let working_directory = if let Some(relative) = &generator.working_directory {
+        async_canonicalize_generator_directory(&module.directory, relative).await?
+    } else {
+        module.directory.clone()
+    };
+    let java_home = generator_java_home(toolchain)?;
+    let environment = generator_environment(
+        workspace_root,
+        &module.directory,
+        name,
+        &java_home,
+        generator,
+    )?;
+    let executable =
+        resolve_generator_executable(&generator.command[0], &working_directory, &environment)?;
+    let key = generator_key(module, name, generator, &inputs, &executable, &environment).await?;
+    let state_path = state_directory.join(format!("{name}.json"));
+    let final_root = module.directory.join(".jman/generated").join(name);
+    if !rebuild {
+        if let Ok(bytes) = fs::read(&state_path).await {
+            if let Ok(record) = serde_json::from_slice::<GeneratorCacheRecord>(&bytes) {
+                if record.key == key && generator_outputs_match(&final_root, &record).await? {
+                    return Ok(GeneratorResult {
+                        module: module.manifest.project.name.clone(),
+                        generator: name.to_owned(),
+                        inputs: inputs.len(),
+                        outputs: output_file_count(&final_root).await?,
+                        cached: true,
+                    });
+                }
+            }
+        }
+    }
+
+    let sequence = GENERATOR_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let generated_root = module.directory.join(".jman/generated");
+    fs::create_dir_all(&generated_root)
+        .await
+        .map_err(|source| io_error(&generated_root, source))?;
+    let temporary_root =
+        generated_root.join(format!(".{name}.tmp.{}.{}", std::process::id(), sequence));
+    if temporary_root.exists() {
+        fs::remove_dir_all(&temporary_root)
+            .await
+            .map_err(|source| io_error(&temporary_root, source))?;
+    }
+    let generators = &module
+        .manifest
+        .build
+        .as_ref()
+        .ok_or_else(|| BuildError::Invalid("generator build configuration is missing".to_owned()))?
+        .generators;
+    let mut dependency_outputs = BTreeMap::new();
+    for dependency in &generator.depends_on {
+        let dependency_generator = generators.get(dependency).ok_or_else(|| {
+            BuildError::Invalid(format!("generator dependency `{dependency}` is missing"))
+        })?;
+        for output in dependency_generator.outputs.keys() {
+            dependency_outputs.insert(
+                format!("{dependency}.{output}"),
+                generator_output_root(&module.directory, dependency, output),
+            );
+        }
+    }
+    let generation = async {
+        let mut output_paths = BTreeMap::new();
+        for output in generator.outputs.keys() {
+            let path = temporary_root.join(output);
+            fs::create_dir_all(&path)
+                .await
+                .map_err(|source| io_error(&path, source))?;
+            output_paths.insert(output.clone(), path);
+        }
+        let expansion = GeneratorExpansion {
+            project_root: workspace_root,
+            module_root: &module.directory,
+            generator_name: name,
+            java_home: &java_home,
+            inputs: &inputs,
+            outputs: &output_paths,
+            dependency_outputs: &dependency_outputs,
+            environment: &environment,
+        };
+        let mut templates = generator.command.iter().skip(1).collect::<Vec<_>>();
+        templates.extend(generator.arguments.iter());
+        let mut arguments = Vec::new();
+        for template in templates {
+            arguments.extend(expand_generator_template(template, &expansion)?);
+        }
+        let result = Command::new(&executable)
+            .args(arguments)
+            .current_dir(&working_directory)
+            .env_clear()
+            .envs(&environment)
+            .kill_on_drop(true)
+            .output()
+            .await
+            .map_err(|source| {
+                BuildError::Invalid(format!(
+                    "could not execute generator `{name}` with {}: {source}",
+                    executable.display()
+                ))
+            })?;
+        if !result.status.success() {
+            let stderr = String::from_utf8_lossy(&result.stderr).trim().to_owned();
+            let stdout = String::from_utf8_lossy(&result.stdout).trim().to_owned();
+            let details = if stderr.is_empty() { stdout } else { stderr };
+            return Err(BuildError::Invalid(format!(
+                "generator `{name}` failed with {}{}",
+                result.status,
+                if details.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n{details}")
+                }
+            )));
+        }
+        let mut output_hashes = BTreeMap::new();
+        for output in generator.outputs.keys() {
+            output_hashes.insert(
+                output.clone(),
+                tree_digest(&temporary_root.join(output)).await?,
+            );
+        }
+        Ok::<_, BuildError>(output_hashes)
+    }
+    .await;
+    let output_hashes = match generation {
+        Ok(output_hashes) => output_hashes,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&temporary_root).await;
+            return Err(error);
+        }
+    };
+    let verified_key =
+        match generator_key(module, name, generator, &inputs, &executable, &environment).await {
+            Ok(key) => key,
+            Err(error) => {
+                let _ = fs::remove_dir_all(&temporary_root).await;
+                return Err(error);
+            }
+        };
+    if verified_key != key {
+        let _ = fs::remove_dir_all(&temporary_root).await;
+        return Err(BuildError::Invalid(format!(
+            "generator `{name}` inputs changed while it was running; retry the build"
+        )));
+    }
+    let record = GeneratorCacheRecord {
+        key,
+        outputs: output_hashes,
+    };
+    let state_bytes = match serde_json::to_vec_pretty(&record) {
+        Ok(state_bytes) => state_bytes,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&temporary_root).await;
+            return Err(BuildError::Invalid(format!(
+                "could not serialize generator state: {error}"
+            )));
+        }
+    };
+    let temporary_state = state_directory.join(format!(
+        ".{name}.tmp.{}.{}.json",
+        std::process::id(),
+        sequence
+    ));
+    if let Err(source) = fs::write(&temporary_state, state_bytes).await {
+        let _ = fs::remove_dir_all(&temporary_root).await;
+        let _ = fs::remove_file(&temporary_state).await;
+        return Err(io_error(&temporary_state, source));
+    }
+    if let Err(error) = replace_directory(&temporary_root, &final_root).await {
+        let _ = fs::remove_dir_all(&temporary_root).await;
+        let _ = fs::remove_file(&temporary_state).await;
+        return Err(error);
+    }
+    if let Err(error) = replace_file(&temporary_state, &state_path).await {
+        let _ = fs::remove_file(&temporary_state).await;
+        return Err(error);
+    }
+    let outputs = output_file_count(&final_root).await?;
+    drop(generator_lock);
+    Ok(GeneratorResult {
+        module: module.manifest.project.name.clone(),
+        generator: name.to_owned(),
+        inputs: inputs.len(),
+        outputs,
+        cached: false,
+    })
+}
+
+fn generator_output_root(module: &Path, generator: &str, output: &str) -> PathBuf {
+    module.join(".jman/generated").join(generator).join(output)
+}
+
+async fn async_canonicalize_generator_directory(
+    module: &Path,
+    relative: &Path,
+) -> Result<PathBuf, BuildError> {
+    let directory = canonicalize(&module.join(relative)).await?;
+    if !directory.starts_with(module) || !directory.is_dir() {
+        return Err(BuildError::Invalid(format!(
+            "generator working directory {} must be an existing directory inside {}",
+            directory.display(),
+            module.display()
+        )));
+    }
+    Ok(directory)
+}
+
+fn generator_environment(
+    workspace_root: &Path,
+    module_root: &Path,
+    name: &str,
+    java_home: &Path,
+    generator: &Generator,
+) -> Result<BTreeMap<OsString, OsString>, BuildError> {
+    let mut environment = BTreeMap::new();
+    let mut paths = vec![java_home.join("bin")];
+    if let Some(path) = env::var_os("PATH") {
+        paths.extend(env::split_paths(&path));
+    }
+    environment.insert(
+        OsString::from("PATH"),
+        env::join_paths(paths).map_err(|error| {
+            BuildError::Invalid(format!("could not construct generator PATH: {error}"))
+        })?,
+    );
+    for variable in &generator.inherit_environment {
+        if let Some(value) = env::var_os(variable) {
+            environment.insert(OsString::from(variable), value);
+        }
+    }
+    for (variable, value) in &generator.environment {
+        environment.insert(OsString::from(variable), OsString::from(value));
+    }
+    environment.insert(
+        OsString::from("JMAN_PROJECT_ROOT"),
+        workspace_root.as_os_str().to_owned(),
+    );
+    environment.insert(
+        OsString::from("JMAN_MODULE_ROOT"),
+        module_root.as_os_str().to_owned(),
+    );
+    environment.insert(OsString::from("JMAN_GENERATOR_NAME"), OsString::from(name));
+    environment.insert(
+        OsString::from("JMAN_JAVA_HOME"),
+        java_home.as_os_str().to_owned(),
+    );
+    environment.insert(
+        OsString::from("JAVA_HOME"),
+        java_home.as_os_str().to_owned(),
+    );
+    Ok(environment)
+}
+
+fn generator_java_home(toolchain: &Toolchain) -> Result<PathBuf, BuildError> {
+    if let Some(managed) = &toolchain.managed {
+        return Ok(managed.home.clone());
+    }
+    let javac = if toolchain.javac.components().count() > 1 || toolchain.javac.is_absolute() {
+        std::fs::canonicalize(&toolchain.javac).unwrap_or_else(|_| toolchain.javac.clone())
+    } else {
+        let path = env::var_os("PATH").ok_or_else(|| {
+            BuildError::Invalid("cannot locate the selected javac because PATH is unset".to_owned())
+        })?;
+        env::split_paths(&path)
+            .map(|directory| directory.join(&toolchain.javac))
+            .find(|candidate| candidate.is_file())
+            .map(|candidate| std::fs::canonicalize(&candidate).unwrap_or(candidate))
+            .ok_or_else(|| {
+                BuildError::Invalid(format!(
+                    "cannot locate selected Java compiler `{}` on PATH",
+                    toolchain.javac.display()
+                ))
+            })?
+    };
+    javac
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_owned)
+        .ok_or_else(|| {
+            BuildError::Invalid(format!(
+                "cannot derive JAVA_HOME from selected compiler {}",
+                javac.display()
+            ))
+        })
+}
+
+fn resolve_generator_executable(
+    command: &str,
+    working_directory: &Path,
+    environment: &BTreeMap<OsString, OsString>,
+) -> Result<PathBuf, BuildError> {
+    let candidate = Path::new(command);
+    if candidate.components().count() > 1 || candidate.is_absolute() {
+        let path = if candidate.is_absolute() {
+            candidate.to_owned()
+        } else {
+            working_directory.join(candidate)
+        };
+        return std::fs::canonicalize(&path).map_err(|source| io_error(&path, source));
+    }
+    let path = environment.get(&OsString::from("PATH")).ok_or_else(|| {
+        BuildError::Invalid(format!(
+            "cannot find generator executable `{command}` because PATH is unset"
+        ))
+    })?;
+    for directory in env::split_paths(&path) {
+        let executable = directory.join(command);
+        if executable.is_file() {
+            return std::fs::canonicalize(&executable)
+                .map_err(|source| io_error(&executable, source));
+        }
+    }
+    Err(BuildError::Invalid(format!(
+        "generator executable `{command}` was not found on PATH"
+    )))
+}
+
+async fn generator_key(
+    module: &Module,
+    name: &str,
+    generator: &Generator,
+    inputs: &[PathBuf],
+    executable: &Path,
+    environment: &BTreeMap<OsString, OsString>,
+) -> Result<String, BuildError> {
+    let mut hash = Sha256::new();
+    hash_part(&mut hash, b"jman-generator-v1");
+    hash_part(&mut hash, name.as_bytes());
+    hash_part(
+        &mut hash,
+        serde_json::to_vec(generator)
+            .map_err(|error| {
+                BuildError::Invalid(format!("could not serialize generator: {error}"))
+            })?
+            .as_slice(),
+    );
+    hash_file(&mut hash, executable).await?;
+    for input in inputs {
+        let relative = input.strip_prefix(&module.directory).map_err(|_| {
+            BuildError::Invalid(format!(
+                "generator input {} escaped the module",
+                input.display()
+            ))
+        })?;
+        hash_part(&mut hash, relative.to_string_lossy().as_bytes());
+        hash_file(&mut hash, input).await?;
+    }
+    for (variable, value) in environment {
+        hash_part(&mut hash, variable.to_string_lossy().as_bytes());
+        hash_part(&mut hash, value.to_string_lossy().as_bytes());
+    }
+    for dependency in &generator.depends_on {
+        let state = module
+            .directory
+            .join(".jman/generator-state")
+            .join(format!("{dependency}.json"));
+        hash_file(&mut hash, &state).await?;
+    }
+    Ok(format!("sha256:{}", hex::encode(hash.finalize())))
+}
+
+struct GeneratorExpansion<'a> {
+    project_root: &'a Path,
+    module_root: &'a Path,
+    generator_name: &'a str,
+    java_home: &'a Path,
+    inputs: &'a [PathBuf],
+    outputs: &'a BTreeMap<String, PathBuf>,
+    dependency_outputs: &'a BTreeMap<String, PathBuf>,
+    environment: &'a BTreeMap<OsString, OsString>,
+}
+
+fn expand_generator_template(
+    template: &str,
+    expansion: &GeneratorExpansion<'_>,
+) -> Result<Vec<OsString>, BuildError> {
+    if template == "${input}" {
+        return Ok(expansion
+            .inputs
+            .iter()
+            .map(|path| path.as_os_str().to_owned())
+            .collect());
+    }
+    let mut output = String::new();
+    let mut remaining = template;
+    while let Some(index) = remaining.find('$') {
+        output.push_str(&remaining[..index]);
+        remaining = &remaining[index + 1..];
+        if let Some(escaped) = remaining.strip_prefix('$') {
+            output.push('$');
+            remaining = escaped;
+            continue;
+        }
+        let Some(expression) = remaining.strip_prefix('{') else {
+            output.push('$');
+            continue;
+        };
+        let end = expression.find('}').ok_or_else(|| {
+            BuildError::Invalid(format!("unterminated generator expression in `{template}`"))
+        })?;
+        let variable = &expression[..end];
+        let value = match variable {
+            "project.root" => expansion.project_root.to_string_lossy().into_owned(),
+            "module.root" => expansion.module_root.to_string_lossy().into_owned(),
+            "generator.name" => expansion.generator_name.to_owned(),
+            "java.home" => expansion.java_home.to_string_lossy().into_owned(),
+            "input" => {
+                return Err(BuildError::Invalid(
+                    "`${input}` must be a complete generator argument".to_owned(),
+                ));
+            }
+            _ => {
+                if let Some(name) = variable.strip_prefix("output.") {
+                    expansion
+                        .outputs
+                        .get(name)
+                        .ok_or_else(|| {
+                            BuildError::Invalid(format!("unknown generator output `{name}`"))
+                        })?
+                        .to_string_lossy()
+                        .into_owned()
+                } else if let Some(name) = variable.strip_prefix("env.") {
+                    expansion
+                        .environment
+                        .get(&OsString::from(name))
+                        .ok_or_else(|| {
+                            BuildError::Invalid(format!(
+                                "generator environment variable `{name}` is unavailable"
+                            ))
+                        })?
+                        .to_string_lossy()
+                        .into_owned()
+                } else if let Some(reference) = variable.strip_prefix("dependency.") {
+                    expansion
+                        .dependency_outputs
+                        .get(reference)
+                        .ok_or_else(|| {
+                            BuildError::Invalid(format!(
+                                "unknown generator dependency output `{reference}`"
+                            ))
+                        })?
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    return Err(BuildError::Invalid(format!(
+                        "unknown generator expression `${{{variable}}}`"
+                    )));
+                }
+            }
+        };
+        output.push_str(&value);
+        remaining = &expression[end + 1..];
+    }
+    output.push_str(remaining);
+    Ok(vec![OsString::from(output)])
+}
+
+async fn generator_inputs(
+    module: &Path,
+    generator: &Generator,
+) -> Result<Vec<PathBuf>, BuildError> {
+    let mut inputs = BTreeSet::new();
+    for pattern in &generator.inputs {
+        let prefix = pattern
+            .split('/')
+            .take_while(|component| !component.contains(['*', '?']))
+            .collect::<Vec<_>>()
+            .join("/");
+        let root = module.join(&prefix);
+        reject_symlink_components(module, &root).await?;
+        if root.is_file() {
+            if path_glob_matches(pattern, &prefix) {
+                inputs.insert(canonicalize(&root).await?);
+            }
+            continue;
+        }
+        let scan_root = if root.is_dir() { root } else { continue };
+        for candidate in input_files(&scan_root, None).await? {
+            let relative = candidate.strip_prefix(module).map_err(|_| {
+                BuildError::Invalid(format!(
+                    "generator input {} escaped {}",
+                    candidate.display(),
+                    module.display()
+                ))
+            })?;
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            if path_glob_matches(pattern, &relative) {
+                inputs.insert(canonicalize(&candidate).await?);
+            }
+        }
+    }
+    Ok(inputs.into_iter().collect())
+}
+
+async fn reject_symlink_components(root: &Path, path: &Path) -> Result<(), BuildError> {
+    let relative = path.strip_prefix(root).map_err(|_| {
+        BuildError::Invalid(format!(
+            "generator input path {} escaped {}",
+            path.display(),
+            root.display()
+        ))
+    })?;
+    let mut candidate = root.to_owned();
+    for component in relative.components() {
+        candidate.push(component);
+        match fs::symlink_metadata(&candidate).await {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(BuildError::Invalid(format!(
+                    "symbolic links are not allowed in build inputs: {}",
+                    candidate.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => break,
+            Err(source) => return Err(io_error(&candidate, source)),
+        }
+    }
+    Ok(())
+}
+
+fn path_glob_matches(pattern: &str, path: &str) -> bool {
+    fn component_matches(pattern: &str, value: &str) -> bool {
+        let pattern = pattern.as_bytes();
+        let value = value.as_bytes();
+        let mut current = vec![false; value.len() + 1];
+        current[0] = true;
+        for token in pattern {
+            let mut next = vec![false; value.len() + 1];
+            match token {
+                b'*' => {
+                    next[0] = current[0];
+                    for index in 1..=value.len() {
+                        next[index] = current[index] || next[index - 1];
+                    }
+                }
+                b'?' => {
+                    if !value.is_empty() {
+                        next[1..].copy_from_slice(&current[..value.len()]);
+                    }
+                }
+                literal => {
+                    for index in 1..=value.len() {
+                        next[index] = current[index - 1] && value[index - 1] == *literal;
+                    }
+                }
+            }
+            current = next;
+        }
+        current[value.len()]
+    }
+
+    fn matches(pattern: &[&str], path: &[&str]) -> bool {
+        let Some((first, remaining)) = pattern.split_first() else {
+            return path.is_empty();
+        };
+        if *first == "**" {
+            return matches(remaining, path)
+                || path
+                    .split_first()
+                    .is_some_and(|(_, rest)| matches(pattern, rest));
+        }
+        path.split_first().is_some_and(|(value, rest)| {
+            component_matches(first, value) && matches(remaining, rest)
+        })
+    }
+
+    matches(
+        &pattern.split('/').collect::<Vec<_>>(),
+        &path.split('/').collect::<Vec<_>>(),
+    )
+}
+
+async fn tree_digest(root: &Path) -> Result<String, BuildError> {
+    let mut hash = Sha256::new();
+    for file in input_files(root, None).await? {
+        let relative = file.strip_prefix(root).map_err(|_| {
+            BuildError::Invalid(format!(
+                "generator output {} escaped {}",
+                file.display(),
+                root.display()
+            ))
+        })?;
+        hash_part(&mut hash, relative.to_string_lossy().as_bytes());
+        hash_file(&mut hash, &file).await?;
+    }
+    Ok(format!("sha256:{}", hex::encode(hash.finalize())))
+}
+
+async fn generator_outputs_match(
+    root: &Path,
+    record: &GeneratorCacheRecord,
+) -> Result<bool, BuildError> {
+    if !root.is_dir() {
+        return Ok(false);
+    }
+    let mut entries = fs::read_dir(root)
+        .await
+        .map_err(|source| io_error(root, source))?;
+    let mut actual = BTreeSet::new();
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|source| io_error(root, source))?
+    {
+        let file_type = entry
+            .file_type()
+            .await
+            .map_err(|source| io_error(&entry.path(), source))?;
+        if !file_type.is_dir() {
+            return Ok(false);
+        }
+        actual.insert(entry.file_name().to_string_lossy().into_owned());
+    }
+    if actual != record.outputs.keys().cloned().collect() {
+        return Ok(false);
+    }
+    for (name, expected) in &record.outputs {
+        let output = root.join(name);
+        if !output.is_dir() || tree_digest(&output).await? != *expected {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+async fn output_file_count(root: &Path) -> Result<usize, BuildError> {
+    Ok(input_files(root, None).await?.len())
+}
+
 fn transitive_dependencies(index: usize, modules: &[Module]) -> BTreeSet<usize> {
     let mut found = BTreeSet::new();
     let mut pending = modules[index].dependencies.clone();
@@ -2040,13 +3010,32 @@ fn topological_layers(modules: &[Module]) -> Result<Vec<Vec<usize>>, BuildError>
 #[allow(clippy::too_many_lines)]
 async fn compile_module(
     module: &Module,
+    workspace_root: &Path,
     toolchain: &Toolchain,
     cache_dir: &Path,
     upstream: &[(PathBuf, String)],
     rebuild: bool,
 ) -> Result<(ModuleResult, String), BuildError> {
-    let sources = java_sources(&module.directory.join("src/main/java")).await?;
-    let resources = input_files(&module.directory.join("src/main/resources"), None).await?;
+    let requested = BTreeSet::from([GeneratorSourceSet::Main]);
+    let (generated, _) =
+        run_module_generators(module, workspace_root, toolchain, &requested, None, rebuild).await?;
+    let mut sources = java_sources(&module.directory.join("src/main/java")).await?;
+    for root in generated.roots(GeneratorOutputKind::JavaSources, GeneratorSourceSet::Main) {
+        sources.extend(java_sources(root).await?);
+    }
+    sources.sort();
+    sources.dedup();
+    let mut resource_roots = vec![module.directory.join("src/main/resources")];
+    resource_roots.extend(
+        generated
+            .roots(GeneratorOutputKind::Resources, GeneratorSourceSet::Main)
+            .iter()
+            .cloned(),
+    );
+    let mut resources = Vec::new();
+    for root in &resource_roots {
+        resources.extend(input_files(root, None).await?);
+    }
     let lock = read_lock(&module.directory.join("jman.lock"))?;
     let classpath = artifact_paths(&lock.classpath.compile, &lock, cache_dir)?;
     let processors = artifact_paths(&lock.classpath.processors, &lock, cache_dir)?;
@@ -2078,6 +3067,9 @@ async fn compile_module(
                 rebuilt: false,
                 output,
                 generated_sources,
+                generator_source_roots: generated
+                    .roots(GeneratorOutputKind::JavaSources, GeneratorSourceSet::Main)
+                    .to_vec(),
                 directory: module.directory.clone(),
             },
             fingerprint,
@@ -2097,12 +3089,10 @@ async fn compile_module(
     fs::create_dir_all(&temporary_generated)
         .await
         .map_err(|source| io_error(&temporary_generated, source))?;
-    copy_resources(
-        &module.directory.join("src/main/resources"),
-        &resources,
-        &temporary_classes,
-    )
-    .await?;
+    for resource_root in &resource_roots {
+        let root_resources = input_files(resource_root, None).await?;
+        copy_resources(resource_root, &root_resources, &temporary_classes).await?;
+    }
     if !sources.is_empty() {
         let mut full_classpath = upstream
             .iter()
@@ -2174,6 +3164,9 @@ async fn compile_module(
             rebuilt: true,
             output,
             generated_sources,
+            generator_source_roots: generated
+                .roots(GeneratorOutputKind::JavaSources, GeneratorSourceSet::Main)
+                .to_vec(),
             directory: module.directory.clone(),
         },
         fingerprint,
@@ -2198,6 +3191,23 @@ async fn copy_resources(
             fs::create_dir_all(parent)
                 .await
                 .map_err(|source| io_error(parent, source))?;
+        }
+        if destination.is_file() {
+            let existing = fs::read(&destination)
+                .await
+                .map_err(|source| io_error(&destination, source))?;
+            let incoming = fs::read(resource)
+                .await
+                .map_err(|source| io_error(resource, source))?;
+            if existing != incoming {
+                return Err(BuildError::Invalid(format!(
+                    "conflicting resource `{}` from {} and {}",
+                    relative.display(),
+                    destination.display(),
+                    resource.display()
+                )));
+            }
+            continue;
         }
         fs::copy(resource, &destination)
             .await
@@ -2357,6 +3367,9 @@ async fn package_input_key(
                 Some("java"),
             )
             .await?;
+            for (index, root) in module.generator_source_roots.iter().enumerate() {
+                hash_tree(&mut hash, &format!("generator-{index}"), root, Some("java")).await?;
+            }
         }
         "javadoc" => {
             hash_part(&mut hash, toolchain.version.as_bytes());
@@ -2395,6 +3408,9 @@ async fn package_input_key(
                 Some("java"),
             )
             .await?;
+            for (index, root) in module.generator_source_roots.iter().enumerate() {
+                hash_tree(&mut hash, &format!("generator-{index}"), root, Some("java")).await?;
+            }
             hash_classpath(&mut hash, module, cache_dir, upstream, true).await?;
         }
         "fat" => {
@@ -2555,10 +3571,11 @@ async fn package_sources(
     module: &ModuleResult,
     manifest: &Manifest,
 ) -> Result<PackageResult, BuildError> {
-    let roots = [
+    let mut roots = vec![
         module.directory.join("src/main/java"),
         module.generated_sources.clone(),
     ];
+    roots.extend(module.generator_source_roots.iter().cloned());
     let mut archive = BTreeMap::new();
     for root in roots {
         for file in java_sources(&root).await? {
@@ -2606,6 +3623,9 @@ async fn package_javadoc(
 ) -> Result<PackageResult, BuildError> {
     let mut sources = java_sources(&module.directory.join("src/main/java")).await?;
     sources.extend(java_sources(&module.generated_sources).await?);
+    for root in &module.generator_source_roots {
+        sources.extend(java_sources(root).await?);
+    }
     sources.sort();
     sources.dedup();
     let temporary = module
@@ -3426,7 +4446,18 @@ async fn java_sources(root: &Path) -> Result<Vec<PathBuf>, BuildError> {
 }
 
 async fn input_files(root: &Path, extension: Option<&str>) -> Result<Vec<PathBuf>, BuildError> {
-    if !root.is_dir() {
+    let metadata = match fs::symlink_metadata(root).await {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => return Err(io_error(root, source)),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(BuildError::Invalid(format!(
+            "symbolic links are not allowed in build inputs: {}",
+            root.display()
+        )));
+    }
+    if !metadata.is_dir() {
         return Ok(Vec::new());
     }
     let mut pending = vec![root.to_owned()];
@@ -3538,6 +4569,9 @@ fn parse_javac_major(output: &str) -> Option<u16> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     fn package_fixture(root: &Path) -> (Manifest, ModuleResult, Toolchain) {
         let manifest = Manifest {
             manifest_version: 1,
@@ -3569,6 +4603,7 @@ mod tests {
             rebuilt: false,
             output: root.join(".jman/output/classes"),
             generated_sources: root.join(".jman/output/generated/sources/annotations"),
+            generator_source_roots: Vec::new(),
         };
         let toolchain = Toolchain {
             javac: PathBuf::from("/test/jdk/bin/javac"),
@@ -3591,6 +4626,304 @@ mod tests {
         };
         std::fs::write(root.join("jman.lock"), lock.to_toml().expect("lock TOML"))
             .expect("lockfile");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn generators_are_content_addressed_atomic_and_routed_by_output_kind() {
+        let directory = tempfile::tempdir().expect("temporary project");
+        let root = std::fs::canonicalize(directory.path()).expect("canonical project");
+        std::fs::create_dir_all(root.join("src/schema")).expect("schema directory");
+        std::fs::write(root.join("src/schema/value.txt"), "one\n").expect("schema input");
+        let executable = root.join("generate.sh");
+        std::fs::write(
+            &executable,
+            r#"#!/bin/sh
+set -eu
+java_output="$1"
+resource_output="$2"
+input="$3"
+value="$(tr -d '\n' < "$input")"
+mkdir -p "$java_output/example" "$resource_output"
+printf 'package example; public final class Generated { public static final String VALUE = "%s"; }\n' "$value" > "$java_output/example/Generated.java"
+printf 'value=%s\n' "$value" > "$resource_output/generated.properties"
+"#,
+        )
+        .expect("generator executable");
+        let mut permissions = std::fs::metadata(&executable)
+            .expect("generator metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).expect("executable generator");
+
+        let manifest = Manifest {
+            manifest_version: jman_config::MANIFEST_VERSION,
+            project: jman_config::Project {
+                group: "example".to_owned(),
+                name: "generated-demo".to_owned(),
+                version: "1.0.0".to_owned(),
+                java_release: 21,
+                packaging: "jar".to_owned(),
+                modules: Vec::new(),
+                main_class: None,
+            },
+            toolchain: None,
+            maven: None,
+            build: Some(jman_config::Build {
+                generators: BTreeMap::from([
+                    (
+                        "model".to_owned(),
+                        Generator {
+                            command: vec!["./generate.sh".to_owned()],
+                            arguments: vec![
+                                "${output.java}".to_owned(),
+                                "${output.resources}".to_owned(),
+                                "${input}".to_owned(),
+                            ],
+                            inputs: vec!["src/schema/**/*.txt".to_owned()],
+                            outputs: BTreeMap::from([
+                                (
+                                    "java".to_owned(),
+                                    jman_config::GeneratorOutput {
+                                        kind: GeneratorOutputKind::JavaSources,
+                                        source_set: GeneratorSourceSet::Main,
+                                    },
+                                ),
+                                (
+                                    "resources".to_owned(),
+                                    jman_config::GeneratorOutput {
+                                        kind: GeneratorOutputKind::Resources,
+                                        source_set: GeneratorSourceSet::Main,
+                                    },
+                                ),
+                            ]),
+                            ..Generator::default()
+                        },
+                    ),
+                    (
+                        "test-model".to_owned(),
+                        Generator {
+                            command: vec!["./generate.sh".to_owned()],
+                            arguments: vec![
+                                "${output.test-java}".to_owned(),
+                                "${output.integration-resources}".to_owned(),
+                                "${input}".to_owned(),
+                                "${dependency.model.java}".to_owned(),
+                            ],
+                            inputs: vec!["src/schema/**/*.txt".to_owned()],
+                            depends_on: vec!["model".to_owned()],
+                            outputs: BTreeMap::from([
+                                (
+                                    "test-java".to_owned(),
+                                    jman_config::GeneratorOutput {
+                                        kind: GeneratorOutputKind::JavaSources,
+                                        source_set: GeneratorSourceSet::Test,
+                                    },
+                                ),
+                                (
+                                    "integration-resources".to_owned(),
+                                    jman_config::GeneratorOutput {
+                                        kind: GeneratorOutputKind::Resources,
+                                        source_set: GeneratorSourceSet::IntegrationTest,
+                                    },
+                                ),
+                            ]),
+                            ..Generator::default()
+                        },
+                    ),
+                ]),
+                ..jman_config::Build::default()
+            }),
+            test: None,
+            publishing: None,
+            audit: None,
+            scripts: BTreeMap::new(),
+            repositories: Vec::new(),
+            dependencies: jman_config::Dependencies::default(),
+            annotation_processors: BTreeMap::new(),
+            path_dependencies: BTreeMap::new(),
+        };
+        manifest.validate().expect("valid generator manifest");
+        let module = Module {
+            directory: root.clone(),
+            manifest,
+            dependencies: Vec::new(),
+        };
+        let toolchain = Toolchain {
+            javac: PathBuf::from("/test/jdk/bin/javac"),
+            version: "25".to_owned(),
+            major: 25,
+            managed: None,
+        };
+        let requested = BTreeSet::from([GeneratorSourceSet::Main]);
+
+        let (generated, first) =
+            run_module_generators(&module, &root, &toolchain, &requested, None, false)
+                .await
+                .expect("initial generation");
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].generator, "model");
+        assert!(!first[0].cached);
+        assert_eq!(first[0].inputs, 1);
+        assert_eq!(first[0].outputs, 2);
+        let java = &generated.java_sources[&GeneratorSourceSet::Main][0];
+        let resources = &generated.resources[&GeneratorSourceSet::Main][0];
+        assert!(std::fs::read_to_string(java.join("example/Generated.java"))
+            .expect("generated Java")
+            .contains("VALUE = \"one\""));
+        assert_eq!(
+            std::fs::read_to_string(resources.join("generated.properties"))
+                .expect("generated resource"),
+            "value=one\n"
+        );
+
+        let (_, second) =
+            run_module_generators(&module, &root, &toolchain, &requested, None, false)
+                .await
+                .expect("cached generation");
+        assert!(second[0].cached);
+
+        std::fs::write(root.join("src/schema/value.txt"), "two\n").expect("changed input");
+        let (_, changed) =
+            run_module_generators(&module, &root, &toolchain, &requested, None, false)
+                .await
+                .expect("regenerated input");
+        assert!(!changed[0].cached);
+        let previous =
+            std::fs::read_to_string(java.join("example/Generated.java")).expect("updated Java");
+        assert!(previous.contains("VALUE = \"two\""));
+
+        std::fs::write(root.join("src/schema/value.txt"), "three\n")
+            .expect("concurrently changed input");
+        let left = run_module_generators(&module, &root, &toolchain, &requested, None, false);
+        let right = run_module_generators(&module, &root, &toolchain, &requested, None, false);
+        let (left, right) = tokio::join!(left, right);
+        let left = left.expect("first concurrent generation").1;
+        let right = right.expect("second concurrent generation").1;
+        assert_eq!(
+            [left[0].cached, right[0].cached]
+                .into_iter()
+                .filter(|cached| *cached)
+                .count(),
+            1,
+            "concurrent callers must execute once and reuse once"
+        );
+        let previous =
+            std::fs::read_to_string(java.join("example/Generated.java")).expect("updated Java");
+        assert!(previous.contains("VALUE = \"three\""));
+
+        let test_requested = BTreeSet::from([GeneratorSourceSet::Test]);
+        let (test_generated, test_results) =
+            run_module_generators(&module, &root, &toolchain, &test_requested, None, false)
+                .await
+                .expect("test source generation");
+        assert_eq!(test_results.len(), 2);
+        assert_eq!(test_results[0].generator, "model");
+        assert!(test_results[0].cached);
+        assert_eq!(test_results[1].generator, "test-model");
+        assert_eq!(
+            test_generated.java_sources[&GeneratorSourceSet::Test].len(),
+            1
+        );
+        assert_eq!(
+            test_generated.resources[&GeneratorSourceSet::IntegrationTest].len(),
+            1
+        );
+
+        std::fs::write(&executable, "#!/bin/sh\nexit 9\n").expect("failing generator");
+        let mut permissions = std::fs::metadata(&executable)
+            .expect("generator metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).expect("executable generator");
+        let error = run_module_generators(&module, &root, &toolchain, &requested, None, false)
+            .await
+            .expect_err("generator failure");
+        assert!(error.to_string().contains("exit status: 9"));
+        assert_eq!(
+            std::fs::read_to_string(java.join("example/Generated.java"))
+                .expect("last good generated Java"),
+            previous
+        );
+        assert!(std::fs::read_dir(root.join(".jman/generated"))
+            .expect("generated directory")
+            .all(|entry| !entry
+                .expect("generated entry")
+                .file_name()
+                .to_string_lossy()
+                .contains(".tmp.")));
+    }
+
+    #[test]
+    fn generator_globs_and_dollar_expressions_are_platform_neutral() {
+        assert!(path_glob_matches(
+            "src/main/proto/**/*.proto",
+            "src/main/proto/customer.proto"
+        ));
+        assert!(path_glob_matches(
+            "src/main/proto/**/*.proto",
+            "src/main/proto/orders/order.proto"
+        ));
+        assert!(!path_glob_matches(
+            "src/main/proto/*.proto",
+            "src/main/proto/orders/order.proto"
+        ));
+        let outputs = BTreeMap::from([("java".to_owned(), PathBuf::from("/tmp/generated"))]);
+        let executable_directory = tempfile::tempdir().expect("generator PATH");
+        let executable = executable_directory.path().join("selected-generator");
+        std::fs::write(&executable, b"fixture").expect("generator executable");
+        let environment = BTreeMap::from([
+            (OsString::from("EDITION"), OsString::from("2024")),
+            (
+                OsString::from("PATH"),
+                executable_directory.path().as_os_str().to_owned(),
+            ),
+        ]);
+        let inputs = vec![
+            PathBuf::from("/project/one.proto"),
+            PathBuf::from("/project/two.proto"),
+        ];
+        let expansion = GeneratorExpansion {
+            project_root: Path::new("/project"),
+            module_root: Path::new("/project/module"),
+            generator_name: "protobuf",
+            java_home: Path::new("/jdk"),
+            inputs: &inputs,
+            outputs: &outputs,
+            dependency_outputs: &BTreeMap::from([(
+                "schema.model".to_owned(),
+                PathBuf::from("/project/generated/schema/model"),
+            )]),
+            environment: &environment,
+        };
+        assert_eq!(
+            expand_generator_template("--out=${output.java}", &expansion)
+                .expect("output expression"),
+            [OsString::from("--out=/tmp/generated")]
+        );
+        assert_eq!(
+            expand_generator_template("${input}", &expansion).expect("input expansion"),
+            inputs
+                .iter()
+                .map(|input| input.as_os_str().to_owned())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            expand_generator_template("$${input}-${env.EDITION}", &expansion)
+                .expect("escaped expression"),
+            [OsString::from("${input}-2024")]
+        );
+        assert_eq!(
+            expand_generator_template("${dependency.schema.model}", &expansion)
+                .expect("dependency output expression"),
+            [OsString::from("/project/generated/schema/model")]
+        );
+        assert_eq!(
+            resolve_generator_executable("selected-generator", Path::new("/unused"), &environment)
+                .expect("selected executable"),
+            std::fs::canonicalize(executable).expect("canonical executable")
+        );
     }
 
     #[tokio::test]
@@ -4429,6 +5762,16 @@ Test run finished after 758 ms
         assert!(input_files(&inputs, None)
             .await
             .expect_err("reject symlink")
+            .to_string()
+            .contains("symbolic links"));
+
+        let real_root = directory.path().join("real-root");
+        std::fs::create_dir(&real_root).expect("real root");
+        let linked_root = directory.path().join("linked-root");
+        symlink(&real_root, &linked_root).expect("root symlink");
+        assert!(input_files(&linked_root, None)
+            .await
+            .expect_err("reject root symlink")
             .to_string()
             .contains("symbolic links"));
     }

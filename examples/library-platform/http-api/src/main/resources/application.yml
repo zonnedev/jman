@@ -1,0 +1,6 @@
+micronaut:
+  application:
+    name: library-http-api
+  server:
+    port: 8080
+

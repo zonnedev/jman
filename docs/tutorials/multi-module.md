@@ -102,7 +102,9 @@ jman run
 ```
 
 JMAN topologically orders modules and compiles independent modules in parallel
-up to the `--jobs` limit. `jman run` chooses the runnable application module.
+up to the `--jobs` limit. `jman run` chooses the only runnable application. If
+the workspace has several application entry points, run the intended project
+name explicitly with `jman run --module NAME`.
 
 ## 5. Package everything
 

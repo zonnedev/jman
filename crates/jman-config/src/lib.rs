@@ -1,7 +1,7 @@
 //! Project manifest and lockfile models.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -236,6 +236,63 @@ pub struct Build {
     pub encoding: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub compiler_args: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub generators: BTreeMap<String, Generator>,
+}
+
+impl Default for Build {
+    fn default() -> Self {
+        Self {
+            encoding: default_encoding(),
+            compiler_args: Vec::new(),
+            generators: BTreeMap::new(),
+        }
+    }
+}
+
+/// A content-addressed command that contributes generated build inputs.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct Generator {
+    pub command: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arguments: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allow_empty_inputs: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_directory: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub environment: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inherit_environment: Vec<String>,
+    pub outputs: BTreeMap<String, GeneratorOutput>,
+}
+
+/// One JMAN-owned output directory produced by a generator.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct GeneratorOutput {
+    pub kind: GeneratorOutputKind,
+    pub source_set: GeneratorSourceSet,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GeneratorOutputKind {
+    JavaSources,
+    Resources,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GeneratorSourceSet {
+    Main,
+    Test,
+    IntegrationTest,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -521,6 +578,9 @@ impl Manifest {
         }
         if let Some(coverage) = self.test.as_ref().and_then(|test| test.coverage.as_ref()) {
             validate_coverage(coverage)?;
+        }
+        if let Some(build) = &self.build {
+            validate_generators(&build.generators)?;
         }
         validate_scripts(&self.scripts)?;
         Ok(())
@@ -829,6 +889,215 @@ fn validate_scripts(scripts: &BTreeMap<String, Script>) -> Result<(), ConfigErro
                 )));
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_generators(generators: &BTreeMap<String, Generator>) -> Result<(), ConfigError> {
+    for (name, generator) in generators {
+        validate_generator(name, generator, generators)?;
+    }
+
+    let mut complete = BTreeSet::new();
+    while complete.len() < generators.len() {
+        let ready = generators
+            .iter()
+            .filter(|(name, _)| !complete.contains(*name))
+            .filter(|(_, generator)| {
+                generator
+                    .depends_on
+                    .iter()
+                    .all(|dependency| complete.contains(dependency))
+            })
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        if ready.is_empty() {
+            let cycle = generators
+                .keys()
+                .filter(|name| !complete.contains(*name))
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(ConfigError::Validation(format!(
+                "generator dependency cycle detected involving: {cycle}"
+            )));
+        }
+        for name in ready {
+            complete.insert(name);
+        }
+    }
+    Ok(())
+}
+
+fn validate_generator(
+    name: &str,
+    generator: &Generator,
+    generators: &BTreeMap<String, Generator>,
+) -> Result<(), ConfigError> {
+    validate_generator_name("generator", name)?;
+    if generator.command.first().is_none_or(String::is_empty) {
+        return Err(ConfigError::Validation(format!(
+            "generator `{name}` command must start with a non-empty executable"
+        )));
+    }
+    if generator.command[0].contains("${") {
+        return Err(ConfigError::Validation(format!(
+            "generator `{name}` executable cannot contain expressions"
+        )));
+    }
+    if generator.outputs.is_empty() {
+        return Err(ConfigError::Validation(format!(
+            "generator `{name}` must declare at least one output"
+        )));
+    }
+    for output in generator.outputs.keys() {
+        validate_generator_name("generator output", output)?;
+    }
+    if generator
+        .working_directory
+        .as_ref()
+        .is_some_and(|directory| {
+            directory.is_absolute()
+                || directory
+                    .components()
+                    .any(|component| matches!(component, std::path::Component::ParentDir))
+        })
+    {
+        return Err(ConfigError::Validation(format!(
+            "generator `{name}` working-directory must stay within the module"
+        )));
+    }
+    for input in &generator.inputs {
+        let path = Path::new(input);
+        if input.is_empty()
+            || input.contains('\\')
+            || path.is_absolute()
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir | std::path::Component::RootDir
+                )
+            })
+        {
+            return Err(ConfigError::Validation(format!(
+                "generator `{name}` input `{input}` must be a module-relative `/` path"
+            )));
+        }
+    }
+    for variable in generator
+        .environment
+        .keys()
+        .chain(&generator.inherit_environment)
+    {
+        if variable.is_empty() || variable.contains('=') || variable.contains('\0') {
+            return Err(ConfigError::Validation(format!(
+                "generator `{name}` has invalid environment variable `{variable}`"
+            )));
+        }
+        if matches!(
+            variable.as_str(),
+            "PATH"
+                | "JAVA_HOME"
+                | "JMAN_JAVA_HOME"
+                | "JMAN_PROJECT_ROOT"
+                | "JMAN_MODULE_ROOT"
+                | "JMAN_GENERATOR_NAME"
+        ) {
+            return Err(ConfigError::Validation(format!(
+                "generator `{name}` cannot override reserved environment variable `{variable}`"
+            )));
+        }
+    }
+    for dependency in &generator.depends_on {
+        if dependency == name {
+            return Err(ConfigError::Validation(format!(
+                "generator `{name}` cannot depend on itself"
+            )));
+        }
+        if !generators.contains_key(dependency) {
+            return Err(ConfigError::Validation(format!(
+                "generator `{name}` references undefined generator `{dependency}`"
+            )));
+        }
+    }
+    for template in generator.command.iter().chain(&generator.arguments) {
+        validate_generator_template(name, template, generator, generators)?;
+    }
+    Ok(())
+}
+
+fn validate_generator_name(kind: &str, name: &str) -> Result<(), ConfigError> {
+    if !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        Ok(())
+    } else {
+        Err(ConfigError::Validation(format!(
+            "{kind} name `{name}` must use only ASCII letters, digits, `-`, or `_`"
+        )))
+    }
+}
+
+fn validate_generator_template(
+    name: &str,
+    template: &str,
+    generator: &Generator,
+    generators: &BTreeMap<String, Generator>,
+) -> Result<(), ConfigError> {
+    let mut remaining = template;
+    while let Some(index) = remaining.find('$') {
+        remaining = &remaining[index + 1..];
+        if let Some(escaped) = remaining.strip_prefix('$') {
+            remaining = escaped;
+            continue;
+        }
+        let Some(expression) = remaining.strip_prefix('{') else {
+            continue;
+        };
+        let Some(end) = expression.find('}') else {
+            return Err(ConfigError::Validation(format!(
+                "generator `{name}` contains an unterminated expression in `{template}`"
+            )));
+        };
+        let variable = &expression[..end];
+        let valid = matches!(
+            variable,
+            "project.root" | "module.root" | "generator.name" | "input" | "java.home"
+        ) || variable
+            .strip_prefix("output.")
+            .is_some_and(|output| generator.outputs.contains_key(output))
+            || variable.strip_prefix("env.").is_some_and(|environment| {
+                generator.environment.contains_key(environment)
+                    || generator
+                        .inherit_environment
+                        .iter()
+                        .any(|candidate| candidate == environment)
+            })
+            || variable
+                .strip_prefix("dependency.")
+                .and_then(|reference| reference.split_once('.'))
+                .is_some_and(|(dependency, output)| {
+                    generator
+                        .depends_on
+                        .iter()
+                        .any(|candidate| candidate == dependency)
+                        && generators
+                            .get(dependency)
+                            .is_some_and(|generator| generator.outputs.contains_key(output))
+                });
+        if !valid {
+            return Err(ConfigError::Validation(format!(
+                "generator `{name}` uses unknown expression `${{{variable}}}`"
+            )));
+        }
+        if variable == "input" && template != "${input}" {
+            return Err(ConfigError::Validation(format!(
+                "generator `{name}` must use `${{input}}` as a complete argument"
+            )));
+        }
+        remaining = &expression[end + 1..];
     }
     Ok(())
 }
@@ -1256,6 +1525,7 @@ mod tests {
             build: Some(Build {
                 encoding: "UTF-8".to_owned(),
                 compiler_args: vec!["-parameters".to_owned()],
+                generators: BTreeMap::new(),
             }),
             test: None,
             publishing: Some(Publishing {
@@ -1690,5 +1960,157 @@ vendor = "corretto"
             .expect_err("reject undefined step")
             .to_string()
             .contains("undefined step `missing`"));
+    }
+
+    #[test]
+    fn generators_round_trip_with_typed_outputs_and_dollar_expressions() {
+        let mut manifest = minimal_manifest();
+        manifest.build = Some(Build {
+            encoding: "UTF-8".to_owned(),
+            compiler_args: Vec::new(),
+            generators: BTreeMap::from([(
+                "protobuf".to_owned(),
+                Generator {
+                    command: vec!["protoc".to_owned()],
+                    arguments: vec![
+                        "--proto_path=${module.root}/src/main/proto".to_owned(),
+                        "--java_out=${output.java}".to_owned(),
+                        "${input}".to_owned(),
+                    ],
+                    inputs: vec!["src/main/proto/**/*.proto".to_owned()],
+                    outputs: BTreeMap::from([(
+                        "java".to_owned(),
+                        GeneratorOutput {
+                            kind: GeneratorOutputKind::JavaSources,
+                            source_set: GeneratorSourceSet::Main,
+                        },
+                    )]),
+                    ..Generator::default()
+                },
+            )]),
+        });
+
+        let serialized = manifest.to_toml().expect("serialize generators");
+        assert!(serialized.contains("[build.generators.protobuf]"));
+        assert!(serialized.contains("[build.generators.protobuf.outputs.java]"));
+        assert!(serialized.contains("--java_out=${output.java}"));
+        assert_eq!(
+            toml::from_str::<Manifest>(&serialized).expect("parse generators"),
+            manifest
+        );
+    }
+
+    #[test]
+    fn generator_dependency_output_expressions_require_a_direct_declared_output() {
+        let output = GeneratorOutput {
+            kind: GeneratorOutputKind::JavaSources,
+            source_set: GeneratorSourceSet::Main,
+        };
+        let schema = Generator {
+            command: vec!["schema-generator".to_owned()],
+            allow_empty_inputs: true,
+            outputs: BTreeMap::from([("java".to_owned(), output.clone())]),
+            ..Generator::default()
+        };
+        let client = Generator {
+            command: vec!["client-generator".to_owned()],
+            arguments: vec!["--schema=${dependency.schema.java}".to_owned()],
+            allow_empty_inputs: true,
+            depends_on: vec!["schema".to_owned()],
+            outputs: BTreeMap::from([("java".to_owned(), output)]),
+            ..Generator::default()
+        };
+        let mut generators =
+            BTreeMap::from([("client".to_owned(), client), ("schema".to_owned(), schema)]);
+
+        validate_generators(&generators).expect("direct dependency output expression");
+        generators.get_mut("client").expect("client").arguments =
+            vec!["${dependency.schema.missing}".to_owned()];
+        assert!(validate_generators(&generators)
+            .expect_err("unknown dependency output")
+            .to_string()
+            .contains("unknown expression"));
+    }
+
+    #[test]
+    fn generators_reject_unsafe_inputs_unknown_expressions_and_cycles() {
+        let generator = Generator {
+            command: vec!["generator".to_owned()],
+            arguments: vec!["prefix-${input}".to_owned()],
+            inputs: vec!["../outside/**/*.proto".to_owned()],
+            outputs: BTreeMap::from([(
+                "java".to_owned(),
+                GeneratorOutput {
+                    kind: GeneratorOutputKind::JavaSources,
+                    source_set: GeneratorSourceSet::Main,
+                },
+            )]),
+            ..Generator::default()
+        };
+        let mut manifest = minimal_manifest();
+        manifest.build = Some(Build {
+            generators: BTreeMap::from([("first".to_owned(), generator.clone())]),
+            ..Build::default()
+        });
+        let message = manifest
+            .validate()
+            .expect_err("reject unsafe input")
+            .to_string();
+        assert!(message.contains("module-relative"));
+
+        let first = manifest
+            .build
+            .as_mut()
+            .expect("build")
+            .generators
+            .get_mut("first")
+            .expect("generator");
+        first.inputs = vec!["src/main/proto/**/*.proto".to_owned()];
+        let message = manifest
+            .validate()
+            .expect_err("reject list interpolation")
+            .to_string();
+        assert!(message.contains("complete argument"));
+
+        let first = manifest
+            .build
+            .as_mut()
+            .expect("build")
+            .generators
+            .get_mut("first")
+            .expect("generator");
+        first.arguments = vec!["${output.missing}".to_owned()];
+        let message = manifest
+            .validate()
+            .expect_err("reject unknown output")
+            .to_string();
+        assert!(message.contains("unknown expression"));
+
+        let build = manifest.build.as_mut().expect("build");
+        let first = build.generators.get_mut("first").expect("first");
+        first.arguments.clear();
+        first
+            .environment
+            .insert("JAVA_HOME".to_owned(), "/other/jdk".to_owned());
+        let message = manifest
+            .validate()
+            .expect_err("reject reserved environment")
+            .to_string();
+        assert!(message.contains("reserved environment"));
+
+        let build = manifest.build.as_mut().expect("build");
+        let first = build.generators.get_mut("first").expect("first");
+        first.environment.clear();
+        first.depends_on = vec!["second".to_owned()];
+        let mut second = generator;
+        second.inputs = vec!["src/main/proto/**/*.proto".to_owned()];
+        second.arguments.clear();
+        second.depends_on = vec!["first".to_owned()];
+        build.generators.insert("second".to_owned(), second);
+        let message = manifest
+            .validate()
+            .expect_err("reject generator cycle")
+            .to_string();
+        assert!(message.contains("cycle"));
     }
 }

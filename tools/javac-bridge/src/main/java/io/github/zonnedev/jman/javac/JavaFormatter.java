@@ -2577,6 +2577,7 @@ final class JavaFormatter {
       if (Set.of("(", "[", ".", "::", "@").contains(previous)) return false;
       if (previousAnnotationEnds(index) && word(current)) return true;
       if (current.equals("(")) {
+        if (previous.equals(",")) return true;
         if (previousGenericClose) return false;
         return CONTROL_PARENTHESIS.contains(previous)
             || Set.of("return", "throw", "assert", "yield").contains(previous)

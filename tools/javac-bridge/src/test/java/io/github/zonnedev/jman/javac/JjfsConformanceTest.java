@@ -17,6 +17,7 @@ final class JjfsConformanceTest {
     normalizesDeclarationAnnotationsAndModifiers();
     insertsControlFlowBracesAndWrapsLongConditionsAndCalls();
     formatsLongLambdasTernariesLoopsAndResources();
+    separatesZeroArgumentLambdasFromPrecedingArguments();
     preservesStatementBoundariesInsideNestedLambdas();
     resolvesImportConflictsAndHonorsOnePreference();
     wrapsLongThrowsClausesWithoutDetachingTheBrace();
@@ -28,6 +29,24 @@ final class JjfsConformanceTest {
     removesBlankLinesImmediatelyInsideBlocks();
     preservesDisabledRegionsCommentsAndLiterals();
     rejectsMalformedFormatterDirectives();
+  }
+
+  private static void separatesZeroArgumentLambdasFromPrecedingArguments() {
+    assertFormat(
+        "class LambdaSpacing { void run() { expect(String.class,() -> call()); } void expect(Class<?> type,Runnable action){} void call(){} }\n",
+        """
+        class LambdaSpacing {
+          void run() {
+            expect(String.class, () -> call());
+          }
+
+          void expect(Class<?> type, Runnable action) {
+          }
+
+          void call() {
+          }
+        }
+        """);
   }
 
   private static void formatsTheLexicalFoundationAndBlocks() {

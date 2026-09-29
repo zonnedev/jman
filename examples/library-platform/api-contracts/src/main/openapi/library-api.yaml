@@ -1,0 +1,170 @@
+openapi: 3.1.0
+info:
+  title: JMAN Library API
+  version: 1.0.0
+  description: Manage users, their books, and ownership transfers.
+paths:
+  /users:
+    post:
+      operationId: createUser
+      summary: Create a library user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+    get:
+      operationId: listUsers
+      summary: List library users
+      responses:
+        '200':
+          description: Users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+  /users/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    get:
+      operationId: getUser
+      summary: Find a user
+      responses:
+        '200':
+          description: User found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          description: User not found
+  /users/{userId}/books:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    post:
+      operationId: registerBook
+      summary: Register a book for a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterBookRequest'
+      responses:
+        '201':
+          description: Book registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Book'
+        '404':
+          description: Owner not found
+    get:
+      operationId: listBooks
+      summary: List books owned by a user
+      responses:
+        '200':
+          description: Books
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Book'
+        '404':
+          description: Owner not found
+  /books/{bookId}/owner:
+    parameters:
+      - $ref: '#/components/parameters/BookId'
+    put:
+      operationId: transferBook
+      summary: Transfer a book to another user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferBookRequest'
+      responses:
+        '200':
+          description: Ownership transferred
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Book'
+        '404':
+          description: Book or new owner not found
+components:
+  parameters:
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    BookId:
+      name: bookId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    CreateUserRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+    RegisterBookRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+    TransferBookRequest:
+      type: object
+      required: [ownerId]
+      properties:
+        ownerId:
+          type: string
+          format: uuid
+    User:
+      type: object
+      required: [id, name, bookIds]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        bookIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+    Book:
+      type: object
+      required: [id, title, ownerId]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        ownerId:
+          type: string
+          format: uuid

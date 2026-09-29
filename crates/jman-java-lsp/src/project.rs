@@ -622,6 +622,31 @@ fn load_jman_models(root: &Path) -> Result<Vec<CompileModel>, String> {
             .unwrap_or_default();
         let main_output = directory.join(".jman/output/classes");
         let main_generated = directory.join(".jman/output/generated/sources/annotations");
+        let module_directory = &directory;
+        let generator_sources = |source_sets: &[jman_config::GeneratorSourceSet]| {
+            build
+                .into_iter()
+                .flat_map(|build| &build.generators)
+                .flat_map(|(generator_name, generator)| {
+                    let generator_name = generator_name.clone();
+                    generator
+                        .outputs
+                        .iter()
+                        .filter(|(_, output)| {
+                            output.kind == jman_config::GeneratorOutputKind::JavaSources
+                                && source_sets.contains(&output.source_set)
+                        })
+                        .map(move |(output_name, _)| {
+                            module_directory
+                                .join(".jman/generated")
+                                .join(&generator_name)
+                                .join(output_name)
+                        })
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut main_generated_sources = vec![main_generated.clone()];
+        main_generated_sources.extend(generator_sources(&[jman_config::GeneratorSourceSet::Main]));
         let mut main_classpath = project_outputs.clone();
         main_classpath.extend(compile_dependencies.clone());
         models.push(CompileModel {
@@ -641,7 +666,7 @@ fn load_jman_models(root: &Path) -> Result<Vec<CompileModel>, String> {
             release: Some(Value::from(manifest.project.java_release)),
             encoding: Some(encoding.clone()),
             generated_sources_directory: Some(main_generated.clone()),
-            generated_source_directories: vec![main_generated],
+            generated_source_directories: main_generated_sources,
             destination_directory: Some(main_output.clone()),
             java_compiler_executable: None,
             java_language_version: Some(Value::from(manifest.project.java_release)),
@@ -657,7 +682,10 @@ fn load_jman_models(root: &Path) -> Result<Vec<CompileModel>, String> {
             project_directory: directory.clone(),
             task_path: "testCompile".to_owned(),
             source_files: Vec::new(),
-            source_roots: vec![directory.join("src/test/java")],
+            source_roots: vec![
+                directory.join("src/test/java"),
+                directory.join("src/integrationTest/java"),
+            ],
             classpath: test_classpath,
             module_path: Vec::new(),
             project_dependencies: manifest.path_dependencies.keys().cloned().collect(),
@@ -669,9 +697,15 @@ fn load_jman_models(root: &Path) -> Result<Vec<CompileModel>, String> {
             generated_sources_directory: Some(
                 directory.join(".jman/output/generated/test-sources/annotations"),
             ),
-            generated_source_directories: vec![
-                directory.join(".jman/output/generated/test-sources/annotations"),
-            ],
+            generated_source_directories: {
+                let mut generated =
+                    vec![directory.join(".jman/output/generated/test-sources/annotations")];
+                generated.extend(generator_sources(&[
+                    jman_config::GeneratorSourceSet::Test,
+                    jman_config::GeneratorSourceSet::IntegrationTest,
+                ]));
+                generated
+            },
             destination_directory: Some(directory.join(".jman/output/test-classes")),
             java_compiler_executable: None,
             java_language_version: Some(Value::from(manifest.project.java_release)),
@@ -744,7 +778,7 @@ fn conventional_source_root(source: &Path) -> Option<PathBuf> {
         if components[index].as_os_str() == "src"
             && matches!(
                 components[index + 1].as_os_str().to_str(),
-                Some("main" | "test")
+                Some("main" | "test" | "integrationTest")
             )
             && components[index + 2].as_os_str() == "java"
         {
@@ -835,6 +869,15 @@ packaging = "jar"
 [build]
 encoding = "UTF-16"
 compiler-args = ["-parameters"]
+
+[build.generators.schema]
+command = ["schema-generator"]
+inputs = ["src/main/schema/**/*.json"]
+arguments = ["--output=${output.java}", "${input}"]
+
+[build.generators.schema.outputs.java]
+kind = "java-sources"
+source-set = "main"
 "#,
         )
         .unwrap();
@@ -870,6 +913,18 @@ processors = []
         assert_eq!(loaded.models[0].encoding.as_deref(), Some("UTF-16"));
         assert_eq!(loaded.models[0].compiler_args, ["-parameters"]);
         let canonical_root = std::fs::canonicalize(&root).expect("canonical project root");
+        let generator_root = canonical_root.join(".jman/generated/schema/java");
+        assert!(
+            loaded.models[0]
+                .generated_source_directories
+                .contains(&generator_root)
+        );
+        assert_eq!(
+            select_compile_model(&loaded.models, &generator_root.join("demo/Generated.java"))
+                .expect("generated compile unit")
+                .task_path,
+            "compile"
+        );
         assert_eq!(
             select_compile_model(
                 &loaded.models,

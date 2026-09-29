@@ -1,0 +1,7 @@
+micronaut:
+  application:
+    name: library-grpc-api
+grpc:
+  server:
+    port: 9090
+

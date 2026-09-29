@@ -30,10 +30,12 @@ jman compile --jobs 4
 jman compile --offline
 ```
 
-`compile` compiles production sources for every module in dependency order. It is
-the quickest command for validating the main codebase and is suitable for an
-early CI gate. Annotation processors declared in `jman.toml` run as ordinary
-processors; generated types participate in compilation.
+`compile` compiles production sources for every module in dependency order. It
+is the quickest command for validating the main codebase and is suitable for
+an early CI gate. Native source/resource generators run before compilation,
+then annotation processors declared in `jman.toml` run as ordinary processors.
+Both kinds of generated types participate in the same compilation. See the
+[generator guide](generators.md) to declare tools such as `protoc`.
 
 ## Build artifacts
 
@@ -103,6 +105,7 @@ main-class = "dev.example.Application"
 
 ```bash
 jman run
+jman run --module web-api
 jman run -- --server.port=8081
 ```
 
@@ -111,6 +114,9 @@ compiled main output plus the resolved runtime classpath, which is why `run`
 can execute a framework application even though its thin JAR alone cannot.
 Use `jman build --fat` when the desired output is a standalone `java -jar`
 artifact.
+
+Use `--module PROJECT_NAME` when a workspace declares more than one main
+class. The selector uses `[project].name`, not its directory name.
 
 Run a project from outside its directory by placing the path before the
 separator:

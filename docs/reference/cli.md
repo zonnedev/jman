@@ -189,6 +189,31 @@ jman compile --jobs 4
 jman compile modules/api --offline
 ```
 
+## jman generate
+
+Run native source and resource generators without compiling.
+
+```text
+jman generate [PATH] [--generator NAME] [--source-set all|main|test|integration-test]
+              [--jobs COUNT] [--offline] [--rebuild]
+```
+
+`--generator` is repeatable. Generator dependencies are included
+automatically. `--rebuild` bypasses content-addressed reuse once. Normal
+`compile`, `run`, `test`, `build`, and `publish` commands already execute the
+generators required by their source sets; this command is useful for inspecting
+or refreshing generated code directly.
+
+```bash
+jman generate
+jman generate --generator protobuf
+jman generate --source-set integration-test
+jman generate --rebuild
+```
+
+See [generate Java sources and resources](../guides/generators.md) for the
+manifest, expression, cache, and security contracts.
+
 ## jman fmt
 
 Format Java source with the project-aware JMAN Java Formatting Style (JJFS 1)
@@ -299,15 +324,21 @@ jman publish --to central --automatic --timeout-seconds 900
 Compile and run the configured application.
 
 ```text
-jman run [PATH] [--jobs COUNT] [--offline] [-- APPLICATION_ARGUMENTS...]
+jman run [PATH] [--module NAME] [--jobs COUNT] [--offline]
+         [-- APPLICATION_ARGUMENTS...]
 ```
 
 Arguments after `--` are passed unchanged to the Java main method.
 
 ```bash
 jman run
+jman run --module library-http-api
 jman run services/web -- --server.port=8081 --spring.profiles.active=local
 ```
+
+When a workspace contains multiple modules with `project.main-class`, select
+one by project name with `--module`. A single runnable module remains the
+default and needs no selector.
 
 ## jman test
 

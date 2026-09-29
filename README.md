@@ -50,6 +50,33 @@ Run it explicitly with `jman script dev`, or use `jman script` to discover
 the available tasks. Scripts inherit the selected project JDK and are never
 run automatically when a repository is opened or imported.
 
+Code generation is part of the native build graph rather than a lifecycle
+script. For example, a Protobuf generator declares its inputs and typed output:
+
+```toml
+[build.generators.protobuf]
+command = ["protoc"]
+arguments = [
+  "--proto_path=${module.root}/src/main/proto",
+  "--java_out=${output.java}",
+  "${input}",
+]
+inputs = ["src/main/proto/**/*.proto"]
+
+[build.generators.protobuf.outputs.java]
+kind = "java-sources"
+source-set = "main"
+```
+
+Run `jman generate` directly when you want to inspect generation. `compile`,
+`test`, `run`, `build`, and `publish` select required generators automatically
+and reuse verified content-addressed output. See the
+[generator guide](docs/guides/generators.md) and runnable
+[Protobuf example](examples/protobuf/). The larger
+[library platform](examples/library-platform/) shows a Java 25 multi-module
+workspace with DDD, OpenAPI and protobuf generation, Micronaut HTTP and gRPC
+servers, a transport-neutral client, unit tests, and integration tests.
+
 JMAN uses a readable `jman.toml` manifest and a deterministic `jman.lock`. Its
 normal build path does not invoke Maven or Gradle, but existing Maven projects
 can be imported and the language server understands JMAN, Maven, and Gradle
@@ -97,8 +124,8 @@ project manifest. Maven and Gradle remain the build system because JMAN
 distinguishes the two forms by content. Existing `.sdkmanrc` and jenv
 `.java-version` files are also understood. Selection precedence is
 `jman.toml`, `.sdkmanrc`, `.java-version`, then the exact global selection.
-Use `jman java list
---installed` for a network-free view of installed JDKs. Commands that operate
+Use `jman java list --installed` for a network-free view of installed JDKs.
+Commands that operate
 on an installed JDK infer its vendor from the directory selection, global
 selection, or a unique installed match; `--vendor` is only required when the
 choice is ambiguous. The [Java toolchain guide](docs/guides/java-toolchains.md)
@@ -122,7 +149,7 @@ and troubleshooting.
 | --- | --- |
 | Projects | New applications, libraries, multi-module workspaces, Maven import |
 | Dependencies | Maven repositories, BOMs, scopes, exclusions, paths, lockfiles, offline builds |
-| Build | Checks, thin and executable fat JARs, source JARs, Javadocs, annotation processors |
+| Build | Compilation, typed source/resource generators, thin and executable fat JARs, source JARs, Javadocs, annotation processors |
 | Format | [JJFS 1](docs/reference/jjfs-v1.md), native javac-aware formatting, canonical imports, API-first member ordering, CI checks |
 | Test | Live JUnit tree, selectors, unit/integration source sets, parallel modules, coverage |
 | Automation | Manifest-defined shell commands, portable commands, and composed project scripts |

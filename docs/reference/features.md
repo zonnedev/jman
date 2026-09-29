@@ -45,6 +45,7 @@ See [dependency management](../guides/dependencies.md) and the exact
 | --- | --- |
 | Incremental workspace compilation | Supported |
 | Module-parallel compilation | Supported |
+| Content-addressed Java source and resource generators | Supported for main, test, and integration-test source sets |
 | Generic JSR 269 annotation processors | Supported |
 | Lombok as an ordinary processor | Supported, including generated members in the LSP |
 | Thin JARs | Supported |
@@ -55,7 +56,8 @@ See [dependency management](../guides/dependencies.md) and the exact
 | Native javac-aware opinionated source formatting | Supported in CLI, VS Code, and Neovim |
 | Arbitrary Maven/Gradle plugin execution | Not supported in the native build |
 
-See [Build and run](../guides/build-and-run.md) and
+See [Build and run](../guides/build-and-run.md),
+[generate sources and resources](../guides/generators.md), and
 [format Java source](../guides/formatting.md).
 
 ## Testing and coverage

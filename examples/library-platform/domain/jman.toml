@@ -1,0 +1,12 @@
+manifest-version = 1
+
+[project]
+group = "dev.zonnedev.jman.example"
+name = "library-domain"
+version = "1.0.0"
+java-release = 25
+packaging = "jar"
+
+[dependencies.test]
+"org.junit.platform:junit-platform-console-standalone" = "1.12.2"
+

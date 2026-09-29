@@ -33,6 +33,7 @@ nav:
   - Guides:
       - Common workflows: guides/common-workflows.md
       - Build and run: guides/build-and-run.md
+      - Generate sources and resources: guides/generators.md
       - Format Java source: guides/formatting.md
       - Dependencies: guides/dependencies.md
       - Java toolchains: guides/java-toolchains.md

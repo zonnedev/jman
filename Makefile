@@ -25,7 +25,7 @@ $(RUN_TARGETS):
 endif
 endif
 
-.PHONY: build build-jman install run gates release-gates ci test test-toolchain-bootstrap test-rust test-java test-jman-runner test-processor-worker maven-importer vineflower jacoco maven-tool compatibility-tools test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs docs serve-docs prepare-release package-vscode release stage-release native test-native clean clear
+.PHONY: build build-jman install run gates release-gates ci test test-toolchain-bootstrap test-rust test-java test-jman-runner test-processor-worker maven-importer vineflower jacoco maven-tool compatibility-tools test-coverage test-vineflower test-maven-import test-gradle-import test-gradle-annotation-processing test-project-importers test-publishing test-real-semantics test-lsp test-jpms-correctness test-compatibility-matrix test-library-platform test-vscode-extension test-neovim-plugin test-installer test-release-automation test-docs docs serve-docs prepare-release package-vscode release stage-release native test-native clean clear
 
 build-jman: $(DEBUG_NATIVE_FRONTEND)
 	JMAN_JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \
@@ -121,6 +121,9 @@ test-project-importers: test-java test-maven-import test-gradle-import
 		"$(CURDIR)/target/reusable-petclinic-gradle.ndjson"
 	grep -q '"buildSystem":"maven"' "$(CURDIR)/target/reusable-petclinic-maven.ndjson"
 	grep -q '"buildSystem":"gradle"' "$(CURDIR)/target/reusable-petclinic-gradle.ndjson"
+
+test-library-platform: build-jman
+	./scripts/test-library-platform.sh
 
 test-publishing: $(DEBUG_NATIVE_FRONTEND) vineflower compatibility-tools
 	JMAN_JAVAC_FRONTEND_LIB_DIR="$(CURDIR)/target/native" \

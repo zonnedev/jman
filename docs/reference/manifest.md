@@ -220,10 +220,30 @@ repositories. Credentials are not part of the public manifest schema.
 [build]
 encoding = "UTF-8"
 compiler-args = ["-parameters"]
+
+[build.generators.protobuf]
+command = ["protoc"]
+arguments = [
+  "--proto_path=${module.root}/src/main/proto",
+  "--java_out=${output.java}",
+  "${input}",
+]
+inputs = ["src/main/proto/**/*.proto"]
+
+[build.generators.protobuf.outputs.java]
+kind = "java-sources"
+source-set = "main"
 ```
 
 Encoding defaults to `UTF-8`. Compiler arguments are passed to `javac` for the
-module; keep portable language targeting in `java-release`.
+module; keep portable language targeting in `java-release`. Generators declare
+content-addressed direct commands whose typed outputs become Java source or
+resource roots for `main`, `test`, or `integration-test`. JMAN expands
+`${input}`, `${output.NAME}`, `${module.root}`, `${project.root}`,
+`${java.home}`, `${generator.name}`, `${dependency.GENERATOR.OUTPUT}`, and
+declared `${env.NAME}` expressions; it does not evaluate a shell. See the
+[generator guide](../guides/generators.md) for lifecycle, cache, environment,
+dependency, and trust behavior.
 
 ## `[scripts]`
 

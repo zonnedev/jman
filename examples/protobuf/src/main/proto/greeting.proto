@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package greeting;
+
+option java_package = "dev.example.protobuf.model";
+option java_outer_classname = "GreetingProtocol";
+
+message Greeting {
+  string message = 1;
+}
+

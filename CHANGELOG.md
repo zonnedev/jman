@@ -5,6 +5,25 @@ Versioning while it remains pre-1.0.
 
 ## [Unreleased]
 
+### Added
+
+- Native `jman.toml` projects can now declare content-addressed source and
+  resource generators with typed named outputs, main/test/integration-test
+  routing, `${...}` argument expressions, explicit generator dependencies,
+  isolated environments, selected-JDK activation, verified cache reuse, and
+  atomic last-good output promotion. The new `jman generate` command exposes
+  targeted and forced generation, while compile, test, run, build, publish,
+  source JARs, Javadocs, and editor project models consume generated roots.
+- A runnable Protobuf example demonstrates invoking `protoc` as a native JMAN
+  generator and compiling the generated Java API against a locked runtime.
+- A complete Java 25 library-platform example exercises native multi-module
+  builds, a framework-free DDD domain and application layer, generated OpenAPI
+  and protobuf contracts, Micronaut HTTP and gRPC applications, a
+  transport-neutral client library, and unit plus integration-test source
+  sets without Maven or Gradle.
+- `jman run --module NAME` selects an application entry point in workspaces
+  that contain multiple runnable modules.
+
 ## [0.9.0] - 2026-09-28
 
 ### Added

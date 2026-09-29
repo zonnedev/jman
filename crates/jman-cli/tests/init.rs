@@ -1076,6 +1076,109 @@ java-release = 17
 }
 
 #[test]
+fn runs_a_selected_application_in_a_multi_application_workspace() {
+    let project = tempfile::tempdir().expect("temporary project");
+    let cache = tempfile::tempdir().expect("temporary cache");
+    fs::write(
+        project.path().join("jman.toml"),
+        r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "workspace"
+version = "1"
+java-release = 17
+packaging = "pom"
+modules = ["one", "two"]
+"#,
+    )
+    .expect("root manifest");
+    fs::write(
+        project.path().join("jman.lock"),
+        r#"lock-version = 3
+manifest-hash = "sha256:test"
+workspace-hash = "sha256:test"
+platform = "test"
+[toolchain]
+java-release = 17
+[classpath]
+"#,
+    )
+    .expect("root lock");
+    for (directory, name, message) in [("one", "app-one", "one"), ("two", "app-two", "two")] {
+        let module = project.path().join(directory);
+        fs::create_dir_all(module.join("src/main/java/com/example")).expect("module sources");
+        fs::write(
+            module.join("src/main/java/com/example/Application.java"),
+            format!(
+                "package com.example; public final class Application {{ public static void main(String[] args) {{ System.out.print(\"{message}\"); }} }}"
+            ),
+        )
+        .expect("application source");
+        fs::write(
+            module.join("jman.toml"),
+            format!(
+                r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "{name}"
+version = "1"
+java-release = 17
+packaging = "jar"
+main-class = "com.example.Application"
+"#
+            ),
+        )
+        .expect("module manifest");
+        fs::write(
+            module.join("jman.lock"),
+            r#"lock-version = 3
+manifest-hash = "sha256:test"
+workspace-hash = "sha256:test"
+platform = "test"
+[toolchain]
+java-release = 17
+[classpath]
+"#,
+        )
+        .expect("module lock");
+    }
+
+    let ambiguous = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .args([
+            "--no-progress",
+            "run",
+            project.path().to_str().expect("UTF-8 path"),
+        ])
+        .output()
+        .expect("reject ambiguous application");
+    assert!(!ambiguous.status.success());
+    assert!(String::from_utf8_lossy(&ambiguous.stderr)
+        .contains("select one with `jman run --module NAME`"));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .args([
+            "--no-progress",
+            "run",
+            project.path().to_str().expect("UTF-8 path"),
+            "--module",
+            "app-two",
+        ])
+        .output()
+        .expect("run selected application");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("UTF-8 output"),
+        "two"
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn compiles_tests_and_launches_junit_platform_console() {
     let project = tempfile::tempdir().expect("temporary project");
@@ -2320,6 +2423,203 @@ java-release = 17
         class.is_file(),
         "last successful classes must remain intact"
     );
+}
+
+#[cfg(unix)]
+#[test]
+#[allow(clippy::too_many_lines)]
+fn generators_feed_java_and_resources_into_generate_compile_and_run() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let project = tempfile::tempdir().expect("temporary project");
+    let cache = tempfile::tempdir().expect("temporary cache");
+    fs::create_dir_all(project.path().join("src/main/java/com/example")).expect("source tree");
+    fs::create_dir_all(project.path().join("src/schema")).expect("schema tree");
+    fs::write(
+        project.path().join("src/schema/message.txt"),
+        "hello generated\n",
+    )
+    .expect("generator input");
+    fs::write(
+        project
+            .path()
+            .join("src/main/java/com/example/Application.java"),
+        r"package com.example;
+public final class Application {
+  public static void main(String[] arguments) {
+    System.out.println(GeneratedMessage.text());
+  }
+}
+",
+    )
+    .expect("application source");
+    fs::write(
+        project.path().join("jman.toml"),
+        r#"manifest-version = 1
+
+[project]
+group = "com.example"
+name = "generated-app"
+version = "1"
+java-release = 17
+packaging = "jar"
+main-class = "com.example.Application"
+
+[build.generators.schema]
+command = ["./generate.sh"]
+arguments = ["${output.java}", "${output.resources}", "${input}"]
+inputs = ["src/schema/**/*.txt"]
+
+[build.generators.schema.outputs.java]
+kind = "java-sources"
+source-set = "main"
+
+[build.generators.schema.outputs.resources]
+kind = "resources"
+source-set = "main"
+"#,
+    )
+    .expect("manifest");
+    fs::write(
+        project.path().join("jman.lock"),
+        r#"lock-version = 3
+manifest-hash = "sha256:manifest"
+workspace-hash = "sha256:workspace"
+platform = "test"
+
+[toolchain]
+java-release = 17
+
+[classpath]
+"#,
+    )
+    .expect("lock");
+    let generator = project.path().join("generate.sh");
+    fs::write(
+        &generator,
+        r#"#!/bin/sh
+set -eu
+java_output="$1"
+resource_output="$2"
+input="$3"
+mkdir -p "$java_output/com/example" "$resource_output/com/example"
+value=$(tr -d '\r\n' < "$input")
+printf 'package com.example; public final class GeneratedMessage { public static String text() { return "%s"; } }\n' "$value" > "$java_output/com/example/GeneratedMessage.java"
+printf 'message=%s\n' "$value" > "$resource_output/com/example/generated.properties"
+"#,
+    )
+    .expect("generator executable");
+    let mut permissions = fs::metadata(&generator)
+        .expect("generator metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&generator, permissions).expect("generator permissions");
+
+    let jman = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_jman"));
+        command
+            .env("JMAN_CACHE_DIR", cache.path())
+            .arg("--no-progress");
+        command
+    };
+    let first = jman()
+        .args([
+            "generate",
+            project.path().to_str().expect("UTF-8 project path"),
+            "--generator",
+            "schema",
+        ])
+        .output()
+        .expect("generate sources");
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(String::from_utf8_lossy(&first.stderr).contains("1 executed, 0 cached"));
+    assert!(project
+        .path()
+        .join(".jman/generated/schema/java/com/example/GeneratedMessage.java")
+        .is_file());
+
+    let cached = jman()
+        .args([
+            "generate",
+            project.path().to_str().expect("UTF-8 project path"),
+        ])
+        .output()
+        .expect("reuse generated sources");
+    assert!(cached.status.success());
+    assert!(String::from_utf8_lossy(&cached.stderr).contains("0 executed, 1 cached"));
+
+    let compiled = jman()
+        .args([
+            "compile",
+            project.path().to_str().expect("UTF-8 project path"),
+        ])
+        .output()
+        .expect("compile generated sources");
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    assert!(project
+        .path()
+        .join(".jman/output/classes/com/example/GeneratedMessage.class")
+        .is_file());
+    assert_eq!(
+        fs::read_to_string(
+            project
+                .path()
+                .join(".jman/output/classes/com/example/generated.properties")
+        )
+        .expect("compiled generated resource"),
+        "message=hello generated\n"
+    );
+
+    let built = jman()
+        .args([
+            "build",
+            "--sources",
+            project.path().to_str().expect("UTF-8 project path"),
+        ])
+        .output()
+        .expect("package generated sources and resources");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let artifacts = project.path().join(".jman/artifacts");
+    let source_inventory = Command::new("jar")
+        .args(["--list", "--file"])
+        .arg(artifacts.join("generated-app-1-sources.jar"))
+        .output()
+        .expect("list generated sources JAR");
+    assert!(source_inventory.status.success());
+    assert!(String::from_utf8_lossy(&source_inventory.stdout)
+        .contains("com/example/GeneratedMessage.java"));
+    let thin_inventory = Command::new("jar")
+        .args(["--list", "--file"])
+        .arg(artifacts.join("generated-app-1.jar"))
+        .output()
+        .expect("list generated application JAR");
+    assert!(thin_inventory.status.success());
+    let thin_inventory = String::from_utf8_lossy(&thin_inventory.stdout);
+    assert!(thin_inventory.contains("com/example/GeneratedMessage.class"));
+    assert!(thin_inventory.contains("com/example/generated.properties"));
+
+    let run = jman()
+        .args(["run", project.path().to_str().expect("UTF-8 project path")])
+        .output()
+        .expect("run generated application");
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "hello generated\n");
 }
 
 #[test]

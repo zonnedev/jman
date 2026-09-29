@@ -19,7 +19,9 @@ greeting/
 │       └── resources/
 └── .jman/
     ├── artifacts/
-    ├── classes/
+    ├── generated/
+    ├── generator-state/
+    ├── output/
     └── reports/
 ```
 
@@ -27,8 +29,8 @@ greeting/
 
 `jman.toml`
 : The human-edited project declaration: identity, Java release, dependencies,
-  modules, compiler settings, coverage policy, publishing metadata, and
-  explicitly invoked project scripts.
+  modules, compiler settings, source/resource generators, coverage policy,
+  publishing metadata, and explicitly invoked project scripts.
 
 `jman.lock`
 : JMAN's generated resolution record. Commit it so collaborators and CI select

@@ -80,8 +80,10 @@ JMAN writes reproducible or ephemeral project state beneath `.jman/`:
 
 | Path | Purpose |
 | --- | --- |
-| `.jman/classes/` | Compiled production and test classes. |
+| `.jman/output/` | Compiled production/test classes and annotation-processor output. |
 | `.jman/artifacts/` | Thin, fat, source, and Javadoc JARs. |
+| `.jman/generated/` | Atomically promoted source and resource generator outputs. |
+| `.jman/generator-state/` | Content keys and output digests used for generator reuse. |
 | `.jman/reports/coverage/` | Coverage summary, JSON, XML, and HTML. |
 | `.jman/publications/repository/` | Staged Maven repository layout. |
 

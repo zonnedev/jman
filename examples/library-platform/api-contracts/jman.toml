@@ -1,0 +1,43 @@
+manifest-version = 1
+
+[project]
+group = "dev.zonnedev.jman.example"
+name = "library-api-contracts"
+version = "1.0.0"
+java-release = 25
+packaging = "jar"
+
+[build.generators.openapi]
+command = ["java"]
+arguments = [
+  "${module.root}/tools/OpenApiContractGenerator.java",
+  "${input}",
+  "${output.java}",
+]
+inputs = ["src/main/openapi/library-api.yaml"]
+
+[build.generators.openapi.outputs.java]
+kind = "java-sources"
+source-set = "main"
+
+[build.generators.protobuf]
+command = ["protoc"]
+arguments = [
+  "--proto_path=${module.root}/src/main/proto",
+  "--java_out=${output.java}",
+  "${input}",
+]
+inputs = ["src/main/proto/library.proto"]
+
+[build.generators.protobuf.outputs.java]
+kind = "java-sources"
+source-set = "main"
+
+[dependencies.compile]
+"com.google.protobuf:protobuf-java" = "4.36.1"
+"io.grpc:grpc-api" = "1.83.0"
+"io.grpc:grpc-protobuf" = "1.83.0"
+"io.grpc:grpc-stub" = "1.83.0"
+
+[dependencies.test]
+"org.junit.platform:junit-platform-console-standalone" = "1.12.2"
