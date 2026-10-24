@@ -54,6 +54,8 @@ See [dependency management](../guides/dependencies.md) and the exact
 | Deterministic archive output | Supported |
 | Main-class execution with argument passthrough | Supported |
 | Native javac-aware opinionated source formatting | Supported in CLI, VS Code, and Neovim |
+| Workspace cleanup with dry-run and JSON reporting | Supported |
+| Shared cache inspection, targeted clearing, and age-based pruning | Supported |
 | Arbitrary Maven/Gradle plugin execution | Not supported in the native build |
 
 See [Build and run](../guides/build-and-run.md),

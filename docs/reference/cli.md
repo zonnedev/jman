@@ -272,6 +272,54 @@ Scripts are executable project code. JMAN runs them only after an explicit
 and the language server never invoke them automatically. See the
 [`[scripts]` manifest reference](manifest.md#scripts).
 
+## jman clean
+
+Remove disposable `.jman/` output from every module in the selected workspace.
+Manifests, lockfiles, Java sources, resources, and managed JDKs are never
+removed.
+
+```text
+jman clean [PATH] [--dry-run] [--format human|json]
+```
+
+`PATH` may point to the workspace, a module, or a file below either one.
+`--dry-run` reports the exact storage that would be reclaimed without writing.
+
+```bash
+jman clean
+jman clean services/orders --dry-run
+jman clean --dry-run --format json
+```
+
+## jman cache
+
+Inspect and manage shared, reproducible cache data. These commands never touch
+JDKs, shims, or global Java selections under `JMAN_DATA_DIR`.
+
+```text
+jman cache dir [--format human|json]
+jman cache status [--format human|json]
+jman cache clear AREA [--dry-run] [--format human|json]
+jman cache prune [AREA] [--older-than DAYS] [--dry-run]
+                 [--format human|json]
+```
+
+`AREA` is one of `dependencies`, `catalog`, `audit`, `imports`, `tools`,
+`lsp`, or `all`. Dependency cleanup includes both repository metadata and
+content-addressed artifacts. Pruning defaults to entries older than 30 days.
+JMAN refuses to clear or prune LSP data while an editor language-server process
+owns an active cache lock.
+
+```bash
+jman cache status
+jman cache clear catalog --dry-run
+jman cache prune dependencies --older-than 14
+jman cache clear all --format json
+```
+
+Cleared dependency and tool entries are downloaded or regenerated on demand.
+Use `jman java remove` rather than cache commands to remove an installed JDK.
+
 ## jman build
 
 Compile and package modules.

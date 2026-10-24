@@ -34,7 +34,7 @@ the manifest, checksums, and archive identity agree.
 
 | Variable | Purpose |
 | --- | --- |
-| `JMAN_CACHE_DIR` | Override the shared artifact, catalog, and audit cache root. |
+| `JMAN_CACHE_DIR` | Override the shared dependency, catalog, audit, import, tool, and LSP cache root. |
 | `JMAN_DATA_DIR` | Override the durable managed-JDK, `current`, and shim root. |
 | `JMAN_CONFIG_DIR` | Override the user-wide configuration root. |
 | `JMAN_TEST_PORT` | Override the default `0` value of the `jman.test.port` system property. |

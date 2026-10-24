@@ -19,6 +19,7 @@ mod workspace_backend;
 
 #[cfg(feature = "native-ffi")]
 pub use async_native_backend::AsyncNativeBackend;
+pub use cache::{cache_is_active, cache_root};
 pub use documents::{Document, Documents, offset_to_position, position_to_byte};
 #[cfg(feature = "native-ffi")]
 pub use native_backend::NativeBackend;

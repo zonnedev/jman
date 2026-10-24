@@ -3635,10 +3635,8 @@ fn persist_external_source(
     definition.owner.hash(&mut hasher);
     definition.source.hash(&mut hasher);
     let hash = hasher.finish();
-    let root = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("io.github.zonnedev.jman.lsp/external-sources")
+    let root = crate::cache::cache_root()
+        .join("external-sources")
         .join(format!("{hash:016x}"));
     std::fs::create_dir_all(&root)
         .map_err(|error| format!("cannot create external-source cache: {error}"))?;
@@ -3947,10 +3945,15 @@ fn has_junit_annotation(source: &str, offset: u64) -> bool {
 }
 
 fn is_external_source_uri(uri: &str) -> bool {
-    uri.split(['/', '\\'])
-        .collect::<Vec<_>>()
-        .windows(2)
-        .any(|parts| parts[0] == "io.github.zonnedev.jman.lsp" && parts[1] == "external-sources")
+    file_uri_to_path(uri)
+        .is_some_and(|path| path.starts_with(crate::cache::cache_root().join("external-sources")))
+        || uri
+            .split(['/', '\\'])
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|parts| {
+                parts[0] == "io.github.zonnedev.jman.lsp" && parts[1] == "external-sources"
+            })
 }
 
 fn publish_diagnostics(

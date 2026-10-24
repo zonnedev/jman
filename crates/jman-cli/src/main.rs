@@ -27,9 +27,11 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 mod dependency_report;
+mod storage;
 mod ui;
 
 use dependency_report::{dependency_path_tree, terminal_text};
+use storage::{CacheCommand, CleanCommand};
 use ui::Ui;
 
 const SCAFFOLD_JUNIT_COORDINATE: &str = "org.junit.platform:junit-platform-console-standalone";
@@ -83,6 +85,10 @@ enum Command {
     Fmt(FmtCommand),
     /// List or execute project scripts declared in jman.toml.
     Script(ScriptCommand),
+    /// Remove disposable build output from a JMAN workspace.
+    Clean(CleanCommand),
+    /// Inspect and manage JMAN's shared caches.
+    Cache(CacheCommand),
     /// Build standard and optional module artifacts.
     Build(BuildCommand),
     /// Publish Maven-compatible artifacts locally or to a remote repository.
@@ -825,6 +831,21 @@ async fn main() {
             name: None,
             format: ReportFormat::Json,
             ..
+        }) | Command::Clean(CleanCommand {
+            format: ReportFormat::Json,
+            ..
+        }) | Command::Cache(CacheCommand {
+            command: storage::CacheSubcommand::Dir(storage::CacheOutput {
+                format: ReportFormat::Json,
+            }) | storage::CacheSubcommand::Status(storage::CacheOutput {
+                format: ReportFormat::Json,
+            }) | storage::CacheSubcommand::Clear(storage::CacheClear {
+                format: ReportFormat::Json,
+                ..
+            }) | storage::CacheSubcommand::Prune(storage::CachePrune {
+                format: ReportFormat::Json,
+                ..
+            }),
         })
     );
     let ui = Ui::new(cli.quiet, cli.verbose, cli.no_progress, structured);
@@ -849,6 +870,8 @@ async fn run(cli: Cli, ui: &Ui) -> Result<()> {
         Command::Generate(arguments) => generate_project(&arguments, ui).await,
         Command::Fmt(arguments) => format_project(&arguments, ui),
         Command::Script(arguments) => script_command(&arguments, ui).await,
+        Command::Clean(arguments) => storage::clean_project(&arguments, ui).await,
+        Command::Cache(arguments) => storage::cache_command(&arguments, ui),
         Command::Build(arguments) => build_project(&arguments, ui).await,
         Command::Publish(arguments) => publish_project(&arguments, ui).await,
         Command::Run(arguments) => run_project(&arguments, ui).await,

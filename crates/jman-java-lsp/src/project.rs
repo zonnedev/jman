@@ -334,9 +334,7 @@ fn import_gradle(
     }
     let gradle_home = std::env::var_os("JMAN_JAVA_LSP_GRADLE_USER_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::temp_dir().join("io.github.zonnedev.jman.lsp/gradle-user-home")
-        });
+        .unwrap_or_else(|| crate::cache::cache_root().join("gradle-user-home"));
     std::fs::create_dir_all(&gradle_home)
         .map_err(|error| format!("cannot create {}: {error}", gradle_home.display()))?;
     let mut command = Command::new(executable);

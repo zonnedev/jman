@@ -150,6 +150,7 @@ and troubleshooting.
 | Projects | New applications, libraries, multi-module workspaces, Maven import |
 | Dependencies | Maven repositories, BOMs, scopes, exclusions, paths, lockfiles, offline builds |
 | Build | Compilation, typed source/resource generators, thin and executable fat JARs, source JARs, Javadocs, annotation processors |
+| Storage | Workspace cleanup, shared-cache inspection, targeted clearing, age-based pruning, dry-run and JSON reports |
 | Format | [JJFS 1](docs/reference/jjfs-v1.md), native javac-aware formatting, canonical imports, API-first member ordering, CI checks |
 | Test | Live JUnit tree, selectors, unit/integration source sets, parallel modules, coverage |
 | Automation | Manifest-defined shell commands, portable commands, and composed project scripts |

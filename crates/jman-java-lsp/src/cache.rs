@@ -5,11 +5,57 @@ use std::{
 
 use sha2::{Digest, Sha256};
 
-pub(crate) fn cache_root() -> PathBuf {
-    std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .map(|root| root.join("io.github.zonnedev.jman.lsp/cache"))
-        .unwrap_or_else(|| std::env::temp_dir().join("io.github.zonnedev.jman.lsp/cache"))
+/// Return the root containing all regenerable language-server cache data.
+#[must_use]
+pub fn cache_root() -> PathBuf {
+    std::env::var_os("JMAN_CACHE_DIR")
+        .map_or_else(
+            || {
+                dirs::cache_dir()
+                    .unwrap_or_else(|| PathBuf::from(".jman-cache"))
+                    .join("jman")
+            },
+            PathBuf::from,
+        )
+        .join("lsp")
+}
+
+/// Return whether an active language-server process owns a cache lock.
+#[must_use]
+pub fn cache_is_active() -> bool {
+    cache_is_active_at(&cache_root())
+}
+
+fn cache_is_active_at(root: &Path) -> bool {
+    cache_lock_directories(root)
+        .into_iter()
+        .any(|directory| directory_has_active_lock(&directory))
+}
+
+fn cache_lock_directories(root: &Path) -> [PathBuf; 3] {
+    [
+        root.join("projects"),
+        root.join("decompiled"),
+        root.join("external-sources"),
+    ]
+}
+
+fn directory_has_active_lock(directory: &Path) -> bool {
+    std::fs::read_dir(directory).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            let path = entry.path();
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                return false;
+            };
+            if metadata.file_type().is_symlink() {
+                return false;
+            }
+            if metadata.is_dir() {
+                return directory_has_active_lock(&path);
+            }
+            path.extension().is_some_and(|value| value == "lock") && !lock_is_stale(&path)
+        })
+    })
 }
 
 pub(crate) fn project_cache_directory(root: &Path) -> PathBuf {
@@ -172,6 +218,20 @@ mod tests {
         std::fs::write(&lock, format!("{}\n", std::process::id())).unwrap();
         assert!(!lock_is_stale(&lock));
         std::fs::remove_file(lock).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn active_cache_detection_checks_language_server_lock_directories() {
+        let root = tempfile::tempdir().expect("cache root");
+        let decompiled = root.path().join("decompiled/class-hash");
+        std::fs::create_dir_all(&decompiled).expect("decompiler cache directory");
+        let lock = decompiled.join("decompiler-cache.lock");
+        std::fs::write(&lock, std::process::id().to_string()).expect("active lock");
+        assert!(cache_is_active_at(root.path()));
+
+        std::fs::remove_file(lock).expect("remove active lock");
+        assert!(!cache_is_active_at(root.path()));
     }
 
     #[test]

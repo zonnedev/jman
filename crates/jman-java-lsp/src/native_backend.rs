@@ -1783,10 +1783,8 @@ fn decompile_definition(
 ) -> Result<(), String> {
     let (class_bytes, entry_name) = find_class_bytes(classpath, &definition.owner, release)?;
     let hash = hex::encode(Sha256::digest(&class_bytes));
-    let cache = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("io.github.zonnedev.jman.lsp/decompiled")
+    let cache = cache_root()
+        .join("decompiled")
         .join(format!("vineflower-1.12.0-{hash}"));
     std::fs::create_dir_all(&cache)
         .map_err(|error| format!("cannot create decompiler cache: {error}"))?;

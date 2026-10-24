@@ -23,6 +23,20 @@ Versioning while it remains pre-1.0.
   sets without Maven or Gradle.
 - `jman run --module NAME` selects an application entry point in workspaces
   that contain multiple runnable modules.
+- `jman clean` safely removes disposable `.jman/` output across an entire
+  workspace, while `jman cache dir`, `status`, `clear`, and `prune` provide
+  scoped cache lifecycle management with dry-run and JSON reporting.
+
+### Changed
+
+- Workspace modules now use scope-aware dependency specifications such as
+  `"dev.example:domain" = { path = "../domain" }` under the normal compile,
+  runtime, provided, or test tables. Builds, tests, execution, packaging,
+  publishing, Maven import, dependency reports, and the language server honor
+  those scopes consistently.
+- Language-server indexes, generated state, isolated Gradle data, external
+  sources, and decompiler results now share the `JMAN_CACHE_DIR/lsp` hierarchy,
+  making their storage visible and manageable through the same cache commands.
 
 ## [0.9.0] - 2026-09-28
 

@@ -70,6 +70,191 @@ fn compile_command_replaces_the_ambiguous_check_name() {
 }
 
 #[test]
+fn clean_removes_only_workspace_outputs_and_supports_dry_run_json() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let root = workspace.path();
+    let module = root.join("app");
+    fs::create_dir_all(module.join("src/main/java/com/example")).expect("module source directory");
+    fs::write(
+        root.join("jman.toml"),
+        r#"manifest-version = 1
+
+[project]
+group = "com.example"
+name = "workspace"
+version = "1.0.0"
+java-release = 21
+packaging = "pom"
+modules = ["app"]
+"#,
+    )
+    .expect("workspace manifest");
+    fs::write(
+        module.join("jman.toml"),
+        r#"manifest-version = 1
+
+[project]
+group = "com.example"
+name = "app"
+version = "1.0.0"
+java-release = 21
+packaging = "jar"
+main-class = "com.example.Application"
+"#,
+    )
+    .expect("module manifest");
+    fs::write(module.join("jman.lock"), "committed lock\n").expect("module lock");
+    let source = module.join("src/main/java/com/example/Application.java");
+    fs::write(&source, "package com.example; class Application {}\n").expect("source");
+    for directory in [root, module.as_path()] {
+        fs::create_dir_all(directory.join(".jman/output/classes")).expect("build output");
+        fs::write(directory.join(".jman/output/classes/App.class"), "class")
+            .expect("compiled class");
+    }
+
+    let dry_run = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .current_dir(&module)
+        .args(["clean", "--dry-run", "--format", "json"])
+        .output()
+        .expect("inspect workspace cleanup");
+    assert!(dry_run.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&dry_run.stdout).expect("cleanup JSON");
+    assert_eq!(report["dryRun"], true);
+    assert_eq!(report["modules"], 2);
+    assert_eq!(report["removed"]["files"], 2);
+    assert!(root.join(".jman").is_dir());
+    assert!(module.join(".jman").is_dir());
+
+    let cleaned = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .current_dir(&module)
+        .args(["--no-progress", "clean"])
+        .output()
+        .expect("clean workspace");
+    assert!(
+        cleaned.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cleaned.stderr)
+    );
+    assert!(!root.join(".jman").exists());
+    assert!(!module.join(".jman").exists());
+    assert!(root.join("jman.toml").is_file());
+    assert!(module.join("jman.toml").is_file());
+    assert_eq!(
+        fs::read_to_string(module.join("jman.lock")).expect("preserved lock"),
+        "committed lock\n"
+    );
+    assert!(source.is_file());
+}
+
+#[test]
+fn cache_commands_report_and_clear_only_the_selected_disposable_area() {
+    let temporary = tempfile::tempdir().expect("isolated storage");
+    let cache = temporary.path().join("cache");
+    let data = temporary.path().join("data");
+    let config = temporary.path().join("config");
+    for (relative, contents) in [
+        ("repository/demo.pom", "pom"),
+        ("artifacts/demo.jar", "jar"),
+        ("catalog/releases.json", "catalog"),
+        ("audit/osv/result.json", "audit"),
+        ("imports/model.json", "model"),
+        ("tools/runner/tool", "tool"),
+        ("lsp/projects/demo/semantic.json", "semantic"),
+    ] {
+        let path = cache.join(relative);
+        fs::create_dir_all(path.parent().expect("cache parent")).expect("cache directory");
+        fs::write(path, contents).expect("cache entry");
+    }
+    fs::create_dir_all(data.join("jdks/temurin-25")).expect("managed JDK directory");
+    fs::write(data.join("jdks/temurin-25/release"), "JAVA_VERSION=25").expect("managed JDK marker");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", &cache)
+        .env("JMAN_DATA_DIR", &data)
+        .env("JMAN_CONFIG_DIR", &config)
+        .args(["cache", "status", "--format", "json"])
+        .output()
+        .expect("inspect cache");
+    assert!(status.status.success());
+    let status: serde_json::Value =
+        serde_json::from_slice(&status.stdout).expect("cache status JSON");
+    assert_eq!(status["files"], 7);
+    assert_eq!(status["areas"].as_array().expect("cache areas").len(), 6);
+    assert_eq!(
+        status["lspRoot"],
+        cache.join("lsp").to_string_lossy().as_ref()
+    );
+
+    let dry_run = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", &cache)
+        .args([
+            "cache",
+            "clear",
+            "dependencies",
+            "--dry-run",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("preview dependency cache cleanup");
+    assert!(dry_run.status.success());
+    let report: serde_json::Value =
+        serde_json::from_slice(&dry_run.stdout).expect("cache cleanup JSON");
+    assert_eq!(report["area"], "dependencies");
+    assert_eq!(report["dryRun"], true);
+    assert_eq!(report["removed"]["files"], 2);
+    assert!(cache.join("repository/demo.pom").is_file());
+
+    let cleared = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", &cache)
+        .args(["--no-progress", "cache", "clear", "dependencies"])
+        .output()
+        .expect("clear dependency cache");
+    assert!(
+        cleared.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cleared.stderr)
+    );
+    assert!(!cache.join("repository").exists());
+    assert!(!cache.join("artifacts").exists());
+    assert!(cache.join("catalog/releases.json").is_file());
+    assert!(cache.join("lsp/projects/demo/semantic.json").is_file());
+    assert!(data.join("jdks/temurin-25/release").is_file());
+
+    let prune = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", &cache)
+        .args([
+            "cache",
+            "prune",
+            "catalog",
+            "--older-than",
+            "30",
+            "--dry-run",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("preview cache pruning");
+    assert!(prune.status.success());
+    let report: serde_json::Value =
+        serde_json::from_slice(&prune.stdout).expect("cache prune JSON");
+    assert_eq!(report["operation"], "prune");
+    assert_eq!(report["olderThanDays"], 30);
+    assert!(cache.join("catalog/releases.json").is_file());
+
+    let lock = cache.join("lsp/projects/demo.lock");
+    fs::write(&lock, std::process::id().to_string()).expect("active LSP lock");
+    let active = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", &cache)
+        .args(["cache", "clear", "lsp"])
+        .output()
+        .expect("protect active LSP cache");
+    assert!(!active.status.success());
+    assert!(String::from_utf8_lossy(&active.stderr).contains("language server is using its cache"));
+    assert!(cache.join("lsp/projects/demo/semantic.json").is_file());
+}
+
+#[test]
 fn publish_command_exposes_safe_repository_controls() {
     let output = Command::new(env!("CARGO_BIN_EXE_jman"))
         .args(["publish", "--help"])

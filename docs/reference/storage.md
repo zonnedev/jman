@@ -32,8 +32,12 @@ platform cache directory:
 | Directory | Contents |
 | --- | --- |
 | `repository/` | Maven POMs, artifacts, and metadata, separated by repository identity. |
+| `artifacts/` | Content-addressed resolved dependency artifacts. |
 | `catalog/` | Remote JDK catalog responses and validators. |
 | `audit/osv/` | Vulnerability responses keyed by the exact graph. |
+| `imports/` | Effective Maven import models. |
+| `tools/` | Regenerable JMAN test and coverage runner state. |
+| `lsp/` | Language-server indexes, generated output, external sources, decompiled sources, and isolated Gradle state. |
 
 The cache is reusable across workspaces. Offline commands require the relevant
 entries to exist and never hide a cache miss with network access.
@@ -49,6 +53,20 @@ jman sync
 ```
 
 Do not commit the shared cache.
+
+Inspect or reclaim it without manually deleting directories:
+
+```bash
+jman cache dir
+jman cache status
+jman cache prune --older-than 30
+jman cache clear dependencies --dry-run
+```
+
+`jman cache clear` accepts a specific cache area or `all`. Both clearing and
+pruning support JSON reports and dry runs. JMAN does not follow symbolic links
+while measuring or deleting cache entries, and it refuses global LSP cleanup
+while an active language server owns a cache lock.
 
 ## Durable Java data and configuration
 
@@ -91,13 +109,22 @@ JMAN writes reproducible or ephemeral project state beneath `.jman/`:
 Module outputs live under that module's directory. Add `.jman/` to
 `.gitignore`; rebuild it from committed source and lockfiles.
 
+`jman clean` removes `.jman/` from every module in the selected workspace. It
+does not remove `jman.toml`, `jman.lock`, sources, resources, or shared caches.
+Use `jman clean --dry-run --format json` to inspect the operation first.
+
 ## Language-server cache
 
 The language server keeps project-specific structural/semantic indexes,
-external symbols, generated processor output, and decompiled-source fallbacks
-under its platform cache directory. **Clear Workspace Cache** in VS Code or
+external symbols, generated processor output, Gradle import state, and
+decompiled-source fallbacks under `lsp/` in JMAN's shared cache directory.
+**Clear Workspace Cache** in VS Code or
 `:JmanClearCache` in Neovim removes the current workspace's cached index and
 rebuilds it. This does not delete source files or the Maven artifact cache.
+
+`jman cache clear lsp` clears all LSP workspaces and regenerable LSP state when
+no language-server process is active. Prefer the editor command when only the
+current workspace needs rebuilding.
 
 Use editor status output to see the active cache directory, hit/miss counts,
 project ID, and indexing time before diagnosing performance.
