@@ -57,8 +57,8 @@ public final class Greeting {
 Add this relationship to `application/jman.toml`:
 
 ```toml
-[path-dependencies]
-"dev.example:api" = "../api"
+[dependencies.compile]
+"dev.example:api" = { path = "../api" }
 ```
 
 Create the application package and class:

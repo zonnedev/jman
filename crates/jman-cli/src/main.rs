@@ -13,10 +13,11 @@ use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, shells};
 use futures::{stream, StreamExt, TryStreamExt};
 use jman_config::{
-    Build, CoverageFormat, Dependencies, GeneratorSourceSet, LockedClasspaths, LockedPackage,
-    LockedToolchain, Lockfile, Manifest, ManifestFile, MavenCompatibility, MavenDependencyMetadata,
-    MavenManagedDependency, Project, Repository, Script, ScriptDefinition,
-    Toolchain as ManifestToolchain, ToolchainManifest, LOCK_VERSION, MANIFEST_VERSION,
+    Build, CoverageFormat, Dependencies, DependencySpec, GeneratorSourceSet, LockedClasspaths,
+    LockedPackage, LockedToolchain, LockedWorkspaceDependency, Lockfile, Manifest, ManifestFile,
+    MavenCompatibility, MavenDependencyMetadata, MavenManagedDependency, PathDependency, Project,
+    Repository, Script, ScriptDefinition, Toolchain as ManifestToolchain, ToolchainManifest,
+    LOCK_VERSION, MANIFEST_VERSION,
 };
 use jman_resolver::{
     plugin_coordinates, AnnotationProcessor, Coordinate, Dependency, DependencyResolver,
@@ -193,7 +194,7 @@ struct Sync {
 
 #[derive(Debug, Args)]
 struct Add {
-    /// Dependency in group:artifact@version notation.
+    /// Dependency in group:artifact@version notation, or group:artifact with --workspace-path.
     dependency: String,
     /// Project directory.
     #[arg(long, default_value = ".")]
@@ -201,6 +202,9 @@ struct Add {
     /// Dependency scope.
     #[arg(long, value_enum, default_value_t = DependencyScope::Compile)]
     scope: DependencyScope,
+    /// Relative path to a module declared by this JMAN workspace.
+    #[arg(long)]
+    workspace_path: Option<PathBuf>,
     /// Resolve only from the local dependency cache.
     #[arg(long)]
     offline: bool,
@@ -4235,7 +4239,7 @@ fn scaffold_manifest(
         Dependencies {
             test: BTreeMap::from([(
                 SCAFFOLD_JUNIT_COORDINATE.to_owned(),
-                SCAFFOLD_JUNIT_VERSION.to_owned(),
+                SCAFFOLD_JUNIT_VERSION.into(),
             )]),
             ..Dependencies::default()
         }
@@ -4270,7 +4274,6 @@ fn scaffold_manifest(
         repositories: Vec::new(),
         dependencies,
         annotation_processors: BTreeMap::new(),
-        path_dependencies: BTreeMap::new(),
     };
     manifest.validate()?;
     Ok(manifest)
@@ -4581,14 +4584,14 @@ async fn import_maven(pom_path: &Path, ui: &Ui) -> Result<()> {
                             .source
                             .parent()
                             .context("Maven module POM has no parent directory")?;
-                        let workspace_path = module_directory
-                            .strip_prefix(root_directory)
-                            .unwrap_or(module_directory)
-                            .to_string_lossy()
-                            .into_owned();
-                        manifest
-                            .path_dependencies
-                            .insert(dependency.ga(), workspace_path);
+                        let workspace_path = relative_workspace_path(directory, module_directory)?;
+                        let scope = maven_dependency_scope(&dependency.scope)?;
+                        manifest_dependency_scope_mut(&mut manifest, scope).insert(
+                            dependency.ga(),
+                            DependencySpec::Path(PathDependency {
+                                path: workspace_path,
+                            }),
+                        );
                     }
                 }
                 Ok((project, directory.to_owned(), manifest))
@@ -4655,6 +4658,7 @@ async fn import_maven(pom_path: &Path, ui: &Ui) -> Result<()> {
                         &manifest_text,
                         workspace_hash,
                         manifest.project.java_release,
+                        workspace_dependencies_from_manifest(&directory, &manifest, projects)?,
                         graph,
                     );
                     let lock_text = lock.to_toml().context("could not generate jman.lock")?;
@@ -4761,11 +4765,43 @@ async fn add_dependency(arguments: &Add, ui: &Ui) -> Result<()> {
         .with_context(|| format!("could not read {}", manifest_path.display()))?;
     let mut manifest = Manifest::read(&manifest_path)
         .with_context(|| format!("could not read {}", manifest_path.display()))?;
-    let (ga, version) = parse_add_coordinate(&arguments.dependency)?;
+    let (ga, specification, display_version) = if let Some(path) = &arguments.workspace_path {
+        if arguments.scope == DependencyScope::Processor {
+            bail!("annotation processors cannot be workspace path dependencies");
+        }
+        split_ga(&arguments.dependency)?;
+        if path.is_absolute() || path.as_os_str().is_empty() {
+            bail!("--workspace-path must be a non-empty relative path");
+        }
+        let path = path.to_string_lossy().replace('\\', "/");
+        (
+            arguments.dependency.as_str(),
+            DependencySpec::Path(PathDependency { path: path.clone() }),
+            format!("workspace:{path}"),
+        )
+    } else {
+        let (ga, version) = parse_add_coordinate(&arguments.dependency)?;
+        (
+            ga,
+            DependencySpec::Version(version.to_owned()),
+            version.to_owned(),
+        )
+    };
     if manifest_contains_dependency(&manifest, ga) {
         bail!("dependency `{ga}` is already declared; remove it before changing its scope");
     }
-    manifest_scope_mut(&mut manifest, arguments.scope).insert(ga.to_owned(), version.to_owned());
+    if arguments.scope == DependencyScope::Processor {
+        let DependencySpec::Version(version) = specification else {
+            unreachable!("workspace processor dependencies were rejected")
+        };
+        manifest
+            .annotation_processors
+            .insert(ga.to_owned(), version);
+    } else {
+        manifest_dependency_scope_mut(&mut manifest, arguments.scope)
+            .insert(ga.to_owned(), specification);
+    }
+    manifest.validate()?;
     let updated = manifest
         .to_toml()
         .context("could not serialize jman.toml")?;
@@ -4783,7 +4819,7 @@ async fn add_dependency(arguments: &Add, ui: &Ui) -> Result<()> {
         return Err(error).context("dependency was not added; jman.toml was restored");
     }
     ui.success(format!(
-        "Added {ga}@{version} to {} dependencies",
+        "Added {ga}@{display_version} to {} dependencies",
         arguments.scope.name()
     ));
     Ok(())
@@ -4804,10 +4840,13 @@ async fn remove_dependency(arguments: &Remove, ui: &Ui) -> Result<()> {
         &mut manifest.dependencies.runtime,
         &mut manifest.dependencies.provided,
         &mut manifest.dependencies.test,
-        &mut manifest.annotation_processors,
     ] {
         removed |= dependencies.remove(&arguments.dependency).is_some();
     }
+    removed |= manifest
+        .annotation_processors
+        .remove(&arguments.dependency)
+        .is_some();
     if !removed {
         bail!("dependency `{}` is not declared", arguments.dependency);
     }
@@ -4818,7 +4857,6 @@ async fn remove_dependency(arguments: &Remove, ui: &Ui) -> Result<()> {
                 .remove(&format!("{scope}:{}", arguments.dependency));
         }
     }
-    manifest.path_dependencies.remove(&arguments.dependency);
     let updated = manifest
         .to_toml()
         .context("could not serialize jman.toml")?;
@@ -4855,8 +4893,24 @@ fn dependency_tree(path: &Path) -> Result<()> {
         .map(|package| (locked_coordinate(package), package))
         .collect::<BTreeMap<_, _>>();
     let mut seen = std::collections::BTreeSet::new();
-    for dependency in locked_root_dependencies(&lock) {
-        print_tree_node(&dependency, "", true, &packages, &mut seen);
+    let workspace_count = lock.workspace_dependencies.len();
+    for (index, dependency) in lock.workspace_dependencies.iter().enumerate() {
+        let last = index + 1 == workspace_count && locked_root_dependencies(&lock).is_empty();
+        let branch = if last { "└── " } else { "├── " };
+        println!(
+            "{branch}{}:{} [workspace, {}] ({})",
+            dependency.coordinate, dependency.version, dependency.scope, dependency.path
+        );
+    }
+    let roots = locked_root_dependencies(&lock);
+    for (index, dependency) in roots.iter().enumerate() {
+        print_tree_node(
+            dependency,
+            "",
+            index + 1 == roots.len(),
+            &packages,
+            &mut seen,
+        );
     }
     Ok(())
 }
@@ -4900,13 +4954,24 @@ fn dependency_why(arguments: &Why) -> Result<()> {
         "{}:{}:{}",
         manifest.project.group, manifest.project.name, manifest.project.version
     );
-    let paths = shortest_dependency_paths(&lock)
+    let mut paths = shortest_dependency_paths(&lock)
         .into_iter()
         .filter(|(coordinate, _)| coordinate_ga(coordinate) == arguments.dependency)
         .flat_map(|(_, paths)| paths)
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
+    paths.extend(
+        lock.workspace_dependencies
+            .iter()
+            .filter(|dependency| dependency.coordinate == arguments.dependency)
+            .map(|dependency| {
+                vec![format!(
+                    "{}:{} [workspace, {}]",
+                    dependency.coordinate, dependency.version, dependency.scope
+                )]
+            }),
+    );
     if paths.is_empty() {
         bail!(
             "dependency `{}` is not present in jman.lock",
@@ -4921,29 +4986,73 @@ fn dependency_why(arguments: &Why) -> Result<()> {
     Ok(())
 }
 
-fn manifest_scope_mut(
+fn manifest_dependency_scope_mut(
     manifest: &mut Manifest,
     scope: DependencyScope,
-) -> &mut BTreeMap<String, String> {
+) -> &mut BTreeMap<String, DependencySpec> {
     match scope {
         DependencyScope::Compile => &mut manifest.dependencies.compile,
         DependencyScope::Runtime => &mut manifest.dependencies.runtime,
         DependencyScope::Provided => &mut manifest.dependencies.provided,
         DependencyScope::Test => &mut manifest.dependencies.test,
-        DependencyScope::Processor => &mut manifest.annotation_processors,
+        DependencyScope::Processor => {
+            unreachable!("processor dependencies use annotation-processors")
+        }
     }
 }
 
+fn maven_dependency_scope(scope: &str) -> Result<DependencyScope> {
+    match scope {
+        "compile" => Ok(DependencyScope::Compile),
+        "runtime" => Ok(DependencyScope::Runtime),
+        "provided" | "system" => Ok(DependencyScope::Provided),
+        "test" => Ok(DependencyScope::Test),
+        other => bail!("unsupported Maven dependency scope `{other}`"),
+    }
+}
+
+fn relative_workspace_path(from: &Path, to: &Path) -> Result<String> {
+    let from = std::fs::canonicalize(from)
+        .with_context(|| format!("could not resolve workspace module {}", from.display()))?;
+    let to = std::fs::canonicalize(to)
+        .with_context(|| format!("could not resolve workspace module {}", to.display()))?;
+    let from_components = from.components().collect::<Vec<_>>();
+    let to_components = to.components().collect::<Vec<_>>();
+    let shared = from_components
+        .iter()
+        .zip(&to_components)
+        .take_while(|(left, right)| left == right)
+        .count();
+    if shared == 0 {
+        bail!(
+            "workspace modules {} and {} do not share a filesystem root",
+            from.display(),
+            to.display()
+        );
+    }
+    let mut relative = PathBuf::new();
+    for _ in shared..from_components.len() {
+        relative.push("..");
+    }
+    for component in &to_components[shared..] {
+        relative.push(component.as_os_str());
+    }
+    if relative.as_os_str().is_empty() {
+        relative.push(".");
+    }
+    Ok(relative.to_string_lossy().replace('\\', "/"))
+}
+
 fn manifest_contains_dependency(manifest: &Manifest, coordinate: &str) -> bool {
-    [
+    let regular = [
         &manifest.dependencies.compile,
         &manifest.dependencies.runtime,
         &manifest.dependencies.provided,
         &manifest.dependencies.test,
-        &manifest.annotation_processors,
     ]
     .iter()
-    .any(|dependencies| dependencies.contains_key(coordinate))
+    .any(|dependencies| dependencies.contains_key(coordinate));
+    regular || manifest.annotation_processors.contains_key(coordinate)
 }
 
 fn parse_add_coordinate(value: &str) -> Result<(&str, &str)> {
@@ -5099,26 +5208,20 @@ async fn collect_outdated_requests(
         let manifest_path = directory.join("jman.toml");
         let manifest = Manifest::read(&manifest_path)
             .with_context(|| format!("could not read {}", manifest_path.display()))?;
-        let workspace_dependencies = manifest
-            .path_dependencies
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>();
         for (scope, dependencies) in [
             ("compile", &manifest.dependencies.compile),
             ("runtime", &manifest.dependencies.runtime),
             ("provided", &manifest.dependencies.provided),
             ("test", &manifest.dependencies.test),
-            ("processor", &manifest.annotation_processors),
         ] {
-            for (dependency, current) in dependencies {
-                if workspace_dependencies.contains(dependency.as_str()) {
+            for (dependency, specification) in dependencies {
+                let Some(current) = specification.version() else {
                     continue;
-                }
-                let key = (dependency.clone(), current.clone());
+                };
+                let key = (dependency.clone(), current.to_owned());
                 let request = requests.entry(key).or_insert_with(|| OutdatedRequest {
                     dependency: dependency.clone(),
-                    current: current.clone(),
+                    current: current.to_owned(),
                     scopes: BTreeSet::new(),
                     modules: BTreeSet::new(),
                     repositories: Vec::new(),
@@ -5135,6 +5238,29 @@ async fn collect_outdated_requests(
                         if !request.repositories.contains(&repository.url) {
                             request.repositories.push(repository.url.clone());
                         }
+                    }
+                }
+            }
+        }
+        for (dependency, current) in &manifest.annotation_processors {
+            let key = (dependency.clone(), current.clone());
+            let request = requests.entry(key).or_insert_with(|| OutdatedRequest {
+                dependency: dependency.clone(),
+                current: current.clone(),
+                scopes: BTreeSet::new(),
+                modules: BTreeSet::new(),
+                repositories: Vec::new(),
+            });
+            request.scopes.insert("processor".to_owned());
+            request.modules.insert(manifest.project.name.clone());
+            if manifest.repositories.is_empty() {
+                request
+                    .repositories
+                    .push(jman_resolver::MAVEN_CENTRAL_URL.to_owned());
+            } else {
+                for repository in &manifest.repositories {
+                    if !request.repositories.contains(&repository.url) {
+                        request.repositories.push(repository.url.clone());
                     }
                 }
             }
@@ -5549,13 +5675,21 @@ async fn apply_dependency_update_plan(
             &mut manifest.dependencies.runtime,
             &mut manifest.dependencies.provided,
             &mut manifest.dependencies.test,
-            &mut manifest.annotation_processors,
         ] {
-            for (dependency, current) in dependencies {
+            for (dependency, specification) in dependencies {
+                let DependencySpec::Version(current) = specification else {
+                    continue;
+                };
                 if let Some(version) = versions.get(&(dependency.as_str(), current.as_str())) {
                     *current = (*version).to_owned();
                     manifest_changed = true;
                 }
+            }
+        }
+        for (dependency, current) in &mut manifest.annotation_processors {
+            if let Some(version) = versions.get(&(dependency.as_str(), current.as_str())) {
+                *current = (*version).to_owned();
+                manifest_changed = true;
             }
         }
         if manifest_changed {
@@ -6301,6 +6435,7 @@ async fn sync_one(
         &manifest_text,
         &workspace_hash,
         manifest.project.java_release,
+        workspace_dependencies_from_manifest(&canonical_target, &manifest, &projects)?,
         graph,
     );
     let lock_text = lock.to_toml().context("could not generate jman.lock")?;
@@ -6476,7 +6611,7 @@ fn manifest_from_maven(effective: &EffectivePom, maven_authoritative: bool) -> R
                 dependency.ga()
             ),
         };
-        target.insert(dependency.ga(), version);
+        target.insert(dependency.ga(), version.into());
         if dependency.dependency_type != "jar"
             || dependency.classifier.is_some()
             || dependency.optional == Some(true)
@@ -6586,16 +6721,83 @@ fn manifest_from_maven(effective: &EffectivePom, maven_authoritative: bool) -> R
                 Ok((dependency.ga(), version))
             })
             .collect::<Result<_>>()?,
-        path_dependencies: BTreeMap::new(),
     };
     manifest.validate()?;
     Ok(manifest)
+}
+
+fn workspace_dependencies_from_manifest(
+    directory: &Path,
+    manifest: &Manifest,
+    projects: &[MavenProject],
+) -> Result<Vec<LockedWorkspaceDependency>> {
+    let mut locked = Vec::new();
+    let canonical_directory = std::fs::canonicalize(directory)
+        .with_context(|| format!("could not resolve module {}", directory.display()))?;
+    let mut targets = BTreeMap::new();
+    for (scope, dependencies) in [
+        ("compile", &manifest.dependencies.compile),
+        ("runtime", &manifest.dependencies.runtime),
+        ("provided", &manifest.dependencies.provided),
+        ("test", &manifest.dependencies.test),
+    ] {
+        for (coordinate, specification) in dependencies {
+            let Some(path) = specification.path() else {
+                continue;
+            };
+            let target = std::fs::canonicalize(directory.join(path)).with_context(|| {
+                format!(
+                    "could not resolve workspace dependency `{coordinate}` from {}",
+                    directory.display()
+                )
+            })?;
+            let project = projects
+                .iter()
+                .find(|project| project.source.parent() == Some(target.as_path()))
+                .with_context(|| {
+                    format!(
+                        "workspace dependency `{coordinate}` at {} is not a declared module",
+                        target.display()
+                    )
+                })?;
+            if target == canonical_directory {
+                bail!("module `{}` cannot depend on itself", manifest.project.name);
+            }
+            let actual = project.effective.coordinate.ga();
+            if coordinate != &actual {
+                bail!(
+                    "workspace dependency `{coordinate}` points to `{actual}` at {}",
+                    target.display()
+                );
+            }
+            if let Some(previous) = targets.insert(target.clone(), scope) {
+                bail!(
+                    "workspace dependency `{coordinate}` is declared in both {previous} and {scope} scopes"
+                );
+            }
+            locked.push(LockedWorkspaceDependency {
+                coordinate: coordinate.clone(),
+                scope: scope.to_owned(),
+                path: relative_workspace_path(directory, &target)?,
+                version: project.effective.coordinate.version.clone(),
+            });
+        }
+    }
+    locked.sort_by(|left, right| {
+        (&left.scope, &left.coordinate, &left.path).cmp(&(
+            &right.scope,
+            &right.coordinate,
+            &right.path,
+        ))
+    });
+    Ok(locked)
 }
 
 fn lock_from_graph(
     manifest: &str,
     workspace_hash: &str,
     java_release: u16,
+    workspace_dependencies: Vec<LockedWorkspaceDependency>,
     graph: ResolvedGraph,
 ) -> Lockfile {
     let coordinate_by_index = graph
@@ -6638,6 +6840,7 @@ fn lock_from_graph(
         platform: platform_id(),
         toolchain: LockedToolchain { java_release },
         packages,
+        workspace_dependencies,
         classpath: LockedClasspaths {
             compile: graph.compile_classpath,
             runtime: graph.runtime_classpath,
@@ -6763,7 +6966,10 @@ fn effective_from_manifest(manifest: &Manifest) -> Result<EffectivePom> {
         ("provided", &manifest.dependencies.provided),
         ("test", &manifest.dependencies.test),
     ] {
-        for (ga, version) in entries {
+        for (ga, specification) in entries {
+            let Some(version) = specification.version() else {
+                continue;
+            };
             let (group, artifact) = split_ga(ga)?;
             let metadata = manifest
                 .maven
@@ -6772,7 +6978,7 @@ fn effective_from_manifest(manifest: &Manifest) -> Result<EffectivePom> {
             dependencies.push(Dependency {
                 group: group.to_owned(),
                 artifact: artifact.to_owned(),
-                version: Some(version.clone()),
+                version: Some(version.to_owned()),
                 scope: scope.to_owned(),
                 scope_explicit: scope != "compile",
                 dependency_type: metadata
@@ -7508,6 +7714,7 @@ mod tests {
                 package("root-b", vec![child.clone()], None),
                 package("child", Vec::new(), Some("org.example:root-a:1")),
             ],
+            workspace_dependencies: Vec::new(),
             classpath: LockedClasspaths::default(),
         };
         let paths = shortest_dependency_paths(&lock);
@@ -7744,6 +7951,7 @@ mod tests {
                 scopes: vec!["compile".to_owned()],
                 selected_parent: None,
             }],
+            workspace_dependencies: Vec::new(),
             classpath: LockedClasspaths::default(),
         };
 

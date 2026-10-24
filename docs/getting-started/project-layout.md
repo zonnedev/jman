@@ -85,7 +85,7 @@ modules = ["api", "service"]
 ```
 
 Each module owns its own `jman.toml` and `jman.lock`. Local module relationships
-are explicit under `[path-dependencies]`. The
+are explicit as `{ path = "..." }` values in the appropriate dependency scope. The
 [multi-module tutorial](../tutorials/multi-module.md) builds one from scratch.
 
 See the [manifest reference](../reference/manifest.md) for every supported

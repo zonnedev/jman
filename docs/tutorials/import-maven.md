@@ -41,7 +41,7 @@ jman doctor
 Check these fields especially:
 
 - `[project]`: coordinates, Java release, packaging, modules, and main class.
-- Dependency scopes and local relationships under `[path-dependencies]`.
+- Dependency scopes and scoped `{ path = "..." }` workspace relationships.
 - Imported BOMs and dependency management under `[maven]`.
 - `[annotation-processors]` for Lombok, Micronaut, MapStruct, or other code
   generation required by compilation.

@@ -112,8 +112,8 @@ java-release = 21
 packaging = "jar"
 main-class = "dev.example.orders.Application"
 
-[path-dependencies]
-"dev.example:orders-api" = "../orders-api"
+[dependencies.compile]
+"dev.example:orders-api" = { path = "../orders-api" }
 ```
 
 Run `jman sync` at the root after adding or moving a module.
@@ -142,7 +142,7 @@ Run `jman sync` at the root after adding or moving a module.
 `[[repositories]]`
 : Ordered additional artifact repositories.
 
-`[dependencies.*]`, `[annotation-processors]`, `[path-dependencies]`
+`[dependencies.*]`, `[annotation-processors]`
 : Direct external and local relationships.
 
 ## `[project]`
@@ -172,11 +172,14 @@ directory or project selection overrides the user's global Java.
 
 ## Dependencies
 
-External dependency keys are `group:artifact`; values are versions:
+Dependency keys are `group:artifact`. Repository dependencies use version
+strings, while workspace dependencies use `{ path = "..." }` in the same
+scope:
 
 ```toml
 [dependencies.compile]
 "org.example:api" = "2.1.0"
+"dev.example:orders-api" = { path = "../orders-api" }
 
 [dependencies.runtime]
 "org.example:runtime" = "2.1.0"
@@ -196,12 +199,10 @@ path and are not packaged as runtime libraries:
 "org.projectlombok:lombok" = "1.18.34"
 ```
 
-Local modules use Maven coordinates mapped to a relative directory:
-
-```toml
-[path-dependencies]
-"dev.example:orders-api" = "../api"
-```
+Workspace paths must be relative, resolve to a module declared by the workspace
+root, and match that module's `group:name`. They are never downloaded. `compile`
+and `provided` participate in main compilation, `compile` and `runtime` are used
+when running and creating fat JARs, and every scope is available to tests.
 
 ## `[[repositories]]`
 

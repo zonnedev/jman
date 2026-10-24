@@ -68,6 +68,8 @@ Add a direct dependency and synchronize.
 jman add GROUP:ARTIFACT@VERSION
          [--path PATH] [--scope compile|runtime|provided|test|processor]
          [--offline]
+jman add GROUP:ARTIFACT --workspace-path RELATIVE_PATH
+         [--path PATH] [--scope compile|runtime|provided|test]
 ```
 
 The default scope is `compile`. Processor scope writes to
@@ -78,6 +80,8 @@ jman add com.fasterxml.jackson.core:jackson-databind@2.17.2
 jman add org.projectlombok:lombok@1.18.34 --scope processor
 jman add org.junit.platform:junit-platform-console-standalone@1.12.2 \
   --scope test --path modules/api
+jman add dev.example:orders-api --workspace-path ../orders-api \
+  --scope compile --path modules/orders-application
 ```
 
 ## jman remove

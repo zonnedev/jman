@@ -12,7 +12,7 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use jman_build::{ArtifactOptions, PackageResult};
-use jman_config::{Manifest, MavenDependencyMetadata, Publishing};
+use jman_config::{DependencySpec, Manifest, MavenDependencyMetadata, Publishing};
 use md5::Md5;
 use reqwest::{multipart, Client, RequestBuilder, Url};
 use serde::{Deserialize, Serialize};
@@ -259,26 +259,56 @@ fn discover_modules(root: &Path) -> Result<Vec<WorkspaceModule>> {
         .enumerate()
         .map(|(index, (directory, _))| (directory.clone(), index))
         .collect::<BTreeMap<_, _>>();
+    let coordinates = raw
+        .iter()
+        .map(|(_, manifest)| format!("{}:{}", manifest.project.group, manifest.project.name))
+        .collect::<Vec<_>>();
     let mut modules = Vec::with_capacity(raw.len());
     for (directory, manifest) in raw {
         let mut dependencies = Vec::new();
-        for relative in manifest.path_dependencies.values() {
-            let dependency = fs::canonicalize(directory.join(relative)).with_context(|| {
-                format!(
-                    "could not resolve path dependency {relative} from {}",
-                    directory.display()
-                )
-            })?;
-            dependencies.push(*indices.get(&dependency).ok_or_else(|| {
-                anyhow!(
-                    "path dependency {} from {} is not a declared workspace module",
-                    dependency.display(),
-                    directory.display()
-                )
-            })?);
+        let mut targets = BTreeMap::new();
+        for (scope, entries) in [
+            ("compile", &manifest.dependencies.compile),
+            ("runtime", &manifest.dependencies.runtime),
+            ("provided", &manifest.dependencies.provided),
+            ("test", &manifest.dependencies.test),
+        ] {
+            for (coordinate, specification) in entries {
+                let Some(relative) = specification.path() else {
+                    continue;
+                };
+                let dependency = fs::canonicalize(directory.join(relative)).with_context(|| {
+                    format!(
+                        "could not resolve workspace dependency {relative} from {}",
+                        directory.display()
+                    )
+                })?;
+                let index = *indices.get(&dependency).ok_or_else(|| {
+                    anyhow!(
+                        "workspace dependency {} from {} is not a declared workspace module",
+                        dependency.display(),
+                        directory.display()
+                    )
+                })?;
+                if index == *indices.get(&directory).expect("declaring module index") {
+                    bail!("module `{}` cannot depend on itself", manifest.project.name);
+                }
+                if coordinate != &coordinates[index] {
+                    bail!(
+                        "workspace dependency `{coordinate}` points to `{}` at {}",
+                        coordinates[index],
+                        dependency.display()
+                    );
+                }
+                if let Some(previous) = targets.insert(index, scope) {
+                    bail!(
+                        "workspace dependency `{coordinate}` is declared in both {previous} and {scope} scopes"
+                    );
+                }
+                dependencies.push(index);
+            }
         }
         dependencies.sort_unstable();
-        dependencies.dedup();
         modules.push(WorkspaceModule {
             workspace_root: directory == root,
             directory,
@@ -627,10 +657,7 @@ fn pom_dependencies<'a>(
         ("provided", &manifest.dependencies.provided),
         ("test", &manifest.dependencies.test),
     ] {
-        for (coordinate, version) in dependencies {
-            if version.trim().is_empty() {
-                bail!("dependency {coordinate} has an empty publication version");
-            }
+        for (coordinate, specification) in dependencies {
             let (group, artifact) = split_ga(coordinate)?;
             let key = format!("{scope}:{coordinate}");
             let metadata = manifest
@@ -639,28 +666,47 @@ fn pom_dependencies<'a>(
                 .and_then(|maven| maven.dependencies.get(&key))
                 .cloned()
                 .unwrap_or_default();
-            result.push(PomDependency {
-                group: group.to_owned(),
-                artifact: artifact.to_owned(),
-                version: version.clone(),
-                scope,
-                metadata,
-            });
+            match specification {
+                DependencySpec::Version(version) => {
+                    if version.trim().is_empty() {
+                        bail!("dependency {coordinate} has an empty publication version");
+                    }
+                    result.push(PomDependency {
+                        group: group.to_owned(),
+                        artifact: artifact.to_owned(),
+                        version: version.clone(),
+                        scope,
+                        metadata,
+                    });
+                }
+                DependencySpec::Path(path) => {
+                    let directory = fs::canonicalize(module.directory.join(&path.path))?;
+                    let dependency = modules
+                        .iter()
+                        .find(|candidate| candidate.directory == directory)
+                        .ok_or_else(|| {
+                            anyhow!("undeclared workspace dependency {}", directory.display())
+                        })?;
+                    let expected = format!(
+                        "{}:{}",
+                        dependency.manifest.project.group, dependency.manifest.project.name
+                    );
+                    if coordinate != &expected {
+                        bail!(
+                            "workspace dependency `{coordinate}` points to `{expected}` at {}",
+                            directory.display()
+                        );
+                    }
+                    result.push(PomDependency {
+                        group: group.to_owned(),
+                        artifact: artifact.to_owned(),
+                        version: dependency.manifest.project.version.clone(),
+                        scope,
+                        metadata,
+                    });
+                }
+            }
         }
-    }
-    for relative in manifest.path_dependencies.values() {
-        let directory = fs::canonicalize(module.directory.join(relative))?;
-        let dependency = modules
-            .iter()
-            .find(|candidate| candidate.directory == directory)
-            .ok_or_else(|| anyhow!("undeclared workspace dependency {}", directory.display()))?;
-        result.push(PomDependency {
-            group: dependency.manifest.project.group.clone(),
-            artifact: dependency.manifest.project.name.clone(),
-            version: dependency.manifest.project.version.clone(),
-            scope: "compile",
-            metadata: MavenDependencyMetadata::default(),
-        });
     }
     result.sort_by(|left, right| {
         (&left.scope, &left.group, &left.artifact).cmp(&(
@@ -1051,7 +1097,8 @@ pub fn central_token(username: &str, password: &str) -> String {
 mod tests {
     use super::*;
     use jman_config::{
-        Dependencies, Developer, License, MavenCompatibility, Project, Scm, MANIFEST_VERSION,
+        Dependencies, Developer, License, MavenCompatibility, PathDependency, Project, Scm,
+        MANIFEST_VERSION,
     };
     use std::{
         io::Read as _,
@@ -1103,7 +1150,6 @@ mod tests {
             repositories: Vec::new(),
             dependencies: Dependencies::default(),
             annotation_processors: BTreeMap::new(),
-            path_dependencies: BTreeMap::new(),
         }
     }
 
@@ -1143,7 +1189,7 @@ mod tests {
         app.manifest
             .dependencies
             .runtime
-            .insert("org.example:runtime".to_owned(), "4.0".to_owned());
+            .insert("org.example:runtime".to_owned(), "4.0".into());
         app.manifest.maven = Some(MavenCompatibility {
             parent: None,
             dependencies: BTreeMap::from([(
@@ -1158,12 +1204,16 @@ mod tests {
             dependency_management: Vec::new(),
             bom_imports: Vec::new(),
         });
-        app.manifest
-            .path_dependencies
-            .insert("com.example:api".to_owned(), "../api".to_owned());
+        app.manifest.dependencies.provided.insert(
+            "com.example:api".to_owned(),
+            DependencySpec::Path(PathDependency {
+                path: "../api".to_owned(),
+            }),
+        );
         let xml = generate_pom(&app, &[api, app.clone()], None).unwrap();
         assert!(xml.contains("<artifactId>api</artifactId>"));
         assert!(xml.contains("<version>1.2.3</version>"));
+        assert!(xml.contains("<scope>provided</scope>"));
         assert!(xml.contains("<artifactId>runtime</artifactId>"));
         assert!(xml.contains("<scope>runtime</scope>"));
         assert!(xml.contains("<type>test-jar</type>"));

@@ -8,12 +8,10 @@ java-release = 25
 packaging = "jar"
 main-class = "dev.zonnedev.jman.example.grpc.GrpcApplication"
 
-[path-dependencies]
-"dev.zonnedev.jman.example:library-api-contracts" = "../api-contracts"
-"dev.zonnedev.jman.example:library-application" = "../application"
-"dev.zonnedev.jman.example:library-domain" = "../domain"
-
 [dependencies.compile]
+"dev.zonnedev.jman.example:library-api-contracts" = { path = "../api-contracts" }
+"dev.zonnedev.jman.example:library-application" = { path = "../application" }
+"dev.zonnedev.jman.example:library-domain" = { path = "../domain" }
 "com.google.protobuf:protobuf-java" = "4.36.1"
 "io.grpc:grpc-api" = "1.83.0"
 "io.grpc:grpc-netty-shaded" = "1.83.0"

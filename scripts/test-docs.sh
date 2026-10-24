@@ -74,7 +74,7 @@ for command in "${java_commands[@]}"; do
 done
 
 manifest_sections=(
-  project toolchain dependencies annotation-processors path-dependencies
+  project toolchain dependencies annotation-processors
   repositories build scripts test.coverage publishing audit maven
 )
 for section in "${manifest_sections[@]}"; do

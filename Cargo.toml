@@ -44,6 +44,7 @@ tar = "0.4"
 thiserror = "2.0"
 tokio = { version = "1.0", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
 toml = "0.8"
+toml_edit = "0.22"
 zip = { version = "4.0", default-features = false, features = ["deflate"] }
 
 [workspace.lints.rust]

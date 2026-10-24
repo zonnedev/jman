@@ -93,7 +93,7 @@ pub struct ToolchainManifest {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Manifest {
     pub manifest_version: u32,
     pub project: Project,
@@ -117,8 +117,6 @@ pub struct Manifest {
     pub dependencies: Dependencies,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub annotation_processors: BTreeMap<String, String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub path_dependencies: BTreeMap<String, String>,
 }
 
 /// An explicitly invoked project script.
@@ -422,7 +420,22 @@ pub struct Lockfile {
     pub toolchain: LockedToolchain,
     #[serde(rename = "package", default)]
     pub packages: Vec<LockedPackage>,
+    #[serde(
+        rename = "workspace-dependency",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub workspace_dependencies: Vec<LockedWorkspaceDependency>,
     pub classpath: LockedClasspaths,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct LockedWorkspaceDependency {
+    pub coordinate: String,
+    pub scope: String,
+    pub path: String,
+    pub version: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -469,13 +482,58 @@ pub struct LockedClasspaths {
 #[serde(rename_all = "kebab-case")]
 pub struct Dependencies {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub compile: BTreeMap<String, String>,
+    pub compile: BTreeMap<String, DependencySpec>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub runtime: BTreeMap<String, String>,
+    pub runtime: BTreeMap<String, DependencySpec>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub provided: BTreeMap<String, String>,
+    pub provided: BTreeMap<String, DependencySpec>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub test: BTreeMap<String, String>,
+    pub test: BTreeMap<String, DependencySpec>,
+}
+
+/// A dependency resolved from a repository version or another workspace module.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum DependencySpec {
+    Version(String),
+    Path(PathDependency),
+}
+
+/// A workspace-local dependency path, relative to the declaring module.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PathDependency {
+    pub path: String,
+}
+
+impl DependencySpec {
+    #[must_use]
+    pub fn version(&self) -> Option<&str> {
+        match self {
+            Self::Version(version) => Some(version),
+            Self::Path(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn path(&self) -> Option<&str> {
+        match self {
+            Self::Version(_) => None,
+            Self::Path(dependency) => Some(&dependency.path),
+        }
+    }
+}
+
+impl From<String> for DependencySpec {
+    fn from(version: String) -> Self {
+        Self::Version(version)
+    }
+}
+
+impl From<&str> for DependencySpec {
+    fn from(version: &str) -> Self {
+        Self::Version(version.to_owned())
+    }
 }
 
 impl Dependencies {
@@ -546,6 +604,31 @@ impl Manifest {
         {
             validate_ga(coordinate)?;
         }
+        for (coordinate, dependency) in self
+            .dependencies
+            .compile
+            .iter()
+            .chain(&self.dependencies.runtime)
+            .chain(&self.dependencies.provided)
+            .chain(&self.dependencies.test)
+        {
+            match dependency {
+                DependencySpec::Version(version) if version.trim().is_empty() => {
+                    return Err(ConfigError::Validation(format!(
+                        "dependency `{coordinate}` version cannot be empty"
+                    )));
+                }
+                DependencySpec::Path(dependency) => {
+                    let path = Path::new(&dependency.path);
+                    if dependency.path.trim().is_empty() || path.is_absolute() {
+                        return Err(ConfigError::Validation(format!(
+                            "workspace dependency `{coordinate}` path must be a non-empty relative path"
+                        )));
+                    }
+                }
+                DependencySpec::Version(_) => {}
+            }
+        }
         if let Some(maven) = &self.maven {
             for (key, metadata) in &maven.dependencies {
                 let (scope, coordinate) = key.split_once(':').ok_or_else(|| {
@@ -593,8 +676,45 @@ impl Manifest {
     /// Returns an error when validation or TOML serialization fails.
     pub fn to_toml(&self) -> Result<String, ConfigError> {
         self.validate()?;
-        Ok(toml::to_string_pretty(self)?)
+        let serialized = toml::to_string_pretty(self)?;
+        inline_path_dependency_specs(&serialized)
     }
+}
+
+fn inline_path_dependency_specs(serialized: &str) -> Result<String, ConfigError> {
+    use toml_edit::{DocumentMut, InlineTable, Item, Value};
+
+    let mut document = serialized.parse::<DocumentMut>().map_err(|error| {
+        ConfigError::Validation(format!("could not normalize serialized manifest: {error}"))
+    })?;
+    let Some(dependencies) = document
+        .get_mut("dependencies")
+        .and_then(Item::as_table_mut)
+    else {
+        return Ok(serialized.to_owned());
+    };
+    for scope in ["compile", "runtime", "provided", "test"] {
+        let Some(entries) = dependencies.get_mut(scope).and_then(Item::as_table_mut) else {
+            continue;
+        };
+        for (_, item) in entries.iter_mut() {
+            let Some(table) = item.as_table() else {
+                continue;
+            };
+            if table.len() != 1 || !table.contains_key("path") {
+                continue;
+            }
+            let Some(path) = table.get("path").and_then(Item::as_value).cloned() else {
+                continue;
+            };
+            let mut inline = InlineTable::new();
+            inline.insert("path", path);
+            inline.fmt();
+            *item = Item::Value(Value::InlineTable(inline));
+        }
+        entries.fmt();
+    }
+    Ok(document.to_string())
 }
 
 impl ManifestFile {
@@ -746,6 +866,34 @@ impl Lockfile {
                 return Err(ConfigError::Validation(format!(
                     "package {}:{} has an invalid artifact checksum",
                     package.group, package.artifact
+                )));
+            }
+        }
+        let mut workspace_edges = BTreeSet::new();
+        for dependency in &self.workspace_dependencies {
+            validate_ga(&dependency.coordinate)?;
+            if !matches!(
+                dependency.scope.as_str(),
+                "compile" | "runtime" | "provided" | "test"
+            ) {
+                return Err(ConfigError::Validation(format!(
+                    "workspace dependency {} has unsupported scope `{}`",
+                    dependency.coordinate, dependency.scope
+                )));
+            }
+            if dependency.version.trim().is_empty()
+                || dependency.path.trim().is_empty()
+                || Path::new(&dependency.path).is_absolute()
+            {
+                return Err(ConfigError::Validation(format!(
+                    "workspace dependency {} must have a version and relative path",
+                    dependency.coordinate
+                )));
+            }
+            if !workspace_edges.insert((&dependency.scope, &dependency.coordinate)) {
+                return Err(ConfigError::Validation(format!(
+                    "duplicate {} workspace dependency {}",
+                    dependency.scope, dependency.coordinate
                 )));
             }
         }
@@ -1558,11 +1706,18 @@ mod tests {
                 url: "https://repo.maven.apache.org/maven2".to_owned(),
             }],
             dependencies: Dependencies {
-                compile: BTreeMap::from([("org.example:example".to_owned(), "1.0.0".to_owned())]),
+                compile: BTreeMap::from([
+                    ("org.example:example".to_owned(), "1.0.0".into()),
+                    (
+                        "com.example:core".to_owned(),
+                        DependencySpec::Path(PathDependency {
+                            path: "core".to_owned(),
+                        }),
+                    ),
+                ]),
                 ..Dependencies::default()
             },
             annotation_processors: BTreeMap::new(),
-            path_dependencies: BTreeMap::from([("com.example:core".to_owned(), "core".to_owned())]),
         };
 
         let text = manifest.to_toml().expect("valid manifest");
@@ -1570,7 +1725,7 @@ mod tests {
         assert_eq!(manifest, parsed);
         assert!(text.contains("[dependencies.compile]"));
         assert!(text.contains("modules = ["));
-        assert!(text.contains("[path-dependencies]"));
+        assert!(text.contains("path = \"core\""));
     }
 
     #[test]
@@ -1723,7 +1878,7 @@ vendor = "corretto"
         manifest
             .dependencies
             .compile
-            .insert("missing-artifact".to_owned(), "1".to_owned());
+            .insert("missing-artifact".to_owned(), "1".into());
 
         assert!(matches!(
             manifest.validate(),
@@ -1852,8 +2007,83 @@ vendor = "corretto"
             repositories: Vec::new(),
             dependencies: Dependencies::default(),
             annotation_processors: BTreeMap::new(),
-            path_dependencies: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn dependency_specs_support_versions_and_scoped_workspace_paths() {
+        let manifest: Manifest = toml::from_str(
+            r#"manifest-version = 1
+
+[project]
+group = "com.example"
+name = "demo"
+version = "1.0.0"
+java-release = 21
+
+[dependencies.compile]
+"org.example:library" = "2.0.0"
+
+[dependencies.test]
+"com.example:test-support" = { path = "../test-support" }
+"#,
+        )
+        .expect("scoped dependency specifications");
+
+        assert_eq!(
+            manifest.dependencies.compile["org.example:library"].version(),
+            Some("2.0.0")
+        );
+        assert_eq!(
+            manifest.dependencies.test["com.example:test-support"].path(),
+            Some("../test-support")
+        );
+        manifest
+            .validate()
+            .expect("valid dependency specifications");
+    }
+
+    #[test]
+    fn removed_path_dependencies_table_is_rejected() {
+        let error = toml::from_str::<Manifest>(
+            r#"manifest-version = 1
+
+[project]
+group = "com.example"
+name = "demo"
+version = "1.0.0"
+java-release = 21
+
+[path-dependencies]
+"com.example:core" = "../core"
+"#,
+        )
+        .expect_err("legacy path dependency table must be rejected");
+
+        assert!(error.to_string().contains("path-dependencies"));
+    }
+
+    #[test]
+    fn lockfile_round_trips_scoped_workspace_dependency_identity() {
+        let lock = Lockfile {
+            lock_version: LOCK_VERSION,
+            manifest_hash: "sha256:manifest".to_owned(),
+            workspace_hash: "sha256:workspace".to_owned(),
+            platform: "linux-x86_64".to_owned(),
+            toolchain: LockedToolchain { java_release: 25 },
+            packages: Vec::new(),
+            workspace_dependencies: vec![LockedWorkspaceDependency {
+                coordinate: "com.example:api".to_owned(),
+                scope: "provided".to_owned(),
+                path: "../api".to_owned(),
+                version: "1.2.3".to_owned(),
+            }],
+            classpath: LockedClasspaths::default(),
+        };
+
+        let text = lock.to_toml().expect("workspace lock");
+        assert!(text.contains("[[workspace-dependency]]"));
+        assert_eq!(toml::from_str::<Lockfile>(&text).expect("lock TOML"), lock);
     }
 
     #[test]

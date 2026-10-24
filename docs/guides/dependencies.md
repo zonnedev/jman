@@ -14,7 +14,12 @@ jman add org.postgresql:postgresql@42.7.4 --scope runtime
 jman add jakarta.servlet:jakarta.servlet-api@6.1.0 --scope provided
 jman add org.junit.platform:junit-platform-console-standalone@1.12.2 --scope test
 jman add org.projectlombok:lombok@1.18.34 --scope processor
+jman add dev.example:orders-api --workspace-path ../orders-api
 ```
+
+The workspace form takes `group:artifact` without `@version`. JMAN validates
+that the relative path is a declared module with the same coordinate and locks
+the target module version locally.
 
 Scopes control classpath membership:
 
@@ -112,12 +117,15 @@ bom-imports = ["com.fasterxml.jackson:jackson-bom:2.17.2"]
 "com.fasterxml.jackson.core:jackson-databind" = "2.17.2"
 ```
 
-A local module relationship is explicit and never downloaded:
+A local module relationship is scoped, explicit, and never downloaded:
 
 ```toml
-[path-dependencies]
-"dev.example:orders-api" = "../orders-api"
+[dependencies.compile]
+"dev.example:orders-api" = { path = "../orders-api" }
 ```
+
+Use the same object form under `runtime`, `provided`, or `test` to apply the
+same lifecycle semantics as a repository dependency.
 
 After a manual manifest edit, run `jman sync` and review both `jman.toml` and
 `jman.lock`.

@@ -7,5 +7,5 @@ version = "1.0.0"
 java-release = 17
 packaging = "jar"
 
-[path-dependencies]
-"io.github.zonnedev.jman.fixture:greeting-api" = "../api"
+[dependencies.compile]
+"io.github.zonnedev.jman.fixture:greeting-api" = { path = "../api" }

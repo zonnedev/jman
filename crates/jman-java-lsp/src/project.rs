@@ -592,10 +592,66 @@ fn load_jman_models(root: &Path) -> Result<Vec<CompileModel>, String> {
         .map(|(directory, manifest)| {
             (
                 format!("{}:{}", manifest.project.group, manifest.project.name),
-                directory.join(".jman/output/classes"),
+                (
+                    manifest.project.name.clone(),
+                    directory.join(".jman/output/classes"),
+                ),
             )
         })
         .collect::<std::collections::BTreeMap<_, _>>();
+    let coordinates_by_directory = modules
+        .iter()
+        .map(|(directory, manifest)| {
+            (
+                directory.clone(),
+                format!("{}:{}", manifest.project.group, manifest.project.name),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for (directory, manifest) in &modules {
+        let mut local_targets = std::collections::BTreeMap::new();
+        for (scope, dependencies) in [
+            ("compile", &manifest.dependencies.compile),
+            ("runtime", &manifest.dependencies.runtime),
+            ("provided", &manifest.dependencies.provided),
+            ("test", &manifest.dependencies.test),
+        ] {
+            for (coordinate, specification) in dependencies {
+                let Some(path) = specification.path() else {
+                    continue;
+                };
+                let target = std::fs::canonicalize(directory.join(path)).map_err(|error| {
+                    format!(
+                        "cannot resolve JMAN workspace dependency `{coordinate}` from {}: {error}",
+                        directory.display()
+                    )
+                })?;
+                let actual = coordinates_by_directory.get(&target).ok_or_else(|| {
+                    format!(
+                        "JMAN workspace dependency `{coordinate}` at {} is not a declared module",
+                        target.display()
+                    )
+                })?;
+                if target == *directory {
+                    return Err(format!(
+                        "JMAN module `{}` cannot depend on itself",
+                        manifest.project.name
+                    ));
+                }
+                if coordinate != actual {
+                    return Err(format!(
+                        "JMAN workspace dependency `{coordinate}` points to `{actual}` at {}",
+                        target.display()
+                    ));
+                }
+                if let Some(previous) = local_targets.insert(target, scope) {
+                    return Err(format!(
+                        "JMAN workspace dependency `{coordinate}` is declared in both {previous} and {scope} scopes"
+                    ));
+                }
+            }
+        }
+    }
     let mut models = Vec::new();
     for (directory, manifest) in modules {
         let lock = Lockfile::read(&directory.join("jman.lock")).map_err(|error| {
@@ -607,11 +663,44 @@ fn load_jman_models(root: &Path) -> Result<Vec<CompileModel>, String> {
         let compile_dependencies = jman_artifact_paths(&lock.classpath.compile, &lock, &cache)?;
         let test_dependencies = jman_artifact_paths(&lock.classpath.test, &lock, &cache)?;
         let processors = jman_artifact_paths(&lock.classpath.processors, &lock, &cache)?;
-        let project_outputs = manifest
-            .path_dependencies
-            .keys()
+        let main_project_coordinates = manifest
+            .dependencies
+            .compile
+            .iter()
+            .chain(&manifest.dependencies.provided)
+            .filter(|(_, specification)| specification.path().is_some())
+            .map(|(coordinate, _)| coordinate.clone())
+            .collect::<Vec<_>>();
+        let test_project_coordinates = manifest
+            .dependencies
+            .compile
+            .iter()
+            .chain(&manifest.dependencies.runtime)
+            .chain(&manifest.dependencies.provided)
+            .chain(&manifest.dependencies.test)
+            .filter(|(_, specification)| specification.path().is_some())
+            .map(|(coordinate, _)| coordinate.clone())
+            .collect::<Vec<_>>();
+        let main_project_dependencies = main_project_coordinates
+            .iter()
             .filter_map(|coordinate| outputs.get(coordinate))
-            .cloned()
+            .map(|(project, _)| project.clone())
+            .collect::<Vec<_>>();
+        let test_project_dependencies = test_project_coordinates
+            .iter()
+            .filter_map(|coordinate| outputs.get(coordinate))
+            .map(|(project, _)| project.clone())
+            .collect::<Vec<_>>();
+        let main_project_outputs = main_project_coordinates
+            .iter()
+            .filter_map(|coordinate| outputs.get(coordinate))
+            .map(|(_, output)| output.clone())
+            .collect::<Vec<_>>();
+        let test_project_outputs = test_project_coordinates
+            .iter()
+            .filter(|coordinate| !main_project_coordinates.contains(coordinate))
+            .filter_map(|coordinate| outputs.get(coordinate))
+            .map(|(_, output)| output.clone())
             .collect::<Vec<_>>();
         let build = manifest.build.as_ref();
         let encoding = build
@@ -647,7 +736,7 @@ fn load_jman_models(root: &Path) -> Result<Vec<CompileModel>, String> {
         };
         let mut main_generated_sources = vec![main_generated.clone()];
         main_generated_sources.extend(generator_sources(&[jman_config::GeneratorSourceSet::Main]));
-        let mut main_classpath = project_outputs.clone();
+        let mut main_classpath = main_project_outputs;
         main_classpath.extend(compile_dependencies.clone());
         models.push(CompileModel {
             schema_version: 2,
@@ -659,7 +748,7 @@ fn load_jman_models(root: &Path) -> Result<Vec<CompileModel>, String> {
             source_roots: vec![directory.join("src/main/java")],
             classpath: main_classpath.clone(),
             module_path: Vec::new(),
-            project_dependencies: manifest.path_dependencies.keys().cloned().collect(),
+            project_dependencies: main_project_dependencies,
             annotation_processor_path: processors.clone(),
             annotation_processor_options: Vec::new(),
             compiler_args: compiler_args.clone(),
@@ -674,6 +763,7 @@ fn load_jman_models(root: &Path) -> Result<Vec<CompileModel>, String> {
         });
         let mut test_classpath = vec![main_output];
         test_classpath.extend(main_classpath);
+        test_classpath.extend(test_project_outputs);
         test_classpath.extend(test_dependencies);
         models.push(CompileModel {
             schema_version: 2,
@@ -688,7 +778,7 @@ fn load_jman_models(root: &Path) -> Result<Vec<CompileModel>, String> {
             ],
             classpath: test_classpath,
             module_path: Vec::new(),
-            project_dependencies: manifest.path_dependencies.keys().cloned().collect(),
+            project_dependencies: test_project_dependencies,
             annotation_processor_path: processors,
             annotation_processor_options: Vec::new(),
             compiler_args,
@@ -935,6 +1025,124 @@ processors = []
             "testCompile"
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn jman_models_apply_workspace_dependency_scopes_to_main_and_test() {
+        let workspace = tempfile::tempdir().expect("temporary workspace");
+        let root = workspace.path();
+        let modules = ["compile", "runtime", "provided", "tests", "app"];
+        std::fs::write(
+            root.join("jman.toml"),
+            r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "workspace"
+version = "1"
+java-release = 21
+packaging = "pom"
+modules = ["compile", "runtime", "provided", "tests", "app"]
+"#,
+        )
+        .expect("workspace manifest");
+        let lock = r#"lock-version = 3
+manifest-hash = "sha256:00"
+workspace-hash = "sha256:00"
+platform = "test"
+[toolchain]
+java-release = 21
+[classpath]
+"#;
+        std::fs::write(root.join("jman.lock"), lock).expect("workspace lock");
+        for module in modules {
+            std::fs::create_dir_all(root.join(module)).expect("module directory");
+            std::fs::write(root.join(module).join("jman.lock"), lock).expect("module lock");
+            if module != "app" {
+                std::fs::write(
+                    root.join(module).join("jman.toml"),
+                    format!(
+                        r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "{module}"
+version = "1"
+java-release = 21
+packaging = "jar"
+"#
+                    ),
+                )
+                .expect("module manifest");
+            }
+        }
+        std::fs::write(
+            root.join("app/jman.toml"),
+            r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "app"
+version = "1"
+java-release = 21
+packaging = "jar"
+
+[dependencies.compile]
+"com.example:compile" = { path = "../compile" }
+[dependencies.runtime]
+"com.example:runtime" = { path = "../runtime" }
+[dependencies.provided]
+"com.example:provided" = { path = "../provided" }
+[dependencies.test]
+"com.example:tests" = { path = "../tests" }
+"#,
+        )
+        .expect("app manifest");
+
+        let models = load_jman_models(root).expect("JMAN models");
+        let main = models
+            .iter()
+            .find(|model| model.project_path == "app" && model.task_path == "compile")
+            .expect("app main model");
+        assert_eq!(main.project_dependencies, ["compile", "provided"]);
+        assert!(
+            main.classpath
+                .iter()
+                .any(|path| path.ends_with("compile/.jman/output/classes"))
+        );
+        assert!(
+            main.classpath
+                .iter()
+                .any(|path| path.ends_with("provided/.jman/output/classes"))
+        );
+        assert!(
+            !main
+                .classpath
+                .iter()
+                .any(|path| path.ends_with("runtime/.jman/output/classes"))
+        );
+        assert!(
+            !main
+                .classpath
+                .iter()
+                .any(|path| path.ends_with("tests/.jman/output/classes"))
+        );
+
+        let test = models
+            .iter()
+            .find(|model| model.project_path == "app" && model.task_path == "testCompile")
+            .expect("app test model");
+        assert_eq!(
+            test.project_dependencies,
+            ["compile", "runtime", "provided", "tests"]
+        );
+        assert!(
+            test.classpath
+                .iter()
+                .any(|path| path.ends_with("runtime/.jman/output/classes"))
+        );
+        assert!(
+            test.classpath
+                .iter()
+                .any(|path| path.ends_with("tests/.jman/output/classes"))
+        );
     }
 
     #[test]

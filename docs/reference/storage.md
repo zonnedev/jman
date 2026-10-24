@@ -10,6 +10,7 @@ The generated lockfile records:
 - schema and manifest/workspace hashes;
 - target platform and selected JDK;
 - resolved packages, versions, repositories, hashes, and dependency edges;
+- workspace dependency coordinates, scopes, normalized paths, and target versions;
 - module compile, runtime, test, and processor classpaths.
 
 Commit every workspace lockfile. JMAN writes it deterministically and

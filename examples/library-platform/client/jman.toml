@@ -7,10 +7,8 @@ version = "1.0.0"
 java-release = 25
 packaging = "jar"
 
-[path-dependencies]
-"dev.zonnedev.jman.example:library-api-contracts" = "../api-contracts"
-
 [dependencies.compile]
+"dev.zonnedev.jman.example:library-api-contracts" = { path = "../api-contracts" }
 "com.fasterxml.jackson.core:jackson-databind" = "2.20.0"
 "com.fasterxml.jackson.datatype:jackson-datatype-jdk8" = "2.20.0"
 "com.google.protobuf:protobuf-java" = "4.36.1"

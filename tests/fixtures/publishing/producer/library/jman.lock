@@ -6,4 +6,10 @@ platform = "acceptance"
 [toolchain]
 java-release = 17
 
+[[workspace-dependency]]
+coordinate = "io.github.zonnedev.jman.fixture:greeting-api"
+scope = "compile"
+path = "../api"
+version = "1.0.0"
+
 [classpath]

@@ -61,6 +61,14 @@ grep -q '<artifactId>greeting-api</artifactId>' \
   "${library_dir}/greeting-library-1.0.0.pom"
 grep -q '<version>1.0.0</version>' \
   "${library_dir}/greeting-library-1.0.0.pom"
+if grep -q '<scope>' "${library_dir}/greeting-library-1.0.0.pom"; then
+  echo 'Compile-scoped workspace dependency was published with a non-default scope' >&2
+  exit 1
+fi
+if grep -q '../api' "${library_dir}/greeting-library-1.0.0.pom"; then
+  echo 'Published POM leaked a workspace dependency path' >&2
+  exit 1
+fi
 
 repository_url="file://${repository}"
 sed -i "s|@PUBLISHING_REPOSITORY@|${repository_url}|g" \

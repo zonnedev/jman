@@ -428,7 +428,44 @@ enum JunitSelection {
 struct Module {
     directory: PathBuf,
     manifest: Manifest,
-    dependencies: Vec<usize>,
+    dependencies: Vec<WorkspaceDependency>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WorkspaceDependencyScope {
+    Compile,
+    Runtime,
+    Provided,
+    Test,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorkspaceDependency {
+    index: usize,
+    scope: WorkspaceDependencyScope,
+}
+
+#[derive(Clone, Copy)]
+enum DependencyUsage {
+    Compile,
+    Runtime,
+    Test,
+}
+
+impl DependencyUsage {
+    fn includes(self, scope: WorkspaceDependencyScope) -> bool {
+        match self {
+            Self::Compile => matches!(
+                scope,
+                WorkspaceDependencyScope::Compile | WorkspaceDependencyScope::Provided
+            ),
+            Self::Runtime => matches!(
+                scope,
+                WorkspaceDependencyScope::Compile | WorkspaceDependencyScope::Runtime
+            ),
+            Self::Test => true,
+        }
+    }
 }
 
 /// Locate `javac`, query its version, and validate it against a requested release.
@@ -660,18 +697,17 @@ async fn compile_workspace_with_rebuild(
             let cache_dir = cache_dir.to_owned();
             let workspace_root = workspace_root.clone();
             let semaphore = Arc::clone(&semaphore);
-            let upstream = module
-                .dependencies
-                .iter()
+            let upstream = transitive_dependencies(index, &modules, DependencyUsage::Compile)
+                .into_iter()
                 .map(|dependency| {
-                    fingerprints.get(dependency).map_or_else(
+                    fingerprints.get(&dependency).map_or_else(
                         || {
                             Err(BuildError::Invalid(
                                 "module scheduler lost a predecessor result".to_owned(),
                             ))
                         },
                         |fingerprint| {
-                            Ok((modules[*dependency].directory.clone(), fingerprint.clone()))
+                            Ok((modules[dependency].directory.clone(), fingerprint.clone()))
                         },
                     )
                 })
@@ -744,7 +780,7 @@ pub async fn package_workspace(
         if manifest.project.packaging == "pom" {
             continue;
         }
-        let upstream = transitive_dependencies(index, &modules)
+        let compile_upstream = transitive_dependencies(index, &modules, DependencyUsage::Compile)
             .into_iter()
             .map(|dependency| build.modules[dependency].output.clone())
             .collect::<Vec<_>>();
@@ -755,7 +791,7 @@ pub async fn package_workspace(
                 "thin",
                 &build.toolchain,
                 cache_dir,
-                &upstream,
+                &compile_upstream,
                 rebuild,
             )
             .await?,
@@ -768,7 +804,7 @@ pub async fn package_workspace(
                     "sources",
                     &build.toolchain,
                     cache_dir,
-                    &upstream,
+                    &compile_upstream,
                     rebuild,
                 )
                 .await?,
@@ -782,13 +818,18 @@ pub async fn package_workspace(
                     "javadoc",
                     &build.toolchain,
                     cache_dir,
-                    &upstream,
+                    &compile_upstream,
                     rebuild,
                 )
                 .await?,
             );
         }
         if options.fat && manifest.project.main_class.is_some() {
+            let runtime_upstream =
+                transitive_dependencies(index, &modules, DependencyUsage::Runtime)
+                    .into_iter()
+                    .map(|dependency| build.modules[dependency].output.clone())
+                    .collect::<Vec<_>>();
             packages.push(
                 package_cached_with_rebuild(
                     module,
@@ -796,7 +837,7 @@ pub async fn package_workspace(
                     "fat",
                     &build.toolchain,
                     cache_dir,
-                    &upstream,
+                    &runtime_upstream,
                     rebuild,
                 )
                 .await?,
@@ -867,11 +908,17 @@ pub async fn run_workspace(
     };
     let build = compile_workspace(root, cache_dir, jobs, offline).await?;
     let mut classpath = vec![build.modules[index].output.clone()];
-    classpath.extend(
-        transitive_dependencies(index, &modules)
-            .into_iter()
-            .map(|dependency| build.modules[dependency].output.clone()),
-    );
+    let workspace_dependencies = transitive_dependencies(index, &modules, DependencyUsage::Runtime);
+    let workspace_outputs = workspace_dependencies
+        .iter()
+        .map(|dependency| build.modules[*dependency].output.clone())
+        .collect::<Vec<_>>();
+    classpath.extend(workspace_outputs.iter().cloned());
+    classpath.extend(upstream_artifact_paths(
+        &workspace_outputs,
+        cache_dir,
+        DependencyUsage::Runtime,
+    )?);
     let lock = read_lock(&application.directory.join("jman.lock"))?;
     classpath.extend(artifact_paths(&lock.classpath.runtime, &lock, cache_dir)?);
     let executable = if cfg!(windows) { "java.exe" } else { "java" };
@@ -1049,11 +1096,17 @@ async fn run_test_module(
     let lock = read_lock(&module.directory.join("jman.lock"))?;
     ensure_junit_console(&lock)?;
     let mut classpath = vec![build.modules[index].output.clone()];
-    classpath.extend(
-        transitive_dependencies(index, modules)
-            .into_iter()
-            .map(|dependency| build.modules[dependency].output.clone()),
-    );
+    let workspace_dependencies = transitive_dependencies(index, modules, DependencyUsage::Test);
+    let workspace_outputs = workspace_dependencies
+        .iter()
+        .map(|dependency| build.modules[*dependency].output.clone())
+        .collect::<Vec<_>>();
+    classpath.extend(workspace_outputs.iter().cloned());
+    classpath.extend(upstream_artifact_paths(
+        &workspace_outputs,
+        cache_dir,
+        DependencyUsage::Test,
+    )?);
     classpath.extend(artifact_paths(&lock.classpath.test, &lock, cache_dir)?);
     let runner = ensure_test_runner(&build.toolchain, cache_dir, &classpath).await?;
     let processors = artifact_paths(&lock.classpath.processors, &lock, cache_dir)?;
@@ -2902,12 +2955,27 @@ async fn output_file_count(root: &Path) -> Result<usize, BuildError> {
     Ok(input_files(root, None).await?.len())
 }
 
-fn transitive_dependencies(index: usize, modules: &[Module]) -> BTreeSet<usize> {
+fn transitive_dependencies(
+    index: usize,
+    modules: &[Module],
+    usage: DependencyUsage,
+) -> BTreeSet<usize> {
     let mut found = BTreeSet::new();
-    let mut pending = modules[index].dependencies.clone();
+    let mut pending = modules[index]
+        .dependencies
+        .iter()
+        .filter(|dependency| usage.includes(dependency.scope))
+        .map(|dependency| dependency.index)
+        .collect::<Vec<_>>();
     while let Some(dependency) = pending.pop() {
         if found.insert(dependency) {
-            pending.extend(modules[dependency].dependencies.iter().copied());
+            pending.extend(
+                modules[dependency]
+                    .dependencies
+                    .iter()
+                    .filter(|candidate| usage.includes(candidate.scope))
+                    .map(|candidate| candidate.index),
+            );
         }
     }
     found
@@ -2944,33 +3012,91 @@ async fn discover_modules(root: &Path) -> Result<Vec<Module>, BuildError> {
         .enumerate()
         .map(|(index, (directory, _))| (directory.clone(), index))
         .collect::<BTreeMap<_, _>>();
-    stream::iter(raw.into_iter().map(|(directory, manifest)| {
-        let indices = &indices;
-        async move {
-            let mut dependencies = Vec::new();
-            for relative in manifest.path_dependencies.values() {
-                let dependency = canonicalize(&directory.join(relative)).await?;
-                let index = indices.get(&dependency).ok_or_else(|| {
-                    BuildError::Invalid(format!(
-                        "path dependency {} from {} is not a declared workspace module",
-                        dependency.display(),
-                        directory.display()
-                    ))
-                })?;
-                dependencies.push(*index);
+    let coordinates = raw
+        .iter()
+        .map(|(_, manifest)| format!("{}:{}", manifest.project.group, manifest.project.name))
+        .collect::<Vec<_>>();
+    let mut modules = Vec::with_capacity(raw.len());
+    for (directory, manifest) in raw {
+        let dependencies =
+            discover_workspace_dependencies(&directory, &manifest, &root, &indices, &coordinates)
+                .await?;
+        modules.push(Module {
+            directory,
+            manifest,
+            dependencies,
+        });
+    }
+    Ok(modules)
+}
+
+async fn discover_workspace_dependencies(
+    directory: &Path,
+    manifest: &Manifest,
+    root: &Path,
+    indices: &BTreeMap<PathBuf, usize>,
+    coordinates: &[String],
+) -> Result<Vec<WorkspaceDependency>, BuildError> {
+    let scopes = [
+        (
+            WorkspaceDependencyScope::Compile,
+            &manifest.dependencies.compile,
+        ),
+        (
+            WorkspaceDependencyScope::Runtime,
+            &manifest.dependencies.runtime,
+        ),
+        (
+            WorkspaceDependencyScope::Provided,
+            &manifest.dependencies.provided,
+        ),
+        (WorkspaceDependencyScope::Test, &manifest.dependencies.test),
+    ];
+    let mut targets = BTreeMap::new();
+    let mut dependencies = Vec::new();
+    for (scope, entries) in scopes {
+        for (coordinate, specification) in entries {
+            let Some(relative) = specification.path() else {
+                continue;
+            };
+            let dependency = canonicalize(&directory.join(relative)).await?;
+            if !dependency.starts_with(root) {
+                return Err(BuildError::Invalid(format!(
+                    "workspace dependency {coordinate} from {} escapes workspace {}",
+                    directory.display(),
+                    root.display()
+                )));
             }
-            dependencies.sort_unstable();
-            dependencies.dedup();
-            Ok(Module {
-                directory,
-                manifest,
-                dependencies,
-            })
+            let index = *indices.get(&dependency).ok_or_else(|| {
+                BuildError::Invalid(format!(
+                    "workspace dependency {coordinate} at {} from {} is not a declared workspace module",
+                    dependency.display(),
+                    directory.display()
+                ))
+            })?;
+            if index == *indices.get(directory).expect("declaring module index") {
+                return Err(BuildError::Invalid(format!(
+                    "module `{}` cannot depend on itself",
+                    manifest.project.name
+                )));
+            }
+            let expected = &coordinates[index];
+            if coordinate != expected {
+                return Err(BuildError::Invalid(format!(
+                    "workspace dependency `{coordinate}` points to `{expected}` at {}",
+                    dependency.display()
+                )));
+            }
+            if let Some(previous) = targets.insert(index, scope) {
+                return Err(BuildError::Invalid(format!(
+                    "workspace dependency `{coordinate}` is declared in both {previous:?} and {scope:?} scopes"
+                )));
+            }
+            dependencies.push(WorkspaceDependency { index, scope });
         }
-    }))
-    .buffered(1)
-    .try_collect()
-    .await
+    }
+    dependencies.sort_by_key(|dependency| dependency.index);
+    Ok(dependencies)
 }
 
 fn topological_layers(modules: &[Module]) -> Result<Vec<Vec<usize>>, BuildError> {
@@ -2985,17 +3111,17 @@ fn topological_layers(modules: &[Module]) -> Result<Vec<Vec<usize>>, BuildError>
                 modules[*index]
                     .dependencies
                     .iter()
-                    .all(|dependency| complete.contains(dependency))
+                    .all(|dependency| complete.contains(&dependency.index))
             })
             .collect::<Vec<_>>();
         if layer.is_empty() {
-            let names = remaining
-                .iter()
-                .map(|index| modules[*index].manifest.project.name.as_str())
+            let cycle = module_dependency_cycle(modules, &remaining)
+                .into_iter()
+                .map(|index| modules[index].manifest.project.name.as_str())
                 .collect::<Vec<_>>()
-                .join(", ");
+                .join(" -> ");
             return Err(BuildError::Invalid(format!(
-                "module dependency cycle detected involving: {names}"
+                "module dependency cycle detected: {cycle}"
             )));
         }
         for index in &layer {
@@ -3005,6 +3131,44 @@ fn topological_layers(modules: &[Module]) -> Result<Vec<Vec<usize>>, BuildError>
         layers.push(layer);
     }
     Ok(layers)
+}
+
+fn module_dependency_cycle(modules: &[Module], candidates: &BTreeSet<usize>) -> Vec<usize> {
+    fn visit(
+        index: usize,
+        modules: &[Module],
+        candidates: &BTreeSet<usize>,
+        complete: &mut BTreeSet<usize>,
+        stack: &mut Vec<usize>,
+    ) -> Option<Vec<usize>> {
+        if let Some(position) = stack.iter().position(|candidate| *candidate == index) {
+            let mut cycle = stack[position..].to_vec();
+            cycle.push(index);
+            return Some(cycle);
+        }
+        if complete.contains(&index) {
+            return None;
+        }
+        stack.push(index);
+        for dependency in &modules[index].dependencies {
+            if candidates.contains(&dependency.index) {
+                if let Some(cycle) = visit(dependency.index, modules, candidates, complete, stack) {
+                    return Some(cycle);
+                }
+            }
+        }
+        stack.pop();
+        complete.insert(index);
+        None
+    }
+
+    let mut complete = BTreeSet::new();
+    for index in candidates {
+        if let Some(cycle) = visit(*index, modules, candidates, &mut complete, &mut Vec::new()) {
+            return cycle;
+        }
+    }
+    candidates.iter().copied().collect()
 }
 
 #[allow(clippy::too_many_lines)]
@@ -3098,6 +3262,14 @@ async fn compile_module(
             .iter()
             .map(|(directory, _)| directory.join(".jman/output/classes"))
             .collect::<Vec<_>>();
+        for (directory, _) in upstream {
+            let upstream_lock = read_lock(&directory.join("jman.lock"))?;
+            full_classpath.extend(artifact_paths(
+                &upstream_lock.classpath.compile,
+                &upstream_lock,
+                cache_dir,
+            )?);
+        }
         full_classpath.extend(classpath);
         let mut command = Command::new(&toolchain.javac);
         command
@@ -3512,6 +3684,19 @@ async fn hash_classpath(
         hash_part(hash, &(index as u64).to_le_bytes());
         hash_tree(hash, "upstream", output, None).await?;
     }
+    let usage = if compile {
+        DependencyUsage::Compile
+    } else {
+        DependencyUsage::Runtime
+    };
+    for (index, dependency) in upstream_artifact_paths(upstream, cache_dir, usage)?
+        .iter()
+        .enumerate()
+    {
+        hash_part(hash, &(index as u64).to_le_bytes());
+        hash_part(hash, dependency.to_string_lossy().as_bytes());
+        hash_file(hash, dependency).await?;
+    }
     let lock = read_lock(&lock_path)?;
     let checksums = if compile {
         &lock.classpath.compile
@@ -3651,6 +3836,11 @@ async fn package_javadoc(
         );
         let lock = read_lock(&module.directory.join("jman.lock"))?;
         let mut classpath = upstream.to_vec();
+        classpath.extend(upstream_artifact_paths(
+            upstream,
+            cache_dir,
+            DependencyUsage::Compile,
+        )?);
         classpath.extend(artifact_paths(&lock.classpath.compile, &lock, cache_dir)?);
         let mut command = Command::new(&javadoc);
         command
@@ -3723,6 +3913,14 @@ async fn package_fat(
     add_directory_entries(&mut archive, &module.output, "application output").await?;
     for output in upstream {
         add_directory_entries(&mut archive, output, "workspace dependency").await?;
+    }
+    for dependency in upstream_artifact_paths(upstream, cache_dir, DependencyUsage::Runtime)? {
+        merge_dependency_jar(
+            &mut archive,
+            dependency.clone(),
+            format!("workspace dependency {}", dependency.display()),
+        )
+        .await?;
     }
     let lock = read_lock(&module.directory.join("jman.lock"))?;
     for dependency in artifact_paths(&lock.classpath.runtime, &lock, cache_dir)? {
@@ -4441,6 +4639,39 @@ fn artifact_paths(
         .collect()
 }
 
+fn upstream_artifact_paths(
+    outputs: &[PathBuf],
+    cache_dir: &Path,
+    usage: DependencyUsage,
+) -> Result<Vec<PathBuf>, BuildError> {
+    let mut artifacts = BTreeSet::new();
+    for output in outputs {
+        let Some(module) = workspace_module_directory(output) else {
+            continue;
+        };
+        let lock = read_lock(&module.join("jman.lock"))?;
+        let checksums = match usage {
+            DependencyUsage::Compile => &lock.classpath.compile,
+            DependencyUsage::Runtime => &lock.classpath.runtime,
+            DependencyUsage::Test => &lock.classpath.test,
+        };
+        artifacts.extend(artifact_paths(checksums, &lock, cache_dir)?);
+    }
+    Ok(artifacts.into_iter().collect())
+}
+
+fn workspace_module_directory(output: &Path) -> Option<&Path> {
+    let output_directory = output.parent()?;
+    let state_directory = output_directory.parent()?;
+    if output.file_name()? != "classes"
+        || output_directory.file_name()? != "output"
+        || state_directory.file_name()? != ".jman"
+    {
+        return None;
+    }
+    state_directory.parent()
+}
+
 async fn java_sources(root: &Path) -> Result<Vec<PathBuf>, BuildError> {
     input_files(root, Some("java")).await
 }
@@ -4594,7 +4825,6 @@ mod tests {
             repositories: Vec::new(),
             dependencies: jman_config::Dependencies::default(),
             annotation_processors: BTreeMap::new(),
-            path_dependencies: BTreeMap::new(),
         };
         let module = ModuleResult {
             name: "app".to_owned(),
@@ -4622,6 +4852,7 @@ mod tests {
             platform: "test".to_owned(),
             toolchain: jman_config::LockedToolchain { java_release: 21 },
             packages: Vec::new(),
+            workspace_dependencies: Vec::new(),
             classpath: jman_config::LockedClasspaths::default(),
         };
         std::fs::write(root.join("jman.lock"), lock.to_toml().expect("lock TOML"))
@@ -4742,7 +4973,6 @@ printf 'value=%s\n' "$value" > "$resource_output/generated.properties"
             repositories: Vec::new(),
             dependencies: jman_config::Dependencies::default(),
             annotation_processors: BTreeMap::new(),
-            path_dependencies: BTreeMap::new(),
         };
         manifest.validate().expect("valid generator manifest");
         let module = Module {
@@ -5134,6 +5364,7 @@ printf 'value=%s\n' "$value" > "$resource_output/generated.properties"
             platform: "test".to_owned(),
             toolchain: jman_config::LockedToolchain { java_release: 21 },
             packages,
+            workspace_dependencies: Vec::new(),
             classpath: jman_config::LockedClasspaths {
                 compile: checksums.clone(),
                 runtime: checksums,
@@ -5236,6 +5467,7 @@ printf 'value=%s\n' "$value" > "$resource_output/generated.properties"
             platform: String::new(),
             toolchain: jman_config::LockedToolchain { java_release: 21 },
             packages: vec![package("first", "aaa"), package("second", "bbb")],
+            workspace_dependencies: Vec::new(),
             classpath: jman_config::LockedClasspaths::default(),
         };
         std::fs::write(artifacts.join("aaa.jar"), b"a").expect("first artifact");
@@ -5255,6 +5487,78 @@ printf 'value=%s\n' "$value" > "$resource_output/generated.properties"
                 .expect_err("missing lock entry")
                 .to_string()
                 .contains("has no package in jman.lock")
+        );
+    }
+
+    #[test]
+    fn workspace_outputs_contribute_their_scoped_external_artifacts() {
+        let root = tempfile::tempdir().expect("workspace dependency fixture");
+        let module = root.path().join("dependency");
+        let output = module.join(".jman/output/classes");
+        std::fs::create_dir_all(&output).expect("workspace output");
+        let cache = root.path().join("cache");
+        std::fs::create_dir_all(cache.join("artifacts")).expect("artifact cache");
+        for digest in ["compile", "runtime", "test"] {
+            std::fs::write(
+                cache.join("artifacts").join(format!("{digest}.jar")),
+                digest,
+            )
+            .expect("cached artifact");
+        }
+        let package = |artifact: &str| jman_config::LockedPackage {
+            group: "com.example".to_owned(),
+            artifact: artifact.to_owned(),
+            version: "1".to_owned(),
+            extension: "jar".to_owned(),
+            classifier: None,
+            source: "fixture".to_owned(),
+            pom_checksum: "sha256:pom".to_owned(),
+            artifact_checksum: Some(format!("sha256:{artifact}")),
+            artifact_size: Some(1),
+            dependencies: Vec::new(),
+            scopes: Vec::new(),
+            selected_parent: None,
+        };
+        let lock = Lockfile {
+            lock_version: jman_config::LOCK_VERSION,
+            manifest_hash: "sha256:manifest".to_owned(),
+            workspace_hash: "sha256:workspace".to_owned(),
+            platform: "test".to_owned(),
+            toolchain: jman_config::LockedToolchain { java_release: 21 },
+            packages: vec![package("compile"), package("runtime"), package("test")],
+            workspace_dependencies: Vec::new(),
+            classpath: jman_config::LockedClasspaths {
+                compile: vec!["sha256:compile".to_owned()],
+                runtime: vec!["sha256:runtime".to_owned()],
+                test: vec!["sha256:test".to_owned()],
+                processors: Vec::new(),
+            },
+        };
+        std::fs::write(module.join("jman.lock"), lock.to_toml().expect("lock TOML"))
+            .expect("workspace lock");
+
+        assert_eq!(
+            upstream_artifact_paths(
+                std::slice::from_ref(&output),
+                &cache,
+                DependencyUsage::Compile,
+            )
+            .expect("compile artifacts"),
+            [cache.join("artifacts/compile.jar")]
+        );
+        assert_eq!(
+            upstream_artifact_paths(
+                std::slice::from_ref(&output),
+                &cache,
+                DependencyUsage::Runtime,
+            )
+            .expect("runtime artifacts"),
+            [cache.join("artifacts/runtime.jar")]
+        );
+        assert_eq!(
+            upstream_artifact_paths(&[output], &cache, DependencyUsage::Test)
+                .expect("test artifacts"),
+            [cache.join("artifacts/test.jar")]
         );
     }
 
@@ -5288,24 +5592,178 @@ printf 'value=%s\n' "$value" > "$resource_output/generated.properties"
             repositories: Vec::new(),
             dependencies: jman_config::Dependencies::default(),
             annotation_processors: BTreeMap::new(),
-            path_dependencies: BTreeMap::new(),
         };
         let modules = vec![
             Module {
                 directory: PathBuf::from("a"),
                 manifest: manifest("a"),
-                dependencies: vec![1],
+                dependencies: vec![WorkspaceDependency {
+                    index: 1,
+                    scope: WorkspaceDependencyScope::Compile,
+                }],
             },
             Module {
                 directory: PathBuf::from("b"),
                 manifest: manifest("b"),
-                dependencies: vec![0],
+                dependencies: vec![WorkspaceDependency {
+                    index: 0,
+                    scope: WorkspaceDependencyScope::Compile,
+                }],
             },
         ];
         assert!(topological_layers(&modules)
             .expect_err("cycle")
             .to_string()
-            .contains("a, b"));
+            .contains("a -> b -> a"));
+    }
+
+    #[test]
+    fn workspace_dependency_scopes_select_lifecycle_classpaths() {
+        let manifest = |name: &str| Manifest {
+            manifest_version: 1,
+            project: jman_config::Project {
+                group: "com.example".to_owned(),
+                name: name.to_owned(),
+                version: "1".to_owned(),
+                java_release: 17,
+                packaging: "jar".to_owned(),
+                modules: Vec::new(),
+                main_class: None,
+            },
+            toolchain: None,
+            maven: None,
+            build: None,
+            test: None,
+            publishing: None,
+            audit: None,
+            scripts: BTreeMap::new(),
+            repositories: Vec::new(),
+            dependencies: jman_config::Dependencies::default(),
+            annotation_processors: BTreeMap::new(),
+        };
+        let dependency = |index, scope| WorkspaceDependency { index, scope };
+        let modules = vec![
+            Module {
+                directory: PathBuf::from("app"),
+                manifest: manifest("app"),
+                dependencies: vec![
+                    dependency(1, WorkspaceDependencyScope::Compile),
+                    dependency(2, WorkspaceDependencyScope::Runtime),
+                    dependency(3, WorkspaceDependencyScope::Provided),
+                    dependency(4, WorkspaceDependencyScope::Test),
+                ],
+            },
+            Module {
+                directory: PathBuf::from("compile"),
+                manifest: manifest("compile"),
+                dependencies: vec![dependency(5, WorkspaceDependencyScope::Compile)],
+            },
+            Module {
+                directory: PathBuf::from("runtime"),
+                manifest: manifest("runtime"),
+                dependencies: vec![dependency(5, WorkspaceDependencyScope::Compile)],
+            },
+            Module {
+                directory: PathBuf::from("provided"),
+                manifest: manifest("provided"),
+                dependencies: vec![dependency(5, WorkspaceDependencyScope::Compile)],
+            },
+            Module {
+                directory: PathBuf::from("test"),
+                manifest: manifest("test"),
+                dependencies: vec![dependency(5, WorkspaceDependencyScope::Compile)],
+            },
+            Module {
+                directory: PathBuf::from("transitive"),
+                manifest: manifest("transitive"),
+                dependencies: Vec::new(),
+            },
+        ];
+
+        assert_eq!(
+            transitive_dependencies(0, &modules, DependencyUsage::Compile),
+            BTreeSet::from([1, 3, 5])
+        );
+        assert_eq!(
+            transitive_dependencies(0, &modules, DependencyUsage::Runtime),
+            BTreeSet::from([1, 2, 5])
+        );
+        assert_eq!(
+            transitive_dependencies(0, &modules, DependencyUsage::Test),
+            BTreeSet::from([1, 2, 3, 4, 5])
+        );
+    }
+
+    #[tokio::test]
+    async fn discovers_and_validates_scoped_workspace_dependencies() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        std::fs::create_dir_all(workspace.path().join("api")).expect("api module");
+        std::fs::create_dir_all(workspace.path().join("app")).expect("app module");
+        std::fs::write(
+            workspace.path().join("jman.toml"),
+            r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "workspace"
+version = "1"
+java-release = 17
+packaging = "pom"
+modules = ["api", "app"]
+"#,
+        )
+        .expect("workspace manifest");
+        std::fs::write(
+            workspace.path().join("api/jman.toml"),
+            r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "api"
+version = "1"
+java-release = 17
+packaging = "jar"
+"#,
+        )
+        .expect("api manifest");
+        let app_manifest = |coordinate: &str| {
+            format!(
+                r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "app"
+version = "1"
+java-release = 17
+packaging = "jar"
+
+[dependencies.runtime]
+"{coordinate}" = {{ path = "../api" }}
+"#
+            )
+        };
+        std::fs::write(
+            workspace.path().join("app/jman.toml"),
+            app_manifest("com.example:api"),
+        )
+        .expect("app manifest");
+
+        let modules = discover_modules(workspace.path())
+            .await
+            .expect("valid workspace");
+        let app = modules
+            .iter()
+            .find(|module| module.manifest.project.name == "app")
+            .expect("app module");
+        assert_eq!(app.dependencies.len(), 1);
+        assert_eq!(app.dependencies[0].scope, WorkspaceDependencyScope::Runtime);
+
+        std::fs::write(
+            workspace.path().join("app/jman.toml"),
+            app_manifest("com.example:not-api"),
+        )
+        .expect("mismatched app manifest");
+        let Err(error) = discover_modules(workspace.path()).await else {
+            panic!("coordinate mismatch was accepted");
+        };
+        assert!(error.to_string().contains("points to `com.example:api`"));
     }
 
     #[test]

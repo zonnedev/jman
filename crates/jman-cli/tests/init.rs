@@ -240,13 +240,10 @@ id = "fixture"
 url = "{repository_url}"
 
 [dependencies.compile]
-"com.example:alpha" = "1.0.0"
+"com.example:alpha" = {{ path = "../alpha" }}
 
 [dependencies.runtime]
 "org.example:library" = "1.2.3"
-
-[path-dependencies]
-"com.example:alpha" = "../alpha"
 "#
         ),
     )
@@ -327,6 +324,141 @@ url = "{repository_url}"
         serde_json::from_slice(&offline.stdout).expect("offline report");
     assert_eq!(report["dependencies"][0]["source"], "cache");
     assert_eq!(report["dependencies"][0]["latest"], "1.3.0");
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn add_sync_tree_and_why_preserve_scoped_workspace_dependency_identity() {
+    let project = tempfile::tempdir().expect("temporary workspace");
+    let cache = tempfile::tempdir().expect("temporary cache");
+    for module in ["api", "app"] {
+        fs::create_dir_all(project.path().join(module)).expect("module directory");
+    }
+    fs::write(
+        project.path().join("jman.toml"),
+        r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "workspace"
+version = "1.0.0"
+java-release = 17
+packaging = "pom"
+modules = ["api", "app"]
+"#,
+    )
+    .expect("workspace manifest");
+    for module in ["api", "app"] {
+        fs::write(
+            project.path().join(module).join("jman.toml"),
+            format!(
+                r#"manifest-version = 1
+[project]
+group = "com.example"
+name = "{module}"
+version = "1.0.0"
+java-release = 17
+packaging = "jar"
+"#
+            ),
+        )
+        .expect("module manifest");
+    }
+
+    let app = project.path().join("app");
+    let add = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .args([
+            "--no-progress",
+            "add",
+            "com.example:api",
+            "--workspace-path",
+            "../api",
+            "--scope",
+            "provided",
+            "--path",
+            app.to_str().expect("UTF-8 app path"),
+        ])
+        .output()
+        .expect("add workspace dependency");
+    assert!(
+        add.status.success(),
+        "{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    let manifest = fs::read_to_string(app.join("jman.toml")).expect("app manifest");
+    assert!(manifest.contains("[dependencies.provided]"));
+    assert!(
+        manifest.contains(r#""com.example:api" = { path = "../api" }"#),
+        "{manifest}"
+    );
+    let lock = fs::read_to_string(app.join("jman.lock")).expect("app lock");
+    assert!(lock.contains("[[workspace-dependency]]"));
+    assert!(lock.contains("scope = \"provided\""));
+    assert!(lock.contains("version = \"1.0.0\""));
+
+    let tree = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .args(["tree", app.to_str().expect("UTF-8 app path")])
+        .output()
+        .expect("workspace dependency tree");
+    assert!(tree.status.success());
+    assert!(String::from_utf8_lossy(&tree.stdout)
+        .contains("com.example:api:1.0.0 [workspace, provided] (../api)"));
+    let why = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .args([
+            "why",
+            "com.example:api",
+            "--path",
+            app.to_str().expect("UTF-8 app path"),
+        ])
+        .output()
+        .expect("explain workspace dependency");
+    assert!(why.status.success());
+    assert!(String::from_utf8_lossy(&why.stdout)
+        .contains("com.example:api:1.0.0 [workspace, provided]"));
+
+    let before = fs::read_to_string(app.join("jman.toml")).expect("manifest before failure");
+    let mismatched = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .args([
+            "--no-progress",
+            "add",
+            "com.example:not-api",
+            "--workspace-path",
+            "../api",
+            "--path",
+            app.to_str().expect("UTF-8 app path"),
+        ])
+        .output()
+        .expect("reject mismatched workspace dependency");
+    assert!(!mismatched.status.success());
+    assert!(String::from_utf8_lossy(&mismatched.stderr).contains("points to `com.example:api`"));
+    assert_eq!(
+        fs::read_to_string(app.join("jman.toml")).expect("restored manifest"),
+        before
+    );
+
+    let remove = Command::new(env!("CARGO_BIN_EXE_jman"))
+        .env("JMAN_CACHE_DIR", cache.path())
+        .args([
+            "--no-progress",
+            "remove",
+            "com.example:api",
+            "--path",
+            app.to_str().expect("UTF-8 app path"),
+        ])
+        .output()
+        .expect("remove workspace dependency");
+    assert!(
+        remove.status.success(),
+        "{}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+    assert!(!fs::read_to_string(app.join("jman.toml"))
+        .expect("manifest after removal")
+        .contains("com.example:api"));
+    assert!(!fs::read_to_string(app.join("jman.lock"))
+        .expect("lock after removal")
+        .contains("workspace-dependency"));
 }
 
 #[test]
@@ -2680,8 +2812,8 @@ version = "1"
 java-release = 17
 packaging = "jar"
 
-[path-dependencies]
-"com.example:core" = "../core"
+[dependencies.compile]
+"com.example:core" = { path = "../core" }
 "#,
     )
     .expect("app manifest");
