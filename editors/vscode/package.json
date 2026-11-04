@@ -182,11 +182,11 @@
     "package": "vsce package --target $(node ../../scripts/vscode-target.js) --no-dependencies"
   },
   "dependencies": {
-    "vscode-languageclient": "^10.1.1",
+    "vscode-languageclient": "^11.0.0",
     "xml2js": "^0.6.2"
   },
   "devDependencies": {
-    "@vscode/vsce": "^4.0.0",
+    "@vscode/vsce": "^4.1.0",
     "esbuild": "^0.28.2"
   }
 }
